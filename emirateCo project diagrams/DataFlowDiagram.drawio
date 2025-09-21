@@ -1,0 +1,309 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36" version="27.2.0">
+  <diagram name="Page-1" id="ANb1IpgeeTARt0M0lzf4">
+    <mxGraphModel dx="1603" dy="957" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="1920" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="QWkJQDLNETccE-dVYVoS-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.25;exitY=1;exitDx=0;exitDy=0;startArrow=classic;startFill=1;entryX=-0.023;entryY=0.863;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-1" target="QWkJQDLNETccE-dVYVoS-2">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="510" y="330" as="targetPoint" />
+            <mxPoint x="90" y="190" as="sourcePoint" />
+            <Array as="points">
+              <mxPoint x="120" y="340" />
+              <mxPoint x="460" y="340" />
+              <mxPoint x="460" y="320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-11" value="EDITED ORDER DETAILS / RESPONSE" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-9">
+          <mxGeometry x="-0.1458" y="-2" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-34" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.107;exitY=0.988;exitDx=0;exitDy=0;exitPerimeter=0;startArrow=classic;startFill=1;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="629" y="600" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="103" y="600" />
+              <mxPoint x="629" y="600" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-35" value="ACCESSORY STOCK ADDITION / RESPONSE" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-34">
+          <mxGeometry x="0.1124" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-1" value="CASHIER" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="90" y="260" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-14" style="rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.131;exitY=0.011;exitDx=0;exitDy=0;exitPerimeter=0;entryX=0.878;entryY=-0.018;entryDx=0;entryDy=0;entryPerimeter=0;edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-2" target="QWkJQDLNETccE-dVYVoS-1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="480.1199999999999" y="271.10999999999996" as="sourcePoint" />
+            <mxPoint x="210" y="268.9" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="496" y="240" />
+              <mxPoint x="195" y="240" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-16" value="ORDER AVAILABILITY RESPONSE" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-14">
+          <mxGeometry x="0.1459" y="3" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-2" value="ORDER&lt;div&gt;SYSTEM&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;absoluteArcSize=1;arcSize=14;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="480" y="260" width="120" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-3" value="ORDERS" style="strokeWidth=2;html=1;shape=mxgraph.flowchart.stored_data;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="850" y="170" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-50" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.736;exitY=1.06;exitDx=0;exitDy=0;exitPerimeter=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-4" target="QWkJQDLNETccE-dVYVoS-27">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1174" y="625" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-51" value="INVENTORY QUANTITY CHECKS" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-50">
+          <mxGeometry x="0.3474" y="1" relative="1" as="geometry">
+            <mxPoint x="-1" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-4" value="INVENTORY" style="strokeWidth=2;html=1;shape=mxgraph.flowchart.stored_data;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="320" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.706;entryY=-0.038;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-1" target="QWkJQDLNETccE-dVYVoS-2">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="510" y="260" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="150" y="220" />
+              <mxPoint x="565" y="220" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-6" value="ORDER DETAILS" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-5">
+          <mxGeometry x="-0.4327" y="-2" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=classicThin;startFill=1;entryX=0.25;entryY=0;entryDx=0;entryDy=0;exitX=0.25;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-2" target="QWkJQDLNETccE-dVYVoS-27">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="590" y="260" as="sourcePoint" />
+            <mxPoint x="869.2" y="160" as="targetPoint" />
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-8" value="ORDER AVAILABILITY / RESPONSE" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-7">
+          <mxGeometry x="-0.3133" y="1" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.389;entryY=1.024;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" target="QWkJQDLNETccE-dVYVoS-3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="600" y="280" as="sourcePoint" />
+            <mxPoint x="890" y="230" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="889" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-13" value="ORDER CONFIRMED" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-12">
+          <mxGeometry x="-0.3412" y="4" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-15" style="rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1.022;entryY=0.611;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="477.36" y="270.00425219941354" as="sourcePoint" />
+            <mxPoint x="210" y="271.35999999999996" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-17" style="rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=1;entryY=0.867;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="480" y="280.48" as="sourcePoint" />
+            <mxPoint x="210" y="280.0000000000001" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-18" value="RECEIPT&amp;nbsp; DETAILS" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-17">
+          <mxGeometry x="-0.3049" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.588;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-2" target="QWkJQDLNETccE-dVYVoS-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-21" value="ORDERDETAILS" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-20">
+          <mxGeometry x="-0.1203" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-22" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0.791;entryY=1.046;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-2" target="QWkJQDLNETccE-dVYVoS-3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-23" value="EDIT ORDER DETAILS" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-22">
+          <mxGeometry x="-0.4244" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-24" value="ORDER CHANGE HISTORY" style="strokeWidth=2;html=1;shape=mxgraph.flowchart.stored_data;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="760" y="350" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-2" target="QWkJQDLNETccE-dVYVoS-24">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="540" y="360" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-52" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-27" target="QWkJQDLNETccE-dVYVoS-49">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="320" y="860" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="646" y="800" />
+              <mxPoint x="260" y="800" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-54" value="INVENTORY QUANTITY DROP NOTIFICATION" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-52">
+          <mxGeometry x="-0.0252" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-56" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-27" target="QWkJQDLNETccE-dVYVoS-49">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="630" y="690" />
+              <mxPoint x="490" y="690" />
+              <mxPoint x="490" y="750" />
+              <mxPoint x="230" y="750" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-57" value="ACCESSORY STOCK ADDITION NOTIFICATION" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-56">
+          <mxGeometry x="-0.0806" relative="1" as="geometry">
+            <mxPoint x="-1" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-58" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.75;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-27" target="QWkJQDLNETccE-dVYVoS-49">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="340" y="643" />
+              <mxPoint x="340" y="720" />
+              <mxPoint x="200" y="720" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-59" value="STORE STOCK ADDITION NOTIFICATION" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-58">
+          <mxGeometry x="-0.1855" y="1" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-27" value="INVENTORY SYSTEM" style="rounded=1;whiteSpace=wrap;html=1;absoluteArcSize=1;arcSize=14;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="630" y="590" width="200" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-32" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.911;exitY=1.063;exitDx=0;exitDy=0;startArrow=classic;startFill=1;exitPerimeter=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-29">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="670" y="720" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="1449" y="790" />
+              <mxPoint x="670" y="790" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-33" value="AVAILABLE OFFCUTS" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-32">
+          <mxGeometry x="0.4633" y="4" relative="1" as="geometry">
+            <mxPoint x="-1" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-40" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;startArrow=classic;startFill=1;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-29" target="QWkJQDLNETccE-dVYVoS-27">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="690" y="720" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="1400" y="760" />
+              <mxPoint x="690" y="760" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-41" value="PENDING ORDERS WITH OFFCUTS / RESPONSE" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-40">
+          <mxGeometry x="0.3916" y="-2" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-45" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=1;entryDx=0;entryDy=0;startArrow=classic;startFill=1;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-29" target="QWkJQDLNETccE-dVYVoS-27">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-46" value="STORE STOCK ADDITION / RESPONSE" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-45">
+          <mxGeometry x="0.2791" y="2" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-29" value="STORE MANAGER" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1340" y="450" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-30" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=classic;startFill=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="730" y="589.92" as="sourcePoint" />
+            <mxPoint x="1100" y="339.92" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="730" y="470" />
+              <mxPoint x="1070" y="470" />
+              <mxPoint x="1070" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-31" value="ORDER&amp;nbsp;&lt;div&gt;AVAILABILITY&amp;nbsp;&lt;div&gt;&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212)); color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;/&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212)); color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;RESPONSE&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-30">
+          <mxGeometry x="-0.2886" y="-1" relative="1" as="geometry">
+            <mxPoint x="19" y="11" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-36" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.379;entryY=1.09;entryDx=0;entryDy=0;entryPerimeter=0;startArrow=classic;startFill=1;exitX=0.7;exitY=0.001;exitDx=0;exitDy=0;exitPerimeter=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-27" target="QWkJQDLNETccE-dVYVoS-4">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="733" y="590" as="sourcePoint" />
+            <Array as="points">
+              <mxPoint x="770" y="590" />
+              <mxPoint x="770" y="540" />
+              <mxPoint x="1138" y="540" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-37" value="STOCK TO BE ADDED" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-36">
+          <mxGeometry x="-0.4139" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-38" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.75;exitY=0;exitDx=0;exitDy=0;startArrow=classic;startFill=1;entryX=0.627;entryY=1.025;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" target="QWkJQDLNETccE-dVYVoS-3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="690" y="590" as="sourcePoint" />
+            <mxPoint x="913" y="220" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="690" y="410" />
+              <mxPoint x="913" y="410" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-43" value="PENDING ORDERS WITH OFFCUT / RESPONSE" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-38">
+          <mxGeometry x="-0.4325" y="-3" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-47" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0.93;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="QWkJQDLNETccE-dVYVoS-27" target="QWkJQDLNETccE-dVYVoS-4">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1250" y="643" />
+              <mxPoint x="1250" y="340" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-48" value="AVAILABLE OFFCUT" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="QWkJQDLNETccE-dVYVoS-47">
+          <mxGeometry x="-0.5442" y="-3" relative="1" as="geometry">
+            <mxPoint x="1" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="QWkJQDLNETccE-dVYVoS-49" value="&lt;font&gt;CEO&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="170" y="930" width="120" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
