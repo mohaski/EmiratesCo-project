@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from db import create_db_and_tables, engine
-from models import *  # Import all models to register them with SQLModel
+from entities import *  # Import all models to register them with SQLModel
 
 def main():
     """Create all database tables"""

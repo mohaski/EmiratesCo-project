@@ -1,10 +1,10 @@
 from fastapi import FastAPI, Depends
 from sqlmodel import Session
 from db.database import create_db_and_tables, get_session
-from models import *
+from entities import *
 
 # Create FastAPI app
-app = FastAPI(title="EmiratesCo API", version="1.0.0")
+app = FastAPI(title="EmiratesCo API")
 
 # Create database tables on startup
 @app.on_event("startup")
