@@ -2,6 +2,7 @@ from sqlmodel import Field, SQLModel, Relationship
 from sqlalchemy import Enum, func
 from typing import Optional, List
 from datetime import datetime
+from uuid import UUID
 
 class Message(SQLModel, table=True):
 
@@ -23,7 +24,7 @@ class MessageRecipient(SQLModel, table=True):
 
     messageRecipientId: Optional[int] = Field(default=None, primary_key=True)
     messageId: int = Field(foreign_key="messages.messageId")
-    recipientUserId: int = Field(foreign_key="users.userId")
+    recipientUserId: UUID = Field(foreign_key="users.userId")
     has_read: bool = Field(default=False)
     read_at: Optional[datetime] = Field(default=None)
 

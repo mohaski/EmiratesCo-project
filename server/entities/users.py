@@ -3,13 +3,13 @@ from sqlalchemy import Enum, UniqueConstraint, Column, func
 from sqlalchemy.dialects.postgresql import UUID
 from typing import Optional, List
 from datetime import datetime
-import uuid 
+from uuid import UUID, uuid4
 
 class User(SQLModel, table=True):
 
     __tablename__ = "users"
 
-    userId: Optional[int] = Field(sa_column= Column(UUID(as_uuid= True)), primary_key= True, default= uuid.uuid4)
+    userId: Optional[UUID] = Field(sa_column= Column(UUID(as_uuid= True)), primary_key= True, default= uuid4)
     firstName: str
     lastName: Optional[str] = None
     phoneNumber: str = Field(unique= True, nullable= False)
