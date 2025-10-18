@@ -1,6 +1,6 @@
 
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import func
+from sqlalchemy import func, Enum, Column
 from typing import Optional, List
 from datetime import datetime
 
@@ -15,7 +15,8 @@ class Order(SQLModel, table=True):
     parent_orderid: Optional[int] = Field(default=None )
     VAT_status: Optional[bool] = Field(default= False )
     created_at: datetime = Field(sa_column_kwargs={"server_default": func.now()})
-    payment_status: Optional[str] = None
+    payment_status: Optional[str] = Field(  sa_column=Column(Enum(["Paid", "Unpaid", "Partial"], name="payment_status_enum"), nullable=False, default="Unpaid"),
+    default="Unpaid")
     subtotal: Optional[float] = Field(default= 0.0)
     discount: Optional[float] = Field(default= 0.0)
 

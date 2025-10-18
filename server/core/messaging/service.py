@@ -6,6 +6,7 @@ from ...db.database import get_session
 from ..auth.service import get_current_user
 from ...entities.users import User
 from ...logging import logger
+from sqlalchemy import func
 
 def send_message(message_data: models.messageCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> dict:
     try:
@@ -73,4 +74,25 @@ def update_message_read_status(message_id: int, status_data: models.messageReadS
         raise HTTPException(status_code=500, detail="Internal server error")
     
         
+def read_inbox(current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> list[models.messageResponse]:
+    try:
+        messages = db.exec(
+            select(Message)
+            .join(MessageRecipient)
+            .where(MessageRecipient.recipientUserId == current_user.userId)
+            .order_by(Message.sent_at.desc())
+        ).all()
+        
+        if not messages:
+            logger.info(f"No messages found for user {current_user.id}.")
+            return []
+        
+        logger.info(f"{len(messages)} messages fetched for user {current_user.id}.")
+        return messages
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching inbox for user {current_user.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
     
+

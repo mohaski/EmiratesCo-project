@@ -15,5 +15,11 @@ class messageReadStatusUpdate(BaseModel):
     has_read: bool
     read_at: datetime = None
     
-
+class messageResponse(BaseModel):
+    message_id: int
+    sender_id: UUID
+    content: str
+    sent_at: datetime    
+    class Config:
+        orm_mode = True
     

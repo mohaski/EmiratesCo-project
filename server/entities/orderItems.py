@@ -12,10 +12,12 @@ class OrderItem(SQLModel, table=True):
     unit_type: Optional[str] = Field(sa_column = Column(Enum("half", "per_unit", name="unit_type_enum"), default= None))
     unit_price: float = Field(nullable=False)
     total_price: float = Field(nullable=False)
-    is_offcut: Optional[bool] = Field(default=False)
+    status: Optional[str] = Field(sa_column= Column(Enum("purchased", "returned", name=" orderItemstatus_enum"), default="purchased")) 
     offcut_id: Optional[int] = Field(default=None, foreign_key="offcuts.offcutId")
 
     # Relationships
     order: "Order" = Relationship(back_populates="orderItems")
     product: "Product" = Relationship(back_populates="orderItems")
     offcut: Optional["Offcut"] = Relationship(back_populates="orderItems")
+
+
