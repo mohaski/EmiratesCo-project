@@ -42,8 +42,8 @@ class ProductUpdateResponse(BaseModel):
     
 
 class StockAvailabilityResponse(BaseModel):
-    in_stock: bool
-    available_quantity: int
+    message: str
+    
 class StockQuantityUpdateRequest(BaseModel):
     stock: int
     

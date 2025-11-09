@@ -3,7 +3,7 @@ from sqlmodel import Session, select
 from ...entities.messages import Message, MessageRecipient
 from . import models
 from ...db.database import get_session
-from ..auth.service import get_current_user
+from ..userManagement.auth.service import get_current_user
 from ...entities.users import User
 from ...logging import logger
 from sqlalchemy import func

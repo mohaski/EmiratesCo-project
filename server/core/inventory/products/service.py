@@ -1,11 +1,11 @@
 from fastapi import Depends, HTTPException, status
 from sqlmodel import Session, select
-from ...entities.products import Product
+from ....entities.products import Product
 from . import models
-from ...db.database import get_session
-from ..auth.service import get_current_user
-from ...logging import logger
-from ...utils import require_role
+from ....db.database import get_session
+from ...userManagement.auth.service import get_current_user
+from ....logging import logger
+from ....utils import require_role
 
 def create_product(product_data: models.ProductCreate, db: Session = Depends(get_session), current_user=Depends(get_current_user)
 ) -> models.ProductCreateResponse:
@@ -171,7 +171,7 @@ def update_stock_quantity(product_id: int, stock_data: models.StockQuantityUpdat
         raise HTTPException(status_code=500, detail="Internal server error")
     
 
-def check_stock_availability(product_id: int, db: Session = Depends(get_session)) -> models.StockAvailabilityResponse:
+def check_stock_availability(requiredQuantity: int ,product_id: int, db: Session = Depends(get_session)) -> models.StockAvailabilityResponse:
     """
     Check if a product is in stock and return available quantity.
     - Returns whether the product is in stock and the available quantity.
@@ -182,16 +182,19 @@ def check_stock_availability(product_id: int, db: Session = Depends(get_session)
         if not product:
             logger.warning(f"Product {product_id} not found for stock check.")
             raise HTTPException(status_code=404, detail="Product not found")
-
-        in_stock = product.stock > 0
-        available_quantity = product.stock
-
-        logger.info(f"Stock check for product {product_id}: In stock={in_stock}, Quantity={available_quantity}")
+        
+        if requiredQuantity > product.stock:
+            logger.warning(f'Insufficient stock for product {product_id}: Required={requiredQuantity}, Available={product.stock}')
+            return models.StockAvailabilityResponse(
+            message= f'There are only {product.stock} of this item remaining '
+        )
+            
+            
+        logger.info(f"There is suffiencent amount for the order")
 
         # ✅ Return structured availability response
         return models.StockAvailabilityResponse(
-            in_stock=in_stock,
-            available_quantity=available_quantity
+            message= 'There is suffiencent amount for the order'
         )
 
     except HTTPException:
@@ -200,7 +203,7 @@ def check_stock_availability(product_id: int, db: Session = Depends(get_session)
         logger.error(f"Error checking stock for product {product_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
     
-def get_products_by_productCategory(category: str, db: Session = Depends(get_session)) -> list[Product]:
+def getAllProducts(db: Session = Depends(get_session)) -> list[Product]:
     """
     Retrieve all products within a specified product category.
     - Returns a list of products in the given category.
@@ -208,16 +211,15 @@ def get_products_by_productCategory(category: str, db: Session = Depends(get_ses
     try:
         # 🔍 Query products by category
         products = db.exec(
-            select(Product).where(Product.productCategory == category)
-        ).all()
+            select(Product)).all()
 
-        logger.info(f"Retrieved {len(products)} products in category '{category}'.")
+        logger.info(f"Retrieved {len(products)} products.")
 
         return products
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error retrieving products in category '{category}': {e}", exc_info=True)
+        logger.error(f"Error retrieving products: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
     
 def remove_product(product_id: int, db: Session = Depends(get_session), current_user=Depends(get_current_user)

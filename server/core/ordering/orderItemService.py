@@ -1,11 +1,47 @@
-from fastapi import Depends, HTTPException
-from . import model
+# services/order_item_service.py
+from __future__ import annotations
+
+from typing import Sequence
+
+from fastapi import Depends, HTTPException, status
+from sqlmodel import Session, select, SQLModelError
+from sqlalchemy.exc import IntegrityError
+
 from ...entities.orderItems import OrderItem
 from ...logging import logger
 from ...db.database import get_session
-from sqlmodel import Session, select
+from . import model
 
 
+# --------------------------------------------------------------------------- #
+# Pure business logic (no DB, no HTTP)
+# --------------------------------------------------------------------------- #
+def compute_item_total(*, quantity: int, price: float) -> float:
+    """Return quantity * price. Raise ValueError on invalid inputs."""
+    if quantity < 0:
+        raise ValueError("quantity must be non-negative")
+    if price < 0:
+        raise ValueError("price must be non-negative")
+    return quantity * price
+
+
+def validate_item(item: model.OrderItemCreate) -> None:
+    """Raise ValueError if the item is inconsistent."""
+    expected = compute_item_total(quantity=item.quantity, price=item.price)
+    if abs(expected - item.totalAmount) > 1e-6:
+        raise ValueError(
+            f"totalAmount ({item.totalAmount}) does not match quantity*{item.price}={expected}"
+        )
+
+
+def compute_order_total(items: Sequence[model.OrderItemCreate]) -> float:
+    """Sum the *validated* totalAmount of every item."""
+    return sum(item.totalAmount for item in items)
+
+
+# --------------------------------------------------------------------------- #
+# DB layer (still synchronous – easy to make async later)
+# --------------------------------------------------------------------------- #
 def create_orderItems(order_items: list[model.OrderItemCreate], db: Session = Depends(get_session)) -> model.OrderItemCreateResponse:
     """
     Create multiple order items.
@@ -15,12 +51,14 @@ def create_orderItems(order_items: list[model.OrderItemCreate], db: Session = De
     created_item_ids = []
     try:
         for item in order_items:
+            total= compute_item_total(quantity=item.quantity, price=item.price)
             new_order_item = OrderItem(
                 orderId=item.orderId,
                 productId=item.productId,
+                unitType=item.unit_type,
                 quantity=item.quantity,
                 price=item.price,
-                totalAmount=item.totalAmount
+                totalAmount=total
             )
             db.add(new_order_item)
             db.commit()
@@ -55,7 +93,7 @@ def get_orderItems_by_orderId(order_id: int, db: Session = Depends(get_session))
             model.OrderItemResponse(
                 productId=item.productId,
                 quantity=item.quantity,
-                unitType="unit",  # Assuming a default unit type; adjust as necessary
+                unitType= item.unit_price,  # Assuming a default unit type; adjust as necessary
                 price=item.price,
                 totalPrice=item.totalAmount
             ) for item in results
