@@ -13,7 +13,7 @@ class User(SQLModel, table=True):
     firstName: str
     lastName: Optional[str] = None
     phoneNumber: str = Field(unique= True, nullable= False)
-    role: str = Field(sa_column= Column(Enum("Admin","CEO", "SeniorCashier", "JuniorCashier", "StockManager", name="user_role_enum")))
+    role: str = Field(sa_column= Column(Enum("Admin","ceo", "seniorCashier", "juniorCashier", "stockManager", name="user_role_enum")))
     username: str = Field(unique= True, nullable= False)
     password: str = Field(max_length= 50, nullable= False)
     question: str = Field(max_length= 100, nullable= False)

@@ -7,16 +7,18 @@ from typing import Sequence, Literal
 from fastapi import Depends, HTTPException, Query, status
 from sqlmodel import Session, select, SQLModelError
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 
 from ...entities.orders import Order
 from ...entities.orderItems import OrderItem
 from ...db.database import get_session
 from ...logging import logger
 from ...utils import require_role
-from ..userManagement.auth.service import get_current_user
+from ..userManagement.authService import get_current_user
 from .orderItemService import compute_order_total  
 from . import models
 from typing import List
+from decimal import Decimal
 
 
 
@@ -66,9 +68,9 @@ cashier_or_ceo_dep = lambda: Depends(require_role(["SeniorCashier", "JuniorCashi
 # Business logic
 # ---------------------------------------------------------------------------
 
-def compute_VAT_amount(subtotal: float, vat_rate: float = 0.16) -> float:
-    """Compute VAT amount from subtotal."""
-    return subtotal * vat_rate
+def compute_VAT_amount(subtotal: Decimal) -> Decimal:
+    vat = subtotal * Decimal("0.16")
+    return vat.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 
@@ -95,27 +97,27 @@ def create_order(order_data: models.OrderCreate, db: Session = Depends(get_sessi
             payment_status=order_data.payment_status,
             discount=order_data.discount
         )
-
-        # 💾 Save order
-        db.add(new_order)
-        db.commit()
-        db.refresh(new_order)
         
-        orderItemsTotals = db.exec(
-            select(OrderItem.totalAmount).where(OrderItem.orderId == new_order.orderId)
-        ).all()
+        with db.begin():
+            db.add(new_order)
+            db.flush()  # Ensure orderId is generated
             
-        subtotal = sum(orderItemsTotals) if orderItemsTotals else 0.0
-        subtotal -= new_order.discount
-        
-        if new_order.VAT_status:
-            vat_inclusive_amount = compute_VAT_amount(subtotal)
-            subtotal += vat_inclusive_amount
-        
-        new_order.subtotal = subtotal
-        db.add(new_order)
-        db.commit()
-        db.refresh(new_order)
+            total = db.exec(
+                select(func.coalesce(func.sum(OrderItem.totalAmount), 0))
+                .where(OrderItem.orderId == new_order.orderId)
+            ).one()
+            
+            subtotal = Decimal(total or 0) - new_order.discount
+            
+            if subtotal < 0:
+                subtotal = Decimal("0.00")
+                
+            if new_order.VAT_status:
+                vat_inclusive_amount = compute_VAT_amount(subtotal)
+                subtotal += vat_inclusive_amount
+            
+            new_order.subtotal = subtotal
+            db.add(new_order)
 
         logger.info(f"Order {new_order.orderId} created successfully by user {current_user.userId}.")
         return models.OrderCreateResponse(
@@ -506,215 +508,3 @@ def update_order_payment_status(
         logger.error(f"Error updating order {order_id} payment status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
     
-
-
-def create_order(
-    order_data: models.OrderCreate,
-    db: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
-) -> models.OrderCreateResponse:
-    """
-    Create a new order.
-    - Requires cashier/CEO role.
-    - **Re-calculates subtotal** from linked order items (if provided).
-    """
-    cashier_or_ceo_dep()  # raises 403 if not allowed
-
-    # If order items are sent, validate + recompute subtotal
-    if getattr(order_data, "order_items", None):
-        # NOTE: assume OrderCreate optionally contains `order_items: list[OrderItemCreate]`
-        subtotal = compute_order_total(order_data.order_items)
-        if abs(subtotal - order_data.subtotal) > 1e-6:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Provided subtotal does not match calculated total from items.",
-            )
-    else:
-        # Trust provided subtotal (legacy path)
-        subtotal = order_data.subtotal
-
-    new_order = Order(
-        customerId=order_data.customerId,
-        amountPayed=order_data.amountPayed,
-        servedby=order_data.servedby,
-        parent_orderid=order_data.parent_orderid,
-        VAT_status=order_data.VAT_status,
-        payment_status=order_data.payment_status,
-        subtotal=subtotal,
-        discount=order_data.discount,
-    )
-
-    try:
-        db.add(new_order)
-        db.commit()
-        db.refresh(new_order)
-        logger.info("Order %s created by user %s", new_order.orderId, current_user.userId)
-        return models.OrderCreateResponse(
-            message="Order created successfully",
-            orderId=new_order.orderId,
-        )
-    except IntegrityError as exc:
-        db.rollback()
-        logger.error("Integrity error creating order: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Conflict (e.g., duplicate order ID).",
-        ) from exc
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Unexpected error creating order")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
-        ) from exc
-
-
-def get_order_by_orderId(
-    order_id: int,
-    db: Session = Depends(get_session),
-) -> models.OrderResponse:
-    stmt = select(Order).where(Order.orderId == order_id)
-    order: Order = _execute_query(stmt, db, not_found_msg="Order not found")
-    return _order_to_response(order)
-
-
-def _date_range_query(
-    start: datetime,
-    end: datetime,
-    vat_included: bool | None = None,
-) -> select:
-    stmt = select(Order).where(Order.created_at >= start, Order.created_at <= end)
-    if vat_included is not None:
-        stmt = stmt.where(Order.VAT_status == vat_included)
-    return stmt
-
-
-def _paginate(stmt, skip: int, limit: int) -> select:
-    return stmt.offset(skip).limit(limit)
-
-
-def _parse_iso_date(date_str: str, field_name: str) -> datetime:
-    """Accepts YYYY-MM-DD or full ISO → returns start-of-day (or full datetime)."""
-    try:
-        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid {field_name}: expected ISO format (e.g., 2025-10-01 or 2025-10-01T00:00:00)",
-        )
-    return dt
-
-
-def get_orders_for_period_vatExcluded(
-    start_date: str = Query(..., description="ISO start date"),
-    end_date: str = Query(..., description="ISO end date"),
-    db: Session = Depends(get_session),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-) -> list[models.OrderResponse]:
-    start = _parse_iso_date(start_date, "start_date")
-    end = _parse_iso_date(end_date, "end_date")
-    stmt = _date_range_query(start, end, vat_included=False)
-    stmt = _paginate(stmt, skip, limit)
-    orders: list[Order] = _execute_query(stmt, db)
-    return [_order_to_response(o) for o in orders]
-
-
-def get_orders_for_period_vatIncluded(
-    start_date: str = Query(..., description="ISO start date"),
-    end_date: str = Query(..., description="ISO end date"),
-    db: Session = Depends(get_session),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-) -> list[models.OrderResponse]:
-    start = _parse_iso_date(start_date, "start_date")
-    end = _parse_iso_date(end_date, "end_date")
-    stmt = _date_range_query(start, end, vat_included=True)
-    stmt = _paginate(stmt, skip, limit)
-    orders: list[Order] = _execute_query(stmt, db)
-    return [_order_to_response(o) for o in orders]
-
-
-def get_orders_by_customerId(
-    customer_id: int,
-    db: Session = Depends(get_session),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-) -> list[models.OrderResponse]:
-    stmt = _paginate(select(Order).where(Order.customerid == customer_id), skip, limit)
-    orders = _execute_query(stmt, db)
-    return [_order_to_response(o) for o in orders]
-
-
-def get_orders_by_servedby(
-    user_id: int,
-    db: Session = Depends(get_session),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-) -> list[models.OrderResponse]:
-    stmt = _paginate(select(Order).where(Order.servedby == user_id), skip, limit)
-    orders = _execute_query(stmt, db)
-    return [_order_to_response(o) for o in orders]
-
-
-def get_orders_for_certain_day(
-    date: str = Query(..., description="ISO date, e.g., 2025-10-28"),
-    db: Session = Depends(get_session),
-) -> list[models.OrderResponse]:
-    day = _parse_iso_date(date, "date").date()
-    start = datetime.combine(day, datetime.min.time())
-    end = datetime.combine(day, datetime.max.time())
-    stmt = select(Order).where(Order.created_at >= start, Order.created_at <= end)
-    orders = _execute_query(stmt, db)
-    return [_order_to_response(o) for o in orders]
-
-
-def get_child_orders(
-    parent_order_id: int,
-    db: Session = Depends(get_session),
-) -> list[models.OrderResponse]:
-    stmt = select(Order).where(Order.parent_orderid == parent_order_id)
-    orders = _execute_query(stmt, db)
-    return [_order_to_response(o) for o in orders]
-
-
-def get_all_orders_VAT(
-    db: Session = Depends(get_session),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(10, ge=1, le=100),
-) -> list[models.OrderResponse]:
-    stmt = _paginate(select(Order), skip, limit)
-    orders = _execute_query(stmt, db)
-    return [_order_to_response(o) for o in orders]
-
-
-def update_order_payment_status(
-    order_id: int,
-    new_status: Literal["pending", "paid", "failed", "refunded"],
-    db: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
-) -> models.OrderStatusUpdateResponse:
-    cashier_or_ceo_dep()  # 403 if not allowed
-
-    order: Order = _execute_query(
-        select(Order).where(Order.orderId == order_id),
-        db,
-        not_found_msg="Order not found",
-    )
-
-    order.payment_status = new_status
-    try:
-        db.add(order)
-        db.commit()
-        db.refresh(order)
-        logger.info("Order %s payment status → %s by %s", order_id, new_status, current_user.userId)
-        return models.OrderStatusUpdateResponse(
-            message=f"Order {order_id} payment status updated successfully to {new_status}."
-        )
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Failed to update payment status")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error",
-        ) from exc

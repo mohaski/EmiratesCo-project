@@ -1,9 +1,8 @@
-import logging
 from fastapi import Depends, HTTPException, status
 from sqlmodel import Session, select
 from ...db.database import get_session
 from ...entities.users import User
-from ..auth.service import hash_password, verify_password
+from .authService import hash_password, verify_password
 from . import models
 
 from ...logging import logger

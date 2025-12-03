@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from fastapi import Depends, HTTPException, status
-from sqlmodel import Session, select, SQLModelError
-from sqlalchemy.exc import IntegrityError
+from fastapi import Depends, HTTPException
+from sqlmodel import Session, select
+#from sqlalchemy.exc import IntegrityError
 
 from ...entities.orderItems import OrderItem
 from ...logging import logger

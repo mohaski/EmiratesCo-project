@@ -11,5 +11,6 @@ class Customer(SQLModel, table=True):
     name: str = Field(nullable= False)
     phoneNumber: str = Field(unique= True, nullable= False)
     createdAt: datetime = Field(sa_column_kwargs={"server_default": func.now()})
+    
     credits: List["Credit"] = Relationship(back_populates="customer")
     orders: List["Order"] = Relationship(back_populates="customer")

@@ -3,7 +3,7 @@ from sqlmodel import Session, select
 from ....entities.products import Product
 from . import models
 from ....db.database import get_session
-from ...userManagement.auth.service import get_current_user
+from ...userManagement.authService import get_current_user
 from ....logging import logger
 from ....utils import require_role
 
