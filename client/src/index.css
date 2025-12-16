@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Brand Constants */
+  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+
+  /* Palette - Metadata / Aluminium */
+  --color-metal-100: #f5f5f7;
+  --color-metal-200: #e5e5ea;
+  --color-metal-300: #d1d1d6;
+  --color-metal-400: #aeaeb2;
+  --color-metal-500: #8e8e93;
+  --color-metal-600: #636366;
+  --color-metal-700: #48484a;
+  --color-metal-800: #2c2c2e;
+  --color-metal-900: #1c1c1e;
+
+  /* Palette - Glass / Accent */
+  --color-glass-blue: rgba(168, 213, 229, 0.6);
+  --color-glass-border: rgba(255, 255, 255, 0.2);
+  --color-glass-highlight: rgba(255, 255, 255, 0.1);
+
+  /* Functional Colors */
+  --color-primary: var(--color-metal-800);
+  --color-primary-foreground: #ffffff;
+  --color-background: var(--color-metal-100);
+  --color-surface: rgba(255, 255, 255, 0.7);
+
+  /* Text */
+  --color-text-main: var(--color-metal-900);
+  --color-text-muted: var(--color-metal-600);
+
+  /* Effects */
+  --glass-blur: blur(12px);
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--color-background);
+  color: var(--color-text-main);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Glassmorphism Utilities */
+.glass-panel {
+  background: var(--color-surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--color-glass-border);
+  box-shadow: var(--shadow-glass);
+}
+
+.glass-input {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--color-glass-border);
+  backdrop-filter: blur(4px);
+  color: var(--color-text-main);
+  transition: all 0.3s ease;
+}
+
+.glass-input:focus {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: var(--color-metal-400);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(168, 213, 229, 0.3);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--color-metal-700), var(--color-metal-900));
+  color: var(--color-primary-foreground);
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--color-metal-900), var(--color-metal-500));
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
