@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
 import CartSidebar from '../components/sales/CartSidebar';
@@ -7,47 +7,25 @@ import { PRODUCTS, CATEGORIES } from '../data/mockProducts';
 import { CUSTOMERS } from '../data/mockCustomers';
 import logo from '../assets/logo.png';
 
-export default function SalesDashboard() {
+export default function InvoiceGenPage() {
     const location = useLocation();
     const navigate = useNavigate();
     const [activeCategory, setActiveCategory] = useState('ke-profile');
-    // Sub-category state for Profiles
     const [activeSubCategory, setActiveSubCategory] = useState('window');
 
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
 
-    // Edit State
     const [editingIndex, setEditingIndex] = useState(null);
     const [initialModalDetails, setInitialModalDetails] = useState(null);
 
-    // --- Customer Selection State ---
-    // Initialize from location state if returning from checkout
     const [selectedCustomer, setSelectedCustomer] = useState(location.state?.customer || null);
     const [customerSearch, setCustomerSearch] = useState('');
     const [newCustomerName, setNewCustomerName] = useState('');
     const [newCustomerPhone, setNewCustomerPhone] = useState('');
 
-    // --- MOCK INITIAL CART FOR VISUALIZATION ---
-    // Initialize from location state if returning from checkout OR from Orders Page
-    useEffect(() => {
-        if (location.state?.mode === 'edit' && location.state?.orderData) {
-            // HYDRATE CART FOR EDITING
-            setCart(location.state.orderData.items);
-            setSelectedCustomer(location.state.orderData.customer);
-        } else if (location.state?.mode === 'link' && location.state?.customer) {
-            // PREPARE FOR LINKED ORDER
-            setSelectedCustomer(location.state.customer);
-            setCart([]); // Clean start for adding new items
-        } else if (location.state?.cartItems) {
-            setCart(location.state.cartItems);
-        }
-    }, [location.state]);
-
-    const [cart, setCart] = useState([]); // Default empty, populated by effect above
-
-    // Global Profile Color State
+    const [cart, setCart] = useState(location.state?.cartItems || []);
     const [profileColor, setProfileColor] = useState('White');
 
     const PROFILE_COLORS = [
@@ -76,7 +54,6 @@ export default function SalesDashboard() {
     const isProfileCategory = activeCategory === 'ke-profile' || activeCategory === 'tz-profile';
     const isGlassCategory = activeCategory === 'glass';
 
-    // Reset sub-category when main category changes
     useEffect(() => {
         if (isProfileCategory) {
             setActiveSubCategory('window');
@@ -87,7 +64,6 @@ export default function SalesDashboard() {
         }
     }, [activeCategory, isProfileCategory, isGlassCategory]);
 
-    // --- Handlers ---
     const handleProductClick = (product) => {
         setSelectedProduct(product);
         setEditingIndex(null);
@@ -98,7 +74,6 @@ export default function SalesDashboard() {
     const handleEditCartItem = (index) => {
         const item = cart[index];
         const originalProduct = PRODUCTS.find(p => p.id === item.id);
-
         if (originalProduct) {
             setSelectedProduct(originalProduct);
             setEditingIndex(index);
@@ -130,13 +105,15 @@ export default function SalesDashboard() {
         setInitialModalDetails(null);
     };
 
-    // --- Filter Logic ---
+    const handleReviewInvoice = () => {
+        navigate('/invoice/review', { state: { cartItems: cart, customer: selectedCustomer } });
+    };
+
     const filteredProducts = PRODUCTS.filter(p => {
         const matchesCategory = activeCategory === 'all' || p.category === activeCategory;
         const matchesSubCategory = activeSubCategory === 'all' || p.usage === activeSubCategory;
         const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
 
-        // Apply sub-category filter for Profile OR Glass
         if (isProfileCategory || isGlassCategory) {
             return matchesCategory && matchesSubCategory && matchesSearch;
         }
@@ -146,36 +123,24 @@ export default function SalesDashboard() {
     const currentSubCategories = isProfileCategory ? PROFILE_SUB_CATEGORIES : (isGlassCategory ? GLASS_SUB_CATEGORIES : []);
 
     return (
-        <div className="flex h-full w-full overflow-hidden text-gray-800 font-sans relative">
+        <div className="flex h-full w-full overflow-hidden text-gray-800 font-sans bg-slate-100 relative">
 
             {/* --- Main Content area --- */}
-            <div className="flex-1 flex flex-col relative bg-slate-50 min-w-0">
+            <div className="flex-1 flex flex-col relative min-w-0">
 
-                {/* Top Header */}
-                <div className="h-20 flex items-center justify-between px-8 border-b border-gray-200 bg-white/50 backdrop-blur-sm sticky top-0 z-10 transition-colors shrink-0">
+                {/* Top Header - Inverted Gold/Slate Theme */}
+                <div className="h-20 flex items-center justify-between px-8 bg-slate-900 text-white shadow-md z-10 shrink-0">
                     <div>
-                        <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Sales Terminal</h1>
-                        <div className="flex items-center gap-2">
-                            <p className="text-xs text-gray-500 font-medium">Welcome back, Agent</p>
-                            {location.state?.mode === 'edit' && (
-                                <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded font-bold border border-amber-200">
-                                    Editing Order: {location.state.orderData.id}
-                                </span>
-                            )}
-                            {location.state?.mode === 'link' && (
-                                <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded font-bold border border-blue-200">
-                                    Adding to Order: {location.state.parentOrderId}
-                                </span>
-                            )}
-                        </div>
+                        <h1 className="text-2xl font-bold tracking-tight text-amber-500">Invoice Generator</h1>
+                        <p className="text-xs text-slate-400 font-medium">Create Quotations & Estimates</p>
                     </div>
 
                     {/* Search Bar */}
                     <div className="relative w-96">
-                        <span className="absolute left-4 top-3 text-gray-400">🔍</span>
+                        <span className="absolute left-4 top-3 text-slate-500">🔍</span>
                         <input
                             type="text"
-                            className="w-full bg-white border border-gray-200 rounded-2xl py-3 pl-10 pr-4 text-gray-800 shadow-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder-gray-400"
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-white shadow-inner focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition-all placeholder-slate-500"
                             placeholder="Search products..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
@@ -184,17 +149,17 @@ export default function SalesDashboard() {
                 </div>
 
                 {/* Categories Tab Bar */}
-                <div className="px-8 py-6 shrink-0">
+                <div className="px-8 py-6 shrink-0 bg-white border-b border-gray-200">
                     <div className="flex items-center justify-between mb-2">
                         <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
                             {CATEGORIES.map(cat => (
                                 <button
                                     key={cat.id}
                                     onClick={() => setActiveCategory(cat.id)}
-                                    className={`flex items-center gap-2 px-6 py-4 rounded-2xl border transition-all whitespace-nowrap shadow-sm
+                                    className={`flex items-center gap-2 px-6 py-4 rounded-xl border transition-all whitespace-nowrap shadow-sm
                                         ${activeCategory === cat.id
-                                            ? 'bg-blue-600 text-white border-blue-600 shadow-blue-500/25 scale-[1.02]'
-                                            : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:bg-blue-50/50'
+                                            ? 'bg-slate-900 text-amber-500 border-slate-900 ring-2 ring-amber-500/50'
+                                            : 'bg-white text-gray-600 border-gray-200 hover:border-slate-300 hover:bg-slate-50'
                                         }`}
                                 >
                                     <span className="text-xl filter drop-shadow-sm">{cat.icon}</span>
@@ -205,18 +170,17 @@ export default function SalesDashboard() {
                     </div>
 
                     <div className="flex flex-col gap-3">
-                        {/* GLOBAL COLOR SELECTOR - Only visible for Profile Categories */}
                         {isProfileCategory && (
-                            <div className="flex items-center gap-2 bg-white p-1 rounded-xl border border-gray-200 shadow-sm animate-fade-in w-fit">
+                            <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-lg border border-gray-200 w-fit">
                                 <span className="text-xs font-bold text-gray-500 px-2">Profile Color:</span>
                                 <div className="flex gap-1">
                                     {PROFILE_COLORS.map(color => (
                                         <button
                                             key={color.name}
                                             onClick={() => setProfileColor(color.name)}
-                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition-all ${profileColor === color.name
-                                                ? 'bg-gray-100 border-blue-400 ring-1 ring-blue-500/20 shadow-sm'
-                                                : 'bg-white border-transparent hover:bg-gray-50'
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border transition-all ${profileColor === color.name
+                                                ? 'bg-white border-amber-500 shadow-sm text-slate-900'
+                                                : 'bg-transparent border-transparent hover:bg-gray-100'
                                                 }`}
                                         >
                                             <div
@@ -232,7 +196,6 @@ export default function SalesDashboard() {
                             </div>
                         )}
 
-                        {/* SUB CATEGORY FILTERS (Dynamic for Profile/Glass) */}
                         {currentSubCategories.length > 0 && (
                             <div className="flex gap-2 flex-wrap">
                                 {currentSubCategories.map(sub => (
@@ -240,7 +203,7 @@ export default function SalesDashboard() {
                                         key={sub.id}
                                         onClick={() => setActiveSubCategory(sub.id)}
                                         className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${activeSubCategory === sub.id
-                                            ? 'bg-gray-800 text-white shadow-md'
+                                            ? 'bg-amber-500 text-white shadow-md'
                                             : 'bg-white text-gray-400 border border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                                             }`}
                                     >
@@ -253,7 +216,7 @@ export default function SalesDashboard() {
                 </div>
 
                 {/* Products Grid */}
-                <div className="flex-1 overflow-y-auto px-8 pb-8 custom-scrollbar">
+                <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-slate-50">
                     <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                         {filteredProducts.map(product => (
                             <ProductCard
@@ -268,17 +231,14 @@ export default function SalesDashboard() {
             </div>
 
             {/* --- Right Cart Panel --- */}
+            {/* Using the reused CartSidebar, but passing 'Review Invoice' as action */}
             <CartSidebar
                 cartItems={cart}
                 onRemoveItem={handleRemoveItem}
                 onEditItem={handleEditCartItem}
                 customer={selectedCustomer}
-                actionLabel={location.state?.mode === 'edit' ? 'Update Order' : 'Checkout'}
-                onAction={location.state?.mode === 'edit' ? () => {
-                    alert('Order Updated Successfully! (Mock)');
-                    // In real app, API call here
-                    navigate('/orders');
-                } : undefined}
+                actionLabel="Review Invoice"
+                onAction={handleReviewInvoice}
             />
 
             {/* --- Product Modal --- */}
@@ -287,104 +247,100 @@ export default function SalesDashboard() {
                 isOpen={modalOpen}
                 onClose={handleModalClose}
                 onAddToOrder={handleAddToOrder}
-                // If editing, use the color from the item. If new, use global.
                 color={initialModalDetails?.color || profileColor}
                 initialDetails={initialModalDetails}
             />
 
             {/* --- CUSTOMER SELECTION OVERLAY --- */}
             {!selectedCustomer && (
-                <div className="absolute inset-0 z-[60] bg-slate-900/50 backdrop-blur-md flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full overflow-hidden animate-pop-in border border-gray-200">
-                        <div className="p-8 bg-white">
-                            <h2 className="text-3xl font-bold text-gray-800 mb-2">Who is this order for?</h2>
-                            <p className="text-gray-500 mb-8">Select a registered customer or enter a new name.</p>
+                <div className="absolute inset-0 z-[60] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden animate-pop-in border border-amber-500/20">
+                        <div className="p-8 bg-gradient-to-br from-slate-50 to-white">
+                            <h2 className="text-3xl font-bold text-slate-800 mb-2">Invoice Details</h2>
+                            <p className="text-slate-500 mb-8">Who is this quotation for?</p>
 
-                            {/* Search Existing */}
+                            {/* Reuse logic but style slightly differently or keep same for consistency? Keeping similar consistency is better for UX. */}
                             <div className="mb-8">
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2 block">Search Registered Customer</label>
+                                <label className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2 block">Search Client</label>
                                 <div className="relative group">
-                                    <span className="absolute left-4 top-3.5 text-gray-400 group-focus-within:text-blue-500 transition-colors">🔍</span>
+                                    <span className="absolute left-4 top-3.5 text-slate-400">🔍</span>
                                     <input
                                         type="text"
                                         placeholder="Search by name or phone..."
-                                        className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-10 pr-4 text-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                                        className="w-full bg-white border border-slate-200 rounded-xl py-3 pl-10 pr-4 text-lg focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
                                         value={customerSearch}
                                         onChange={(e) => setCustomerSearch(e.target.value)}
                                     />
                                 </div>
-                                {/* Results List */}
                                 <div className="mt-2 space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
                                     {CUSTOMERS.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.phone.includes(customerSearch)).map(c => (
                                         <button
                                             key={c.id}
                                             onClick={() => setSelectedCustomer(c)}
-                                            className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all text-left group"
+                                            className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-amber-50 border border-transparent hover:border-amber-200 transition-all text-left group"
                                         >
                                             <div>
-                                                <div className="font-bold text-gray-800">{c.name}</div>
-                                                <div className="text-xs text-gray-500 font-mono">{c.phone}</div>
+                                                <div className="font-bold text-slate-800">{c.name}</div>
+                                                <div className="text-xs text-slate-500 font-mono">{c.phone}</div>
                                             </div>
-                                            <span className="text-blue-500 opacity-0 group-hover:opacity-100 font-medium text-sm">Select →</span>
+                                            <span className="text-amber-500 opacity-0 group-hover:opacity-100 font-medium text-sm">Select</span>
                                         </button>
                                     ))}
                                 </div>
                             </div>
 
                             <div className="flex items-center gap-4 py-4">
-                                <span className="h-px bg-gray-200 flex-1"></span>
-                                <span className="text-xs text-gray-400 font-bold uppercase">OR</span>
-                                <span className="h-px bg-gray-200 flex-1"></span>
+                                <span className="h-px bg-slate-200 flex-1"></span>
+                                <span className="text-xs text-slate-400 font-bold uppercase">OR</span>
+                                <span className="h-px bg-slate-200 flex-1"></span>
                             </div>
 
-                            {/* One-time / New */}
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
                                 <div>
-                                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2 block">New Customer Registration</label>
+                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2 block">New Client</label>
                                     <div className="space-y-3">
                                         <input
                                             type="text"
-                                            placeholder="Full Name"
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-gray-800 outline-none focus:border-blue-500 transition-all font-medium"
+                                            placeholder="Client Name"
+                                            className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-800 outline-none focus:border-amber-500 transition-all font-medium"
                                             value={newCustomerName}
                                             onChange={(e) => setNewCustomerName(e.target.value)}
                                         />
                                         <input
                                             type="tel"
-                                            placeholder="Phone Number (Required)"
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-gray-800 outline-none focus:border-blue-500 transition-all font-medium"
+                                            placeholder="Phone Number"
+                                            className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-800 outline-none focus:border-amber-500 transition-all font-medium"
                                             value={newCustomerPhone}
                                             onChange={(e) => setNewCustomerPhone(e.target.value)}
                                             onKeyDown={(e) => {
-                                                if (e.key === 'Enter' && newCustomerName.trim() && newCustomerPhone.trim()) {
+                                                if (e.key === 'Enter' && newCustomerName.trim()) {
                                                     setSelectedCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
                                                 }
                                             }}
                                         />
                                         <button
                                             onClick={() => {
-                                                if (newCustomerName.trim() && newCustomerPhone.trim()) {
+                                                if (newCustomerName.trim()) {
                                                     setSelectedCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
                                                 }
                                             }}
-                                            disabled={!newCustomerName.trim() || !newCustomerPhone.trim()}
-                                            className="w-full bg-gray-900 text-white py-3 rounded-xl font-bold disabled:opacity-50 hover:bg-black transition-colors shadow-lg shadow-gray-900/10 flex items-center justify-center gap-2"
+                                            disabled={!newCustomerName.trim()}
+                                            className="w-full bg-slate-900 text-amber-500 py-3 rounded-xl font-bold disabled:opacity-50 hover:bg-black transition-colors shadow-lg flex items-center justify-center gap-2"
                                         >
-                                            <span>Register & Start Sale</span>
+                                            <span>Create Profile</span>
                                             <span>→</span>
                                         </button>
                                     </div>
                                 </div>
                                 <div className="flex flex-col justify-end">
                                     <button
-                                        onClick={() => setSelectedCustomer({ id: 'walk-in', name: 'Walk-in Customer', type: 'walk-in' })}
-                                        className="w-full bg-blue-50 text-blue-600 hover:bg-blue-100 font-bold py-3 rounded-xl border border-blue-200 transition-colors"
+                                        onClick={() => setSelectedCustomer({ id: 'guest', name: 'Guest Client', type: 'walk-in' })}
+                                        className="w-full bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold py-3 rounded-xl border border-slate-300 transition-colors"
                                     >
-                                        Walk-in Customer
+                                        Guest Client
                                     </button>
                                 </div>
                             </div>
-
                         </div>
                     </div>
                 </div>

@@ -9,6 +9,9 @@ import DashboardPage from './pages/DashboardPage';
 import InventoryPage from './pages/InventoryPage';
 import AddProductPage from './pages/AddProductPage';
 import RoleSelectionPage from './pages/RoleSelectionPage';
+import InvoiceGenPage from './pages/InvoiceGenPage';
+import InvoiceReviewPage from './pages/InvoiceReviewPage';
+import OrdersPage from './pages/OrdersPage';
 import Layout from './components/Layout';
 
 // Protected Route Component
@@ -40,14 +43,13 @@ function App() {
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
 
-          {/* Check out (Standalone) */}
+          {/* Standalone Protected Routes */}
           <Route path="/checkout" element={
             <ProtectedRoute>
               <CheckoutPage />
             </ProtectedRoute>
           } />
 
-          {/* Role Selection (Standalone) */}
           <Route path="/select-role" element={
             <ProtectedRoute>
               <RoleSelectionPage />
@@ -60,6 +62,11 @@ function App() {
             <Route path="/sales" element={<SalesDashboard />} />
             <Route path="/inventory" element={<InventoryPage />} />
             <Route path="/add-product" element={<AddProductPage />} />
+            <Route path="/orders" element={<OrdersPage />} />
+
+            {/* Invoice Routes */}
+            <Route path="/invoice" element={<InvoiceGenPage />} />
+            <Route path="/invoice/review" element={<InvoiceReviewPage />} />
           </Route>
 
         </Routes>

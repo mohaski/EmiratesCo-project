@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 
-export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, customer }) {
+export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, customer, actionLabel, onAction }) {
     const navigate = useNavigate();
 
     // Calculate Grand Total
@@ -197,11 +197,14 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                 </div>
 
                 <button
-                    onClick={() => navigate('/checkout', { state: { cartItems, customer } })}
+                    onClick={() => {
+                        if (onAction) onAction();
+                        else navigate('/checkout', { state: { cartItems, customer } });
+                    }}
                     disabled={cartItems.length === 0}
                     className="w-full py-4 bg-gray-900 hover:bg-black rounded-xl font-bold text-white shadow-xl shadow-gray-900/10 transform active:scale-[0.99] transition-all flex items-center justify-between px-6 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                    <span>Checkout</span>
+                    <span>{actionLabel || 'Checkout'}</span>
                     <span className="font-mono opacity-80">${(grandTotal * 1.05).toFixed(0)}</span>
                 </button>
             </div>
