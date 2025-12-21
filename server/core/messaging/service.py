@@ -5,7 +5,7 @@ from . import models
 from ...db.database import get_session
 from ..userManagement.authService import get_current_user
 from ...entities.users import User
-from ...logging import logger
+from ...app_logging import logger
 from sqlalchemy import func
 
 def send_message(message_data: models.messageCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> dict:

@@ -2,7 +2,7 @@ from fastapi import HTTPException, Depends
 from .authService import get_current_user
 from ...entities.customers import Customer
 from ...db.database import get_session
-from ...logging import logger
+from ...app_logging import logger
 from sqlmodel import Session
 from ...utils import require_role
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError

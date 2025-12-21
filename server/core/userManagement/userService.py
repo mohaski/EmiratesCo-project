@@ -5,7 +5,7 @@ from ...entities.users import User
 from .authService import hash_password, verify_password
 from . import models
 
-from ...logging import logger
+from ...app_logging import logger
 
 def get_users(db: Session = Depends(get_session)) -> list[User]:
     """Fetch all users with limited columns."""

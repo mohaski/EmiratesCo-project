@@ -6,7 +6,7 @@ from datetime import datetime
 from ...entities.credits import Credit
 from ...entities.customers import Customer
 from ...db.database import get_session
-from ...logging import logger
+from ...app_logging import logger
 from . import model
 
 

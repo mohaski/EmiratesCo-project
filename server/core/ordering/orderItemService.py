@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 #from sqlalchemy.exc import IntegrityError
 
 from ...entities.orderItems import OrderItem
-from ...logging import logger
+from ...app_logging import logger
 from ...db.database import get_session
 from . import model
 

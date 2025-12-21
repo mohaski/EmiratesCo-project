@@ -1,17 +1,126 @@
+import React, { useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { PRODUCTS } from '../data/mockProducts';
 import logo from '../assets/logo.png';
 
+// --- HELPER COMPONENT: Invoice Row ---
+// Extracts the complex rendering logic for different product types (Glass, Profile, etc.)
+const InvoiceItemRow = ({ item, index, productDef }) => {
+    // Fallback object if product definition is missing
+    const def = productDef || {};
+
+    return (
+        <tr className="group break-inside-avoid page-break-inside-avoid">
+            <td className="py-4 text-slate-400 font-mono align-top">{index + 1}</td>
+            <td className="py-4">
+                <div className="font-bold text-slate-900">{item.name}</div>
+
+                {/* Product Meta Tags */}
+                <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-2 mb-2">
+                    {item.details.color && <span className="bg-slate-100 px-1.5 rounded">{item.details.color}</span>}
+                    {item.details.length && <span className="bg-slate-100 px-1.5 rounded">{item.details.length}FT</span>}
+                    {item.details.thickness && <span className="bg-slate-100 px-1.5 rounded">{item.details.thickness}</span>}
+                </div>
+
+                {/* Detailed Breakdown */}
+                <div className="text-xs text-slate-600 font-mono space-y-1 ml-1 border-l-2 border-slate-100 pl-3">
+
+                    {/* 1. Profile Details */}
+                    {item.details.full > 0 && (
+                        <div className="flex justify-between w-full max-w-md">
+                            <span>• Full Lengths</span>
+                            <span className="text-slate-500">
+                                {item.details.full} x ${def.priceFull} = <span className="text-slate-700 font-bold">${(item.details.full * def.priceFull).toFixed(2)}</span>
+                            </span>
+                        </div>
+                    )}
+                    {item.details.half > 0 && (
+                        <div className="flex justify-between w-full max-w-md">
+                            <span>• Half Lengths</span>
+                            <span className="text-slate-500">
+                                {item.details.half} x ${def.priceHalf} = <span className="text-slate-700 font-bold">${(item.details.half * def.priceHalf).toFixed(2)}</span>
+                            </span>
+                        </div>
+                    )}
+                    {item.details.feet > 0 && (
+                        <div className="flex justify-between w-full max-w-md">
+                            <span>• Custom Feet</span>
+                            <span className="text-slate-500">
+                                {item.details.feet}ft x ${def.priceFoot} = <span className="text-slate-700 font-bold">${(item.details.feet * def.priceFoot).toFixed(2)}</span>
+                            </span>
+                        </div>
+                    )}
+
+                    {/* 2. Glass Details */}
+                    {item.details.glassItems && item.details.glassItems.map((gItem, gIdx) => (
+                        <div key={gIdx} className="flex justify-between w-full max-w-md">
+                            <span>• {gItem.label}</span>
+                            <span className="text-slate-500">
+                                {gItem.qty} x ${gItem.unitPrice ? gItem.unitPrice : gItem.rate + '/ft²'} = <span className="text-slate-700 font-bold">${gItem.totalPrice.toFixed(2)}</span>
+                            </span>
+                        </div>
+                    ))}
+
+                    {/* 3. Legacy / Standard Items */}
+                    {!item.details.glassItems && (
+                        <>
+                            {item.details.fullSheet > 0 && def.priceFullSheet && (
+                                <div className="flex justify-between w-full max-w-md">
+                                    <span>• Full Sheets</span>
+                                    <span className="text-slate-500">
+                                        {item.details.fullSheet} x ${def.priceFullSheet}
+                                    </span>
+                                </div>
+                            )}
+                            {item.details.qty !== undefined && (
+                                <div className="flex justify-between w-full max-w-md">
+                                    <span>• Quantity</span>
+                                    <span className="text-slate-500">
+                                        {item.details.qty} x ${def.price} = <span className="text-slate-700 font-bold">${(item.details.qty * def.price).toFixed(2)}</span>
+                                    </span>
+                                </div>
+                            )}
+                        </>
+                    )}
+                </div>
+            </td>
+            <td className="py-4 text-right font-mono font-medium text-slate-800 align-top">
+                {(item.totalPrice).toFixed(2)}
+            </td>
+        </tr>
+    );
+};
+
 export default function InvoiceReviewPage() {
     const location = useLocation();
     const navigate = useNavigate();
+
+    // Default to empty if accessed directly
     const { cartItems, customer } = location.state || { cartItems: [], customer: null };
 
-    const grandTotal = cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
-    const vat = grandTotal * 0.05;
-    const total = grandTotal + vat;
-    const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-    const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`;
+    // --- OPTIMIZATION: Memoize Product Lookup Map ---
+    // Converts array search O(n) to object lookup O(1)
+    const productMap = useMemo(() => {
+        return PRODUCTS.reduce((acc, p) => {
+            acc[p.id] = p;
+            return acc;
+        }, {});
+    }, []);
+
+    // --- OPTIMIZATION: Stable Invoice Metadata ---
+    // Prevents Date/Invoice# from changing if the component re-renders
+    const invoiceMeta = useMemo(() => ({
+        number: `INV-${Date.now().toString().slice(-6)}`,
+        date: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+    }), []);
+
+    // --- OPTIMIZATION: Memoize Totals ---
+    const totals = useMemo(() => {
+        const grandTotal = cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
+        const vat = grandTotal * 0.05;
+        const total = grandTotal + vat;
+        return { grandTotal, vat, total };
+    }, [cartItems]);
 
     const handlePrint = () => {
         window.print();
@@ -31,7 +140,7 @@ export default function InvoiceReviewPage() {
             <style type="text/css" media="print">
                 {`
                 @page { size: auto; margin: 20mm; }
-                body { background-color: white; }
+                body { background-color: white; -webkit-print-color-adjust: exact; }
                 table { page-break-inside: auto; }
                 tr { page-break-inside: avoid; break-inside: avoid; }
                 thead { display: table-header-group; }
@@ -82,11 +191,11 @@ export default function InvoiceReviewPage() {
                         <div className="mt-4 space-y-1">
                             <div className="flex justify-between w-48 ml-auto">
                                 <span className="text-slate-500 font-bold text-sm">Date:</span>
-                                <span className="text-slate-900 font-mono font-medium">{date}</span>
+                                <span className="text-slate-900 font-mono font-medium">{invoiceMeta.date}</span>
                             </div>
                             <div className="flex justify-between w-48 ml-auto">
                                 <span className="text-slate-500 font-bold text-sm">Invoice #:</span>
-                                <span className="text-slate-900 font-mono font-medium">{invoiceNumber}</span>
+                                <span className="text-slate-900 font-mono font-medium">{invoiceMeta.number}</span>
                             </div>
                         </div>
                     </div>
@@ -113,111 +222,33 @@ export default function InvoiceReviewPage() {
                             </tr>
                         </thead>
                         <tbody className="text-sm divide-y divide-slate-100">
-                            {cartItems.map((item, idx) => {
-                                const productsDef = PRODUCTS.find(p => p.id === item.id) || {};
-                                return (
-                                    <tr key={idx} className="group">
-                                        <td className="py-4 text-slate-400 font-mono align-top">{idx + 1}</td>
-                                        <td className="py-4">
-                                            <div className="font-bold text-slate-900">{item.name}</div>
-
-                                            {/* Product Meta */}
-                                            <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-2 mb-2">
-                                                {item.details.color && <span className="bg-slate-100 px-1.5 rounded">{item.details.color}</span>}
-                                                {item.details.length && <span className="bg-slate-100 px-1.5 rounded">{item.details.length}FT</span>}
-                                                {item.details.thickness && <span className="bg-slate-100 px-1.5 rounded">{item.details.thickness}</span>}
-                                            </div>
-
-                                            {/* Detailed Breakdown with Prices */}
-                                            <div className="text-xs text-slate-600 font-mono space-y-1 ml-1 border-l-2 border-slate-100 pl-3">
-
-                                                {/* Profile Details (Using looked-up prices) */}
-                                                {item.details.full > 0 && (
-                                                    <div className="flex justify-between w-full max-w-md">
-                                                        <span>• Full Lengths</span>
-                                                        <span className="text-slate-500">
-                                                            {item.details.full} x ${productsDef.priceFull} = <span className="text-slate-700 font-bold">${(item.details.full * productsDef.priceFull).toFixed(2)}</span>
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                {item.details.half > 0 && (
-                                                    <div className="flex justify-between w-full max-w-md">
-                                                        <span>• Half Lengths</span>
-                                                        <span className="text-slate-500">
-                                                            {item.details.half} x ${productsDef.priceHalf} = <span className="text-slate-700 font-bold">${(item.details.half * productsDef.priceHalf).toFixed(2)}</span>
-                                                        </span>
-                                                    </div>
-                                                )}
-                                                {item.details.feet > 0 && (
-                                                    <div className="flex justify-between w-full max-w-md">
-                                                        <span>• Custom Feet</span>
-                                                        <span className="text-slate-500">
-                                                            {item.details.feet}ft x ${productsDef.priceFoot} = <span className="text-slate-700 font-bold">${(item.details.feet * productsDef.priceFoot).toFixed(2)}</span>
-                                                        </span>
-                                                    </div>
-                                                )}
-
-                                                {/* Glass Details (Has stored prices) */}
-                                                {item.details.glassItems && item.details.glassItems.map((gItem, gIdx) => (
-                                                    <div key={gIdx} className="flex justify-between w-full max-w-md">
-                                                        <span>• {gItem.label}</span>
-                                                        <span className="text-slate-500">
-                                                            {gItem.qty} x ${gItem.unitPrice ? gItem.unitPrice : gItem.rate + '/ft²'} = <span className="text-slate-700 font-bold">${gItem.totalPrice.toFixed(2)}</span>
-                                                        </span>
-                                                    </div>
-                                                ))}
-
-                                                {/* Legacy Details (Prices might be unavailable, fallback to global total) */}
-                                                {!item.details.glassItems && (
-                                                    <>
-                                                        {item.details.fullSheet > 0 && productsDef.priceFullSheet && (
-                                                            <div className="flex justify-between w-full max-w-md">
-                                                                <span>• Full Sheets</span>
-                                                                <span className="text-slate-500">
-                                                                    {item.details.fullSheet} x ${productsDef.priceFullSheet}
-                                                                </span>
-                                                            </div>
-                                                        )}
-                                                        {/* ... (Other legacy fields if strictly needed, mostly covered above) ... */}
-                                                    </>
-                                                )}
-
-                                                {/* Basic Quantity */}
-                                                {item.details.qty !== undefined && !item.details.glassItems && (
-                                                    <div className="flex justify-between w-full max-w-md">
-                                                        <span>• Quantity</span>
-                                                        <span className="text-slate-500">
-                                                            {item.details.qty} x ${productsDef.price} = <span className="text-slate-700 font-bold">${(item.details.qty * productsDef.price).toFixed(2)}</span>
-                                                        </span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </td>
-                                        <td className="py-4 text-right font-mono font-medium text-slate-800 align-top">
-                                            {(item.totalPrice).toFixed(2)}
-                                        </td>
-                                    </tr>
-                                )
-                            })}
+                            {cartItems.map((item, idx) => (
+                                <InvoiceItemRow
+                                    key={idx}
+                                    item={item}
+                                    index={idx}
+                                    productDef={productMap[item.id]}
+                                />
+                            ))}
                         </tbody>
                     </table>
                 </div>
 
                 {/* Footer Totals */}
-                <div className="border-t-2 border-slate-900 pt-8 mt-8">
+                <div className="border-t-2 border-slate-900 pt-8 mt-8 break-inside-avoid">
                     <div className="flex justify-end">
                         <div className="w-64 space-y-3">
                             <div className="flex justify-between text-slate-500 text-sm">
                                 <span className="font-medium">Subtotal</span>
-                                <span className="font-mono">${grandTotal.toFixed(2)}</span>
+                                <span className="font-mono">${totals.grandTotal.toFixed(2)}</span>
                             </div>
                             <div className="flex justify-between text-slate-500 text-sm">
                                 <span className="font-medium">VAT (5%)</span>
-                                <span className="font-mono">${vat.toFixed(2)}</span>
+                                <span className="font-mono">${totals.vat.toFixed(2)}</span>
                             </div>
                             <div className="flex justify-between text-slate-900 pt-4 border-t border-slate-200 text-xl font-bold">
                                 <span>Total</span>
-                                <span className="font-mono">${total.toFixed(2)}</span>
+                                <span className="font-mono">${totals.total.toFixed(2)}</span>
                             </div>
                         </div>
                     </div>

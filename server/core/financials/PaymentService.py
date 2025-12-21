@@ -4,7 +4,7 @@ from ...db.database import get_session
 from ...entities.orders import Order
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import Session, select
-from ...logging import logger
+from ...app_logging import logger
 from sqlalchemy import func
 from datetime import datetime
 

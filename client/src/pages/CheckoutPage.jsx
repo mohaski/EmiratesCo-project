@@ -96,7 +96,11 @@ export default function CheckoutPage() {
                                         {item.details.glassItems ? (
                                             item.details.glassItems.map((gi, gIdx) => (
                                                 <div key={gIdx}>
-                                                    <span className="text-gray-600">{gi.label}</span> <span className="text-gray-400">x{gi.qty}</span>
+                                                    <span className="text-gray-600">
+                                                        {gi.type === 'cut' && gi.l && gi.w && gi.u
+                                                            ? `Cut: ${gi.l}x${gi.w} ${gi.u}`
+                                                            : gi.label}
+                                                    </span> <span className="text-gray-400">x{gi.q}</span>
                                                 </div>
                                             ))
                                         ) : (
@@ -111,7 +115,7 @@ export default function CheckoutPage() {
 
                                     {/* Price Column */}
                                     <div className="col-span-3 md:col-span-2 flex items-center justify-end">
-                                        <span className="font-bold text-xl text-gray-900 tracking-tight">${item.totalPrice.toFixed(0)}</span>
+                                        <span className="font-bold text-xl text-gray-900 tracking-tight">Ksh{item.totalPrice.toFixed(0)}</span>
                                     </div>
                                 </div>
                             ))}
@@ -146,7 +150,7 @@ export default function CheckoutPage() {
                                 <span className="text-gray-300">Optional</span>
                             </label>
                             <div className="relative">
-                                <span className="absolute left-4 top-3.5 text-gray-400 font-bold">$</span>
+                                <span className="absolute left-4 top-3.5 text-gray-400 font-bold"></span>
                                 <input
                                     type="number"
                                     value={discount}
@@ -181,7 +185,7 @@ export default function CheckoutPage() {
                         <div className="space-y-3 animate-fade-in">
                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Amount Paying Now</label>
                             <div className="relative">
-                                <span className="absolute left-4 top-3.5 text-green-600 font-bold">$</span>
+                                <span className="absolute left-4 top-3.5 text-green-600 font-bold">Ksh</span>
                                 <input
                                     type="number"
                                     value={amountPaid}
@@ -191,7 +195,7 @@ export default function CheckoutPage() {
                                 />
                             </div>
                             <div className="text-xs font-bold text-red-500 text-right">
-                                Balance: ${(total - (parseFloat(amountPaid) || 0)).toFixed(2)}
+                                Balance: Ksh{(total - (parseFloat(amountPaid) || 0)).toFixed(2)}
                             </div>
                         </div>
                     )}
@@ -275,11 +279,11 @@ export default function CheckoutPage() {
                     <div className="space-y-2 text-sm">
                         <div className="flex justify-between text-gray-500">
                             <span>Subtotal</span>
-                            <span className="font-mono">${subtotal.toFixed(2)}</span>
+                            <span className="font-mono">Ksh{subtotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between text-gray-500">
                             <span>VAT (5%)</span>
-                            <span className="font-mono">${tax.toFixed(2)}</span>
+                            <span className="font-mono">Ksh{tax.toFixed(2)}</span>
                         </div>
                         {discountValue > 0 && (
                             <div className="flex justify-between text-green-600 font-bold">
@@ -289,7 +293,7 @@ export default function CheckoutPage() {
                         )}
                         <div className="flex justify-between text-gray-900 font-bold pt-2 border-t border-gray-100">
                             <span>Total</span>
-                            <span className="font-mono text-lg">${total.toFixed(2)}</span>
+                            <span className="font-mono text-lg">Ksh{total.toFixed(2)}</span>
                         </div>
                     </div>
 
@@ -308,7 +312,7 @@ export default function CheckoutPage() {
                             </>
                         ) : (
                             <>
-                                <span>{currentPayable === 0 ? 'Confirm On Credit' : (balance > 0 ? `Pay $${currentPayable.toFixed(2)} & Credit Bal` : `Pay $${total.toFixed(2)}`)}</span>
+                                <span>{currentPayable === 0 ? 'Confirm On Credit' : (balance > 0 ? `Pay Ksh${currentPayable.toFixed(2)} & Credit Bal` : `Pay Ksh${total.toFixed(2)}`)}</span>
                                 <span className="group-hover:translate-x-1 transition-transform">→</span>
                             </>
                         )}

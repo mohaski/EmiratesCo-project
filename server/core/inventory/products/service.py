@@ -4,7 +4,7 @@ from ....entities.products import Product
 from . import models
 from ....db.database import get_session
 from ...userManagement.authService import get_current_user
-from ....logging import logger
+from ....app_logging import logger
 from ....utils import require_role
 
 def create_product(product_data: models.ProductCreate, db: Session = Depends(get_session), current_user=Depends(get_current_user)

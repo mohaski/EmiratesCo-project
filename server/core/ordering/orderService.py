@@ -12,7 +12,7 @@ from sqlalchemy import func
 from ...entities.orders import Order
 from ...entities.orderItems import OrderItem
 from ...db.database import get_session
-from ...logging import logger
+from ...app_logging import logger
 from ...utils import require_role
 from ..userManagement.authService import get_current_user
 from .orderItemService import compute_order_total  

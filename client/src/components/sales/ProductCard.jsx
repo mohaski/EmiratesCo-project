@@ -1,4 +1,6 @@
-export default function ProductCard({ product, onClick }) {
+import { memo } from 'react';
+
+function ProductCard({ product, onClick }) {
     return (
         <div
             onClick={() => onClick(product)}
@@ -21,17 +23,17 @@ export default function ProductCard({ product, onClick }) {
                 {product.category.includes('profile') ? (
                     <div className="flex flex-col">
                         <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">Per Foot</span>
-                        <span className="text-lg font-bold text-gray-900">${product.priceFoot}</span>
+                        <span className="text-lg font-bold text-gray-900">Ksh{product.priceFoot}</span>
                     </div>
                 ) : product.category === 'glass' ? (
                     <div className="flex flex-col">
                         <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">Per Sq.Ft</span>
-                        <span className="text-lg font-bold text-gray-900">${product.priceSqFt}</span>
+                        <span className="text-lg font-bold text-gray-900">Ksh{product.priceSqFt}</span>
                     </div>
                 ) : (
                     <div className="flex flex-col">
                         <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">Per {product.unit}</span>
-                        <span className="text-lg font-bold text-gray-900">${product.price}</span>
+                        <span className="text-lg font-bold text-gray-900">Ksh{product.price}</span>
                     </div>
                 )}
 
@@ -42,3 +44,5 @@ export default function ProductCard({ product, onClick }) {
         </div>
     );
 }
+
+export default memo(ProductCard);

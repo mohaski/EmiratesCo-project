@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
@@ -6,64 +6,47 @@ import CartSidebar from '../components/sales/CartSidebar';
 import { PRODUCTS, CATEGORIES } from '../data/mockProducts';
 import { CUSTOMERS } from '../data/mockCustomers';
 import logo from '../assets/logo.png';
+import CustomerSelectionOverlay from '../components/sales/CustomerSelectionOverlay';
 
 export default function SalesDashboard() {
     const location = useLocation();
     const navigate = useNavigate();
-    const [activeCategory, setActiveCategory] = useState('ke-profile');
-    // Sub-category state for Profiles
-    const [activeSubCategory, setActiveSubCategory] = useState('window');
 
+    // --- STATE ---
+    const [activeCategory, setActiveCategory] = useState('ke-profile');
+    const [activeSubCategory, setActiveSubCategory] = useState('window');
     const [searchQuery, setSearchQuery] = useState('');
+
+    // Modal & Selection State
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
-
-    // Edit State
     const [editingIndex, setEditingIndex] = useState(null);
     const [initialModalDetails, setInitialModalDetails] = useState(null);
 
-    // --- Customer Selection State ---
-    // Initialize from location state if returning from checkout
+    // Customer State
     const [selectedCustomer, setSelectedCustomer] = useState(location.state?.customer || null);
-    const [customerSearch, setCustomerSearch] = useState('');
-    const [newCustomerName, setNewCustomerName] = useState('');
-    const [newCustomerPhone, setNewCustomerPhone] = useState('');
 
-    // --- MOCK INITIAL CART FOR VISUALIZATION ---
-    // Initialize from location state if returning from checkout OR from Orders Page
-    useEffect(() => {
-        if (location.state?.mode === 'edit' && location.state?.orderData) {
-            // HYDRATE CART FOR EDITING
-            setCart(location.state.orderData.items);
-            setSelectedCustomer(location.state.orderData.customer);
-        } else if (location.state?.mode === 'link' && location.state?.customer) {
-            // PREPARE FOR LINKED ORDER
-            setSelectedCustomer(location.state.customer);
-            setCart([]); // Clean start for adding new items
-        } else if (location.state?.cartItems) {
-            setCart(location.state.cartItems);
-        }
-    }, [location.state]);
+    // Cart State
+    const [cart, setCart] = useState([]);
 
-    const [cart, setCart] = useState([]); // Default empty, populated by effect above
-
-    // Global Profile Color State
+    // Profile Color State
     const [profileColor, setProfileColor] = useState('White');
 
-    const PROFILE_COLORS = [
+    // --- CONSTANTS ---
+    const PROFILE_COLORS = useMemo(() => [
         { name: 'White', hex: '#FFFFFF' },
         { name: 'Brown', hex: '#8B4513' },
         { name: 'Silver', hex: '#C0C0C0' },
         { name: 'Grey', hex: '#808080' }
-    ];
+    ], []);
 
-    const PROFILE_SUB_CATEGORIES = [
+    const PROFILE_SUB_CATEGORIES = useMemo(() => [
         { id: 'window', label: 'Window Profile' },
         { id: 'door', label: 'Door Profile' },
         { id: 'general', label: 'General Purpose' },
-    ];
+    ], []);
 
-    const GLASS_SUB_CATEGORIES = [
+    const GLASS_SUB_CATEGORIES = useMemo(() => [
         { id: 'clear', label: 'Clear' },
         { id: 'oneway', label: 'One/Way' },
         { id: 'mirror', label: 'Mirror' },
@@ -71,12 +54,35 @@ export default function SalesDashboard() {
         { id: 'obscure', label: 'Obscure' },
         { id: 'alucoboard', label: 'Alucoboard' },
         { id: 'frost', label: 'Frost' },
-    ];
+    ], []);
 
-    const isProfileCategory = activeCategory === 'ke-profile' || activeCategory === 'tz-profile';
-    const isGlassCategory = activeCategory === 'glass';
+    // --- INITIALIZATION EFFECT ---
+    useEffect(() => {
+        if (location.state?.mode === 'edit' && location.state?.orderData) {
+            setCart(location.state.orderData.items);
+            setSelectedCustomer(location.state.orderData.customer);
+        } else if (location.state?.mode === 'link' && location.state?.customer) {
+            setSelectedCustomer(location.state.customer);
+            setCart([]);
+        } else if (location.state?.cartItems) {
+            setCart(location.state.cartItems);
+        }
+    }, [location.state]);
 
-    // Reset sub-category when main category changes
+    // --- MEMOIZED HELPERS ---
+    const isProfileCategory = useMemo(() =>
+        activeCategory === 'ke-profile' || activeCategory === 'tz-profile',
+        [activeCategory]);
+
+    const isGlassCategory = useMemo(() =>
+        activeCategory === 'glass',
+        [activeCategory]);
+
+    const currentSubCategories = useMemo(() =>
+        isProfileCategory ? PROFILE_SUB_CATEGORIES : (isGlassCategory ? GLASS_SUB_CATEGORIES : []),
+        [isProfileCategory, isGlassCategory, PROFILE_SUB_CATEGORIES, GLASS_SUB_CATEGORIES]);
+
+    // --- SIDE EFFECTS ---
     useEffect(() => {
         if (isProfileCategory) {
             setActiveSubCategory('window');
@@ -87,63 +93,78 @@ export default function SalesDashboard() {
         }
     }, [activeCategory, isProfileCategory, isGlassCategory]);
 
-    // --- Handlers ---
-    const handleProductClick = (product) => {
+    // --- OPTIMIZED HANDLERS (useCallback) ---
+    const handleProductClick = useCallback((product) => {
         setSelectedProduct(product);
         setEditingIndex(null);
         setInitialModalDetails(null);
         setModalOpen(true);
-    };
+    }, []);
 
-    const handleEditCartItem = (index) => {
-        const item = cart[index];
-        const originalProduct = PRODUCTS.find(p => p.id === item.id);
+    const handleEditCartItem = useCallback((index) => {
+        setCart((currentCart) => {
+            const item = currentCart[index];
+            const originalProduct = PRODUCTS.find(p => p.id === item.id);
+            if (originalProduct) {
+                // We need to defer state updates to avoid conflicts during render
+                // But in event handlers, it's fine.
+                setSelectedProduct(originalProduct);
+                setEditingIndex(index);
+                setInitialModalDetails(item.details);
+                setModalOpen(true);
+            }
+            return currentCart;
+        });
+    }, []);
 
-        if (originalProduct) {
-            setSelectedProduct(originalProduct);
-            setEditingIndex(index);
-            setInitialModalDetails(item.details);
-            setModalOpen(true);
-        }
-    };
+    const handleAddToOrder = useCallback((orderItem) => {
+        setCart(prevCart => {
+            if (editingIndex !== null) {
+                const newCart = [...prevCart];
+                newCart[editingIndex] = orderItem;
+                setEditingIndex(null); // Reset after update
+                return newCart;
+            } else {
+                return [...prevCart, orderItem];
+            }
+        });
+    }, [editingIndex]);
 
-    const handleAddToOrder = (orderItem) => {
-        if (editingIndex !== null) {
-            const newCart = [...cart];
-            newCart[editingIndex] = orderItem;
-            setCart(newCart);
-            setEditingIndex(null);
-        } else {
-            setCart([...cart, orderItem]);
-        }
-    };
+    const handleRemoveItem = useCallback((index) => {
+        setCart(prev => prev.filter((_, i) => i !== index));
+    }, []);
 
-    const handleRemoveItem = (index) => {
-        const newCart = [...cart];
-        newCart.splice(index, 1);
-        setCart(newCart);
-    };
-
-    const handleModalClose = () => {
+    const handleModalClose = useCallback(() => {
         setModalOpen(false);
         setEditingIndex(null);
         setInitialModalDetails(null);
-    };
+    }, []);
 
-    // --- Filter Logic ---
-    const filteredProducts = PRODUCTS.filter(p => {
-        const matchesCategory = activeCategory === 'all' || p.category === activeCategory;
-        const matchesSubCategory = activeSubCategory === 'all' || p.usage === activeSubCategory;
-        const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
+    const handleCustomerSelect = useCallback((customer) => {
+        setSelectedCustomer(customer);
+    }, []);
 
-        // Apply sub-category filter for Profile OR Glass
-        if (isProfileCategory || isGlassCategory) {
-            return matchesCategory && matchesSubCategory && matchesSearch;
-        }
-        return matchesCategory && matchesSearch;
-    });
+    // --- PERFORMANCE: MEMOIZED FILTERING ---
+    const filteredProducts = useMemo(() => {
+        const lowerQuery = searchQuery.toLowerCase();
 
-    const currentSubCategories = isProfileCategory ? PROFILE_SUB_CATEGORIES : (isGlassCategory ? GLASS_SUB_CATEGORIES : []);
+        return PRODUCTS.filter(p => {
+            // 1. Category Check
+            const matchesCategory = activeCategory === 'all' || p.category === activeCategory;
+            if (!matchesCategory) return false;
+
+            // 2. Sub-Category Check
+            const matchesSubCategory = activeSubCategory === 'all' || p.usage === activeSubCategory;
+
+            // 3. Search Check (Most expensive, do last)
+            const matchesSearch = !lowerQuery || p.name.toLowerCase().includes(lowerQuery);
+
+            if (isProfileCategory || isGlassCategory) {
+                return matchesSubCategory && matchesSearch;
+            }
+            return matchesSearch;
+        });
+    }, [activeCategory, activeSubCategory, searchQuery, isProfileCategory, isGlassCategory]);
 
     return (
         <div className="flex h-full w-full overflow-hidden text-gray-800 font-sans relative">
@@ -170,7 +191,7 @@ export default function SalesDashboard() {
                         </div>
                     </div>
 
-                    {/* Search Bar */}
+                    {/* Product Search Bar */}
                     <div className="relative w-96">
                         <span className="absolute left-4 top-3 text-gray-400">🔍</span>
                         <input
@@ -192,7 +213,7 @@ export default function SalesDashboard() {
                                     key={cat.id}
                                     onClick={() => setActiveCategory(cat.id)}
                                     className={`flex items-center gap-2 px-6 py-4 rounded-2xl border transition-all whitespace-nowrap shadow-sm
-                                        ${activeCategory === cat.id
+                                    ${activeCategory === cat.id
                                             ? 'bg-blue-600 text-white border-blue-600 shadow-blue-500/25 scale-[1.02]'
                                             : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300 hover:bg-blue-50/50'
                                         }`}
@@ -205,7 +226,7 @@ export default function SalesDashboard() {
                     </div>
 
                     <div className="flex flex-col gap-3">
-                        {/* GLOBAL COLOR SELECTOR - Only visible for Profile Categories */}
+                        {/* GLOBAL COLOR SELECTOR */}
                         {isProfileCategory && (
                             <div className="flex items-center gap-2 bg-white p-1 rounded-xl border border-gray-200 shadow-sm animate-fade-in w-fit">
                                 <span className="text-xs font-bold text-gray-500 px-2">Profile Color:</span>
@@ -232,7 +253,7 @@ export default function SalesDashboard() {
                             </div>
                         )}
 
-                        {/* SUB CATEGORY FILTERS (Dynamic for Profile/Glass) */}
+                        {/* SUB CATEGORY FILTERS */}
                         {currentSubCategories.length > 0 && (
                             <div className="flex gap-2 flex-wrap">
                                 {currentSubCategories.map(sub => (
@@ -264,7 +285,6 @@ export default function SalesDashboard() {
                         ))}
                     </div>
                 </div>
-
             </div>
 
             {/* --- Right Cart Panel --- */}
@@ -273,10 +293,11 @@ export default function SalesDashboard() {
                 onRemoveItem={handleRemoveItem}
                 onEditItem={handleEditCartItem}
                 customer={selectedCustomer}
+                mode={location.state?.mode}
+                originalTotal={location.state?.mode === 'edit' ? location.state.orderData.totalAmount : 0}
                 actionLabel={location.state?.mode === 'edit' ? 'Update Order' : 'Checkout'}
                 onAction={location.state?.mode === 'edit' ? () => {
-                    alert('Order Updated Successfully! (Mock)');
-                    // In real app, API call here
+                    alert("Order Updated Successfully!");
                     navigate('/orders');
                 } : undefined}
             />
@@ -287,109 +308,19 @@ export default function SalesDashboard() {
                 isOpen={modalOpen}
                 onClose={handleModalClose}
                 onAddToOrder={handleAddToOrder}
-                // If editing, use the color from the item. If new, use global.
                 color={initialModalDetails?.color || profileColor}
                 initialDetails={initialModalDetails}
             />
 
-            {/* --- CUSTOMER SELECTION OVERLAY --- */}
+            {/* --- OPTIMIZED CUSTOMER SELECTION OVERLAY --- */}
             {!selectedCustomer && (
-                <div className="absolute inset-0 z-[60] bg-slate-900/50 backdrop-blur-md flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full overflow-hidden animate-pop-in border border-gray-200">
-                        <div className="p-8 bg-white">
-                            <h2 className="text-3xl font-bold text-gray-800 mb-2">Who is this order for?</h2>
-                            <p className="text-gray-500 mb-8">Select a registered customer or enter a new name.</p>
-
-                            {/* Search Existing */}
-                            <div className="mb-8">
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2 block">Search Registered Customer</label>
-                                <div className="relative group">
-                                    <span className="absolute left-4 top-3.5 text-gray-400 group-focus-within:text-blue-500 transition-colors">🔍</span>
-                                    <input
-                                        type="text"
-                                        placeholder="Search by name or phone..."
-                                        className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-10 pr-4 text-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                                        value={customerSearch}
-                                        onChange={(e) => setCustomerSearch(e.target.value)}
-                                    />
-                                </div>
-                                {/* Results List */}
-                                <div className="mt-2 space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
-                                    {CUSTOMERS.filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.phone.includes(customerSearch)).map(c => (
-                                        <button
-                                            key={c.id}
-                                            onClick={() => setSelectedCustomer(c)}
-                                            className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-blue-50 border border-transparent hover:border-blue-100 transition-all text-left group"
-                                        >
-                                            <div>
-                                                <div className="font-bold text-gray-800">{c.name}</div>
-                                                <div className="text-xs text-gray-500 font-mono">{c.phone}</div>
-                                            </div>
-                                            <span className="text-blue-500 opacity-0 group-hover:opacity-100 font-medium text-sm">Select →</span>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="flex items-center gap-4 py-4">
-                                <span className="h-px bg-gray-200 flex-1"></span>
-                                <span className="text-xs text-gray-400 font-bold uppercase">OR</span>
-                                <span className="h-px bg-gray-200 flex-1"></span>
-                            </div>
-
-                            {/* One-time / New */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-                                <div>
-                                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2 block">New Customer Registration</label>
-                                    <div className="space-y-3">
-                                        <input
-                                            type="text"
-                                            placeholder="Full Name"
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-gray-800 outline-none focus:border-blue-500 transition-all font-medium"
-                                            value={newCustomerName}
-                                            onChange={(e) => setNewCustomerName(e.target.value)}
-                                        />
-                                        <input
-                                            type="tel"
-                                            placeholder="Phone Number (Required)"
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-gray-800 outline-none focus:border-blue-500 transition-all font-medium"
-                                            value={newCustomerPhone}
-                                            onChange={(e) => setNewCustomerPhone(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter' && newCustomerName.trim() && newCustomerPhone.trim()) {
-                                                    setSelectedCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
-                                                }
-                                            }}
-                                        />
-                                        <button
-                                            onClick={() => {
-                                                if (newCustomerName.trim() && newCustomerPhone.trim()) {
-                                                    setSelectedCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
-                                                }
-                                            }}
-                                            disabled={!newCustomerName.trim() || !newCustomerPhone.trim()}
-                                            className="w-full bg-gray-900 text-white py-3 rounded-xl font-bold disabled:opacity-50 hover:bg-black transition-colors shadow-lg shadow-gray-900/10 flex items-center justify-center gap-2"
-                                        >
-                                            <span>Register & Start Sale</span>
-                                            <span>→</span>
-                                        </button>
-                                    </div>
-                                </div>
-                                <div className="flex flex-col justify-end">
-                                    <button
-                                        onClick={() => setSelectedCustomer({ id: 'walk-in', name: 'Walk-in Customer', type: 'walk-in' })}
-                                        className="w-full bg-blue-50 text-blue-600 hover:bg-blue-100 font-bold py-3 rounded-xl border border-blue-200 transition-colors"
-                                    >
-                                        Walk-in Customer
-                                    </button>
-                                </div>
-                            </div>
-
-                        </div>
-                    </div>
-                </div>
+                <CustomerSelectionOverlay
+                    customers={CUSTOMERS}
+                    onSelectCustomer={handleCustomerSelect}
+                />
             )}
-
         </div>
     );
 }
+
+
