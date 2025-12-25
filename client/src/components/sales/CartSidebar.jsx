@@ -42,18 +42,31 @@ const CartItem = memo(({ item, index, onEdit, onRemove }) => {
             {/* Item Details */}
             <div className="pl-[64px] text-xs text-gray-500 space-y-2">
                 {/* Meta Tags */}
-                {item.details && (item.details.color || item.details.length || item.details.thickness) && (
-                    <div className="flex gap-3 mb-2 text-[11px] font-medium tracking-wide text-gray-400 uppercase">
-                        {item.details.color && (
-                            <span className="flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: item.details.color === 'White' ? '#eee' : item.details.color }}></span>
-                                {item.details.color}
-                            </span>
-                        )}
-                        {item.details.length && <span>{item.details.length}FT</span>}
-                        {item.details.thickness && <span className="text-blue-500">{item.details.thickness}</span>}
-                    </div>
-                )}
+                <div className="flex gap-3 mb-2 text-[11px] font-medium tracking-wide text-gray-400 uppercase flex-wrap">
+                    {item.details.description && <span className="text-gray-600 font-bold">{item.details.description}</span>}
+                    {item.details.color && (
+                        <span className="flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: item.details.color === 'White' ? '#eee' : item.details.color }}></span>
+                            {item.details.color}
+                        </span>
+                    )}
+
+                    {item.details.extras ? (
+                        Object.entries(item.details.extras).map(([key, val]) => {
+                            if (key === 'Color' || key === 'Category') return null;
+                            return (
+                                <span key={key} className={key === 'Thickness' ? 'text-blue-500' : ''}>
+                                    {val}{key === 'Length' && typeof val === 'number' ? 'ft' : ''}
+                                </span>
+                            );
+                        })
+                    ) : (
+                        <>
+                            {item.details.length && <span>{item.details.length}FT</span>}
+                            {item.details.thickness && <span className="text-blue-500">{item.details.thickness}</span>}
+                        </>
+                    )}
+                </div>
 
                 {/* Breakdown Logic */}
                 {item.details?.full > 0 && (
@@ -130,17 +143,50 @@ const CartItem = memo(({ item, index, onEdit, onRemove }) => {
                                 </div>
                             </div>
                         )}
+
+                        {/* Accessories Details */}
+                        {item.details?.thickness && (
+                            <div className="flex items-baseline justify-between">
+                                <span>Thickness</span>
+                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
+                                <span className="font-mono text-gray-900 font-medium">{item.details.thickness}</span>
+                            </div>
+                        )}
+                        {item.details?.unit === 'meter' && !item.details?.salesMode && item.details?.length > 0 && (
+                            <div className="flex items-baseline justify-between">
+                                <span>Length</span>
+                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
+                                <span className="font-mono text-gray-900 font-medium">{item.details.length}m</span>
+                            </div>
+                        )}
+                        {/* Meter Mode */}
+                        {item.details?.salesMode === 'meter' && (
+                            <div className="flex items-baseline justify-between">
+                                <span>Length</span>
+                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
+                                <span className="font-mono text-gray-900 font-medium">{item.details.length}m</span>
+                            </div>
+                        )}
+                        {/* Roll Mode */}
+                        {item.details?.salesMode === 'roll' && (
+                            <div className="flex items-baseline justify-between">
+                                <span>{item.details.rollLabel || 'Rolls'} ({item.details.rollLength}m each)</span>
+                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
+                                <span className="font-mono text-gray-900 font-medium">x{item.details.qty}</span>
+                            </div>
+                        )}
+                        {/* Standard Qty (Accessories/Profiles) */}
+                        {item.details?.qty > 0 && item.details?.unit !== 'meter' && !item.details?.full && !item.details?.salesMode && !item.details?.glassItems && (
+                            <div className="flex items-baseline justify-between">
+                                <span>Quantity</span>
+                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
+                                <span className="font-mono text-gray-900 font-medium">x{item.details.qty}</span>
+                            </div>
+                        )}
                     </>
                 )}
 
-                {/* Standard Qty */}
-                {item.details?.qty !== undefined && (
-                    <div className="flex items-baseline justify-between">
-                        <span>Quantity</span>
-                        <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                        <span className="font-mono text-gray-900 font-medium">{item.details.qty} {item.details.unit}</span>
-                    </div>
-                )}
+
             </div>
         </div>
     );
@@ -158,7 +204,7 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
         const grandTotal = subTotal + vat;
 
         // Final total logic from your code (grandTotal * 1.05)
-        const displayTotal = grandTotal * 1.05;
+        //const displayTotal = grandTotal * 1.05;
 
         // Reconciliation
         const balance = grandTotal - originalTotal;
@@ -167,15 +213,15 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
             subTotal,
             vat,
             grandTotal,
-            displayTotal,
+            //displayTotal,
             balance,
             isOwing: balance > 0,
             isRefund: balance < 0,
-            isBalanced: Math.abs(balance) < 0.01
+            isBalanced: Math.abs(balance) < 10
         };
     }, [cartItems, originalTotal]);
 
-    const { subTotal, vat, grandTotal, displayTotal, balance, isOwing, isRefund, isBalanced } = financials;
+    const { subTotal, vat, grandTotal, balance, isOwing, isRefund, isBalanced } = financials;
 
     // --- OPTIMIZATION 3: Stable Handler ---
     const handleAction = useCallback(() => {
@@ -271,7 +317,7 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                     <div className="space-y-4 mb-8">
                         <div className="flex justify-between text-gray-500 text-sm">
                             <span className="font-medium">Subtotal</span>
-                            <span className="font-mono tracking-tight">Ksh{grandTotal.toFixed(2)}</span>
+                            <span className="font-mono tracking-tight">Ksh{subTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between text-gray-500 text-sm">
                             <span className="font-medium">VAT (5%)</span>
@@ -279,7 +325,7 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                         </div>
                         <div className="flex justify-between text-gray-900 items-baseline pt-4 border-t border-gray-200">
                             <span className="font-bold text-xl">Total</span>
-                            <span className="font-bold text-3xl tracking-tighter">Ksh{displayTotal.toFixed(2)}</span>
+                            <span className="font-bold text-3xl tracking-tighter">Ksh{grandTotal.toFixed(2)}</span>
                         </div>
                     </div>
                 )}
@@ -301,7 +347,7 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                     <span className="font-mono opacity-80">
                         {mode === 'edit'
                             ? (isBalanced ? '✓' : `Ksh${Math.abs(balance).toFixed(0)}`)
-                            : `Ksh${displayTotal.toFixed(0)}`}
+                            : `Ksh${grandTotal.toFixed(0)}`}
                     </span>
                 </button>
             </div>

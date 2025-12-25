@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
 import CartSidebar from '../components/sales/CartSidebar';
-import { PRODUCTS, CATEGORIES } from '../data/mockProducts';
+import { useProducts } from '../context/ProductContext';
 import { CUSTOMERS } from '../data/mockCustomers';
+import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 import logo from '../assets/logo.png';
 import CustomerSelectionOverlay from '../components/sales/CustomerSelectionOverlay';
 
@@ -12,11 +13,22 @@ export default function SalesDashboard() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    // --- STATE ---
-    const [activeCategory, setActiveCategory] = useState('ke-profile');
-    const [activeSubCategory, setActiveSubCategory] = useState('window');
-    const [searchQuery, setSearchQuery] = useState('');
+    // --- CONTEXT ---
+    const { products: PRODUCTS } = useProducts();
 
+    // --- HOOKS ---
+    const {
+        activeCategory, setActiveCategory,
+        activeSubCategory, setActiveSubCategory,
+        searchQuery, setSearchQuery,
+        profileColor, setProfileColor,
+        filteredProducts,
+        currentSubCategories,
+        CATEGORIES,
+        isProfileCategory
+    } = useProductFiltering();
+
+    // --- LOCAL STATE ---
     // Modal & Selection State
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
@@ -28,33 +40,8 @@ export default function SalesDashboard() {
 
     // Cart State
     const [cart, setCart] = useState([]);
+    const [isCartOpen, setIsCartOpen] = useState(false); // Mobile Cart Drawer State
 
-    // Profile Color State
-    const [profileColor, setProfileColor] = useState('White');
-
-    // --- CONSTANTS ---
-    const PROFILE_COLORS = useMemo(() => [
-        { name: 'White', hex: '#FFFFFF' },
-        { name: 'Brown', hex: '#8B4513' },
-        { name: 'Silver', hex: '#C0C0C0' },
-        { name: 'Grey', hex: '#808080' }
-    ], []);
-
-    const PROFILE_SUB_CATEGORIES = useMemo(() => [
-        { id: 'window', label: 'Window Profile' },
-        { id: 'door', label: 'Door Profile' },
-        { id: 'general', label: 'General Purpose' },
-    ], []);
-
-    const GLASS_SUB_CATEGORIES = useMemo(() => [
-        { id: 'clear', label: 'Clear' },
-        { id: 'oneway', label: 'One/Way' },
-        { id: 'mirror', label: 'Mirror' },
-        { id: 'tint', label: 'Tint' },
-        { id: 'obscure', label: 'Obscure' },
-        { id: 'alucoboard', label: 'Alucoboard' },
-        { id: 'frost', label: 'Frost' },
-    ], []);
 
     // --- INITIALIZATION EFFECT ---
     useEffect(() => {
@@ -69,29 +56,6 @@ export default function SalesDashboard() {
         }
     }, [location.state]);
 
-    // --- MEMOIZED HELPERS ---
-    const isProfileCategory = useMemo(() =>
-        activeCategory === 'ke-profile' || activeCategory === 'tz-profile',
-        [activeCategory]);
-
-    const isGlassCategory = useMemo(() =>
-        activeCategory === 'glass',
-        [activeCategory]);
-
-    const currentSubCategories = useMemo(() =>
-        isProfileCategory ? PROFILE_SUB_CATEGORIES : (isGlassCategory ? GLASS_SUB_CATEGORIES : []),
-        [isProfileCategory, isGlassCategory, PROFILE_SUB_CATEGORIES, GLASS_SUB_CATEGORIES]);
-
-    // --- SIDE EFFECTS ---
-    useEffect(() => {
-        if (isProfileCategory) {
-            setActiveSubCategory('window');
-        } else if (isGlassCategory) {
-            setActiveSubCategory('clear');
-        } else {
-            setActiveSubCategory('all');
-        }
-    }, [activeCategory, isProfileCategory, isGlassCategory]);
 
     // --- OPTIMIZED HANDLERS (useCallback) ---
     const handleProductClick = useCallback((product) => {
@@ -112,10 +76,11 @@ export default function SalesDashboard() {
                 setEditingIndex(index);
                 setInitialModalDetails(item.details);
                 setModalOpen(true);
+                setIsCartOpen(true); // Open drawer on edit
             }
             return currentCart;
         });
-    }, []);
+    }, [PRODUCTS]);
 
     const handleAddToOrder = useCallback((orderItem) => {
         setCart(prevCart => {
@@ -144,52 +109,42 @@ export default function SalesDashboard() {
         setSelectedCustomer(customer);
     }, []);
 
-    // --- PERFORMANCE: MEMOIZED FILTERING ---
-    const filteredProducts = useMemo(() => {
-        const lowerQuery = searchQuery.toLowerCase();
-
-        return PRODUCTS.filter(p => {
-            // 1. Category Check
-            const matchesCategory = activeCategory === 'all' || p.category === activeCategory;
-            if (!matchesCategory) return false;
-
-            // 2. Sub-Category Check
-            const matchesSubCategory = activeSubCategory === 'all' || p.usage === activeSubCategory;
-
-            // 3. Search Check (Most expensive, do last)
-            const matchesSearch = !lowerQuery || p.name.toLowerCase().includes(lowerQuery);
-
-            if (isProfileCategory || isGlassCategory) {
-                return matchesSubCategory && matchesSearch;
-            }
-            return matchesSearch;
-        });
-    }, [activeCategory, activeSubCategory, searchQuery, isProfileCategory, isGlassCategory]);
-
     return (
         <div className="flex h-full w-full overflow-hidden text-gray-800 font-sans relative">
 
             {/* --- Main Content area --- */}
-            <div className="flex-1 flex flex-col relative bg-slate-50 min-w-0">
+            <div className={`flex-1 flex flex-col relative bg-slate-50 min-w-0 transition-all duration-300 ${isCartOpen ? 'md:mr-0' : ''}`}>
 
                 {/* Top Header */}
                 <div className="h-20 flex items-center justify-between px-8 border-b border-gray-200 bg-white/50 backdrop-blur-sm sticky top-0 z-10 transition-colors shrink-0">
                     <div>
-                        <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Sales Terminal</h1>
+                        <h1 className="text-xl md:text-2xl font-bold text-gray-800 tracking-tight">Sales Terminal</h1>
                         <div className="flex items-center gap-2">
                             <p className="text-xs text-gray-500 font-medium">Welcome back, Agent</p>
                             {location.state?.mode === 'edit' && (
                                 <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded font-bold border border-amber-200">
-                                    Editing Order: {location.state.orderData.id}
+                                    Edit: {location.state.orderData.id}
                                 </span>
                             )}
                             {location.state?.mode === 'link' && (
                                 <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded font-bold border border-blue-200">
-                                    Adding to Order: {location.state.parentOrderId}
+                                    Link: {location.state.parentOrderId}
                                 </span>
                             )}
                         </div>
                     </div>
+                    {/* Mobile Cart Toggle */}
+                    <button
+                        onClick={() => setIsCartOpen(!isCartOpen)}
+                        className="md:hidden relative p-2 text-gray-700 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
+                    >
+                        <span className="text-xl">🛒</span>
+                        {cart.length > 0 && (
+                            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white shadow-sm">
+                                {cart.length}
+                            </span>
+                        )}
+                    </button>
 
                     {/* Product Search Bar */}
                     <div className="relative w-96">
@@ -287,20 +242,62 @@ export default function SalesDashboard() {
                 </div>
             </div>
 
-            {/* --- Right Cart Panel --- */}
-            <CartSidebar
-                cartItems={cart}
-                onRemoveItem={handleRemoveItem}
-                onEditItem={handleEditCartItem}
-                customer={selectedCustomer}
-                mode={location.state?.mode}
-                originalTotal={location.state?.mode === 'edit' ? location.state.orderData.totalAmount : 0}
-                actionLabel={location.state?.mode === 'edit' ? 'Update Order' : 'Checkout'}
-                onAction={location.state?.mode === 'edit' ? () => {
-                    alert("Order Updated Successfully!");
-                    navigate('/orders');
-                } : undefined}
-            />
+            {/* --- Mobile Cart Overlay --- */}
+            {isCartOpen && (
+                <div
+                    className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm animate-fade-in"
+                    onClick={() => setIsCartOpen(false)}
+                />
+            )}
+
+            {/* --- Right Cart Panel (Responsive Drawer) --- */}
+            <div className={`
+                fixed inset-y-0 right-0 z-50 w-[85vw] sm:w-96 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out
+                md:relative md:translate-x-0 md:shadow-none md:border-l md:border-gray-200 md:w-[400px] shrink-0
+                ${isCartOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
+            `}>
+                <div className="h-full flex flex-col">
+                    {/* Mobile Cart Header */}
+                    <div className="md:hidden flex items-center justify-between p-4 border-b border-gray-100 bg-gray-50/50">
+                        <h3 className="font-bold text-lg">Your Cart ({cart.length})</h3>
+                        <button onClick={() => setIsCartOpen(false)} className="p-2 bg-gray-200 rounded-full hover:bg-gray-300 text-gray-600">
+                            ✕
+                        </button>
+                    </div>
+
+                    {/* Cart Sidebar Component */}
+                    <div className="flex-1 overflow-hidden relative">
+                        <CartSidebar
+                            cartItems={cart}
+                            onRemoveItem={handleRemoveItem}
+                            onEditItem={handleEditCartItem}
+                            customer={selectedCustomer}
+                            mode={location.state?.mode}
+                            originalTotal={location.state?.mode === 'edit' ? location.state.orderData.totalAmount : 0}
+                            actionLabel={location.state?.mode === 'edit' ? 'Update Order' : 'Checkout'}
+                            onAction={location.state?.mode === 'edit' ? () => {
+                                alert("Order Updated Successfully!");
+                                navigate('/orders');
+                            } : undefined}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* --- Mobile Floating Checkout Button (Only if Cart has items and is closed) --- */}
+            {!isCartOpen && cart.length > 0 && (
+                <div className="md:hidden fixed bottom-6 right-6 z-30 animate-bounce-subtle">
+                    <button
+                        onClick={() => setIsCartOpen(true)}
+                        className="bg-gray-900 text-white p-4 rounded-full shadow-xl shadow-gray-900/40 flex items-center justify-center relative hover:scale-105 active:scale-95 transition-all"
+                    >
+                        <span className="text-2xl">🛒</span>
+                        <span className="absolute -top-2 -right-2 bg-blue-600 text-white text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full border-2 border-white">
+                            {cart.length}
+                        </span>
+                    </button>
+                </div>
+            )}
 
             {/* --- Product Modal --- */}
             <ProductModal

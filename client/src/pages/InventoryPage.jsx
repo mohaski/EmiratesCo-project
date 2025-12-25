@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react';
-import { PRODUCTS, CATEGORIES } from '../data/mockProducts';
+import { useState, useMemo, useEffect } from 'react';
+import { useProducts } from '../context/ProductContext';
+import AddStockModal from '../components/inventory/AddStockModal';
 
 // --- Constants (Shared with Sales logic) ---
 const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Bronze', 'Grey', 'Matt Black'];
@@ -28,35 +29,54 @@ const SUB_CATEGORIES = {
 };
 
 export default function InventoryPage() {
+    const { products, categories: CATEGORIES, updateProduct } = useProducts();
+
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('ke-profile');
     const [filterSubCategory, setFilterSubCategory] = useState('window');
 
-    // --- Mock Inventory State with Variants ---
-    const [inventory, setInventory] = useState(() =>
-        PRODUCTS.map(p => {
-            // Generate variant stock map
-            const variants = {};
+    // --- Inventory State ---
+    // We initialize this from 'products' context
+    const [inventory, setInventory] = useState([]);
 
-            if (p.category === 'glass') {
-                // For Glass, variants are Thicknesses
-                const thicks = p.thicknessPrices ? p.thicknessPrices.map(t => t.thickness) : GLASS_THICKNESSES;
-                thicks.forEach(t => { variants[t] = Math.floor(Math.random() * 20); });
-            } else if (p.category.includes('profile')) {
-                // For Profiles, variants are Colors
-                PROFILE_COLORS.forEach(c => { variants[c] = Math.floor(Math.random() * 30); });
-            } else {
-                // Accessories / Others - specific 'Standard' or null variant
-                variants['Standard'] = Math.floor(Math.random() * 50);
+    // Sync Inventory with Products Context
+    useEffect(() => {
+        const mappedInventory = products.map(p => {
+            // 1. If product has explicit variants array (New Dynamic Schema), use that for stock
+            if (p.variants && p.variants.length > 0) {
+                const stockMap = {};
+                p.variants.forEach(v => {
+                    // Name of variant is either explicit 'name' or joined attributes
+                    const name = v.name || Object.values(v.attributes).join(' - ');
+                    stockMap[name] = v.stock || 0;
+                });
+                return { ...p, stockVariants: stockMap, minStock: 10 };
             }
 
+            // 2. Legacy/Mock: Generate random/placeholder stock if not present
+            // We only do this if it's NOT already in our "virtual" inventory?
+            // Actually, for a "Temporary Database", let's try to be stable.
+            // If we re-map every time, we lose local random changes unless we persist them.
+            // But since we want to TEST ADDING PRODUCTS, we prioritize showing the new data.
+
+            const variants = {};
+            if (p.category === 'glass') {
+                const thicks = p.thicknessPrices ? p.thicknessPrices.map(t => t.thickness) : GLASS_THICKNESSES;
+                thicks.forEach(t => { variants[t] = 50; }); // Default 50 for testing
+            } else if (p.category && p.category.includes('profile')) {
+                PROFILE_COLORS.forEach(c => { variants[c] = 50; });
+            } else {
+                variants['Standard'] = 50;
+            }
             return {
                 ...p,
                 stockVariants: variants,
                 minStock: 10
             };
-        })
-    );
+        });
+        setInventory(mappedInventory);
+    }, [products]);
+
 
     // Recent Interactions Log
     const [recentUpdates, setRecentUpdates] = useState([]);
@@ -106,7 +126,7 @@ export default function InventoryPage() {
         const qty = parseInt(stockToAdd);
         if (isNaN(qty) || qty <= 0) return;
 
-        // Update Inventory
+        // 1. Update Local Inventory State for UI responsiveness
         setInventory(prev => prev.map(item => {
             if (item.id === selectedProduct.id) {
                 return {
@@ -120,6 +140,21 @@ export default function InventoryPage() {
             return item;
         }));
 
+        // 2. Persist to Global Context (if it's a dynamic product with variants)
+        // Find the original product in context
+        const original = products.find(p => p.id === selectedProduct.id);
+        if (original && original.variants) {
+            // Find the variant
+            const updatedVariants = original.variants.map(v => {
+                const vName = v.name || Object.values(v.attributes).join(' - ');
+                if (vName === selectedVariant) {
+                    return { ...v, stock: (v.stock || 0) + qty };
+                }
+                return v;
+            });
+            updateProduct({ ...original, variants: updatedVariants });
+        }
+
         // Log Update
         setRecentUpdates(prev => [{
             id: Date.now(),
@@ -132,7 +167,10 @@ export default function InventoryPage() {
     };
 
     // Calculate total stock for list display
-    const getTotalStock = (item) => Object.values(item.stockVariants).reduce((a, b) => a + b, 0);
+    const getTotalStock = (item) => {
+        if (!item.stockVariants) return 0;
+        return Object.values(item.stockVariants).reduce((a, b) => a + b, 0);
+    };
 
     return (
         <div className="flex-1 flex flex-col h-full bg-slate-50 font-sans text-gray-800 overflow-hidden">
@@ -282,92 +320,16 @@ export default function InventoryPage() {
             </div>
 
             {/* Add Stock Modal */}
-            {isAddStockModalOpen && selectedProduct && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm animate-fade-in">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-pop-in">
-                        <div className="p-8 border-b border-gray-100 bg-gray-50/50 text-center">
-                            <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4 shadow-sm">
-                                📦
-                            </div>
-                            <h3 className="text-2xl font-bold text-gray-900">Restock Product</h3>
-                            <p className="text-gray-500 mt-1">{selectedProduct.name}</p>
-                        </div>
-
-                        <div className="p-8 space-y-6">
-
-                            {/* Variant Selector */}
-                            <div>
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wide block mb-3">Select Variant</label>
-                                <div className="grid grid-cols-3 gap-3">
-                                    {Object.keys(selectedProduct.stockVariants).map(variant => (
-                                        <button
-                                            key={variant}
-                                            onClick={() => setSelectedVariant(variant)}
-                                            className={`px-3 py-3 rounded-xl border text-sm font-bold transition-all ${selectedVariant === variant
-                                                ? 'bg-blue-600 text-white border-blue-600 shadow-md transform scale-105'
-                                                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                                                }`}
-                                        >
-                                            {variant}
-                                            <div className={`text-xs mt-1 font-mono ${selectedVariant === variant ? 'text-blue-200' : 'text-gray-400'}`}>
-                                                Qty: {selectedProduct.stockVariants[variant]}
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* Quantity Input */}
-                            <div>
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wide block mb-2">Quantity to Add</label>
-                                <div className="relative">
-                                    <button
-                                        onClick={() => setStockToAdd(prev => Math.max(0, (parseInt(prev) || 0) - 1).toString())}
-                                        className="absolute left-2 top-2 p-3 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
-                                    >
-                                        −
-                                    </button>
-                                    <input
-                                        type="number"
-                                        autoFocus
-                                        className="w-full text-center text-4xl font-bold text-gray-900 border border-gray-200 rounded-2xl py-5 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all placeholder-gray-300"
-                                        placeholder="0"
-                                        value={stockToAdd}
-                                        onChange={(e) => setStockToAdd(e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && confirmAddStock()}
-                                    />
-                                    <button
-                                        onClick={() => setStockToAdd(prev => ((parseInt(prev) || 0) + 1).toString())}
-                                        className="absolute right-2 top-2 p-3 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
-                                    >
-                                        +
-                                    </button>
-                                </div>
-                                <p className="mt-3 text-center text-xs font-bold text-gray-400">
-                                    New Total: <span className="text-blue-600">{(selectedProduct.stockVariants[selectedVariant] || 0) + (parseInt(stockToAdd) || 0)}</span>
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="p-8 pt-0 flex gap-4">
-                            <button
-                                onClick={() => setAddStockModalOpen(false)}
-                                className="flex-1 py-4 text-gray-500 font-bold hover:bg-gray-50 rounded-2xl transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={confirmAddStock}
-                                disabled={!stockToAdd || parseInt(stockToAdd) <= 0}
-                                className="flex-1 py-4 bg-gray-900 text-white font-bold rounded-2xl hover:bg-black transition-colors shadow-lg shadow-gray-900/20 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-2"
-                            >
-                                <span>Confirm Restock</span>
-                                <span>✓</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <AddStockModal
+                isOpen={isAddStockModalOpen}
+                onClose={() => setAddStockModalOpen(false)}
+                product={selectedProduct}
+                selectedVariant={selectedVariant}
+                onVariantSelect={setSelectedVariant}
+                stockToAdd={stockToAdd}
+                onStockChange={setStockToAdd}
+                onConfirm={confirmAddStock}
+            />
 
         </div>
     );

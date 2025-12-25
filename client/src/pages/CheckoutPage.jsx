@@ -1,41 +1,123 @@
-import { useState } from 'react';
+import React, { useState, useMemo, useCallback, memo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { PRODUCTS } from '../data/mockProducts';
+
+// --- SUB-COMPONENT: Memoized Item Card ---
+// Extracts complex rendering logic so the list doesn't re-render when payment inputs change
+// --- SUB-COMPONENT: Memoized Item Card ---
+const ReviewItemCard = memo(({ item }) => {
+    // Helper to find product def safely
+    console.log(item)
+    return (
+        <div className="grid grid-cols-12 gap-6 p-6 hover:bg-gray-50/50 transition-colors group border-b border-gray-100 last:border-0">
+            {/* Product Info */}
+            <div className="col-span-6 md:col-span-7 flex gap-5">
+                <div className="w-20 h-20 rounded-xl bg-gray-100 overflow-hidden flex-shrink-0 border border-gray-100 shadow-sm">
+                    <img src={item.image} loading="lazy" className="w-full h-full object-cover mix-blend-multiply opacity-90" alt={item.name} />
+                </div>
+                <div className="flex flex-col justify-center">
+                    <h4 className="font-bold text-gray-900 text-lg leading-tight mb-1">{item.name}</h4>
+                    <div className="flex gap-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                        {item.details.color && <span className="bg-gray-100 px-2 py-0.5 rounded">{item.details.color}</span>}
+                        {item.details.thickness && <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded">{item.details.thickness}</span>}
+                    </div>
+                </div>
+            </div>
+
+            {/* Breakdown Column (Receipt Style) */}
+            <div className="col-span-12 md:col-span-3 flex flex-col justify-center text-sm text-gray-600 font-mono">
+                {/* --- UNIVERSAL RENDERER (New Schema Only) --- */}
+                {item.details.lineItems && (
+                    <div className="space-y-2 w-full">
+                        {/* 1. Attributes (Metadata) */}
+                        {item.details.attributes && item.details.attributes.length > 0 && (
+                            <div className="pb-2 mb-2 border-b border-gray-100 border-dashed">
+                                {item.details.attributes.map((attr, idx) => (
+                                    <div key={idx} className="flex justify-between items-baseline">
+                                        <span className="text-gray-500 text-xs">{attr.label}</span>
+                                        <span className="flex-1 border-b border-gray-200 border-dotted mx-2"></span>
+                                        <span className="text-gray-800 font-semibold text-xs">{attr.value}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* 2. Line Items (Receipt) */}
+                        {item.details.lineItems.map((li, idx) => (
+                            <div key={idx} className="flex justify-between items-baseline">
+                                <div className="flex flex-col">
+                                    <span className="text-xs text-gray-700">{li.label}</span>
+                                    {li.meta && (li.meta.length || (li.meta.l && `${li.meta.l}x${li.meta.w}`)) && (
+                                        <span className="text-[10px] text-gray-400">
+                                            {li.meta.length || `${li.meta.l}x${li.meta.w} ${li.meta.u || ''}`}
+                                        </span>
+                                    )}
+                                </div>
+                                <span className="flex-1 border-b border-gray-300 border-dotted mx-2 relative top-[-4px]"></span>
+                                <span className="whitespace-nowrap">
+                                    <span className="text-xs text-gray-800">
+                                        {li.qty} x <span className="font-bold">{li.rate.toFixed(0)}=</span>
+                                    </span>
+                                    <span className="font-bold ml-1 text-gray-900">Ksh{li.total.toFixed(0)}</span>
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Price Column */}
+            <div className="col-span-3 md:col-span-2 flex items-center justify-end">
+                <span className="font-bold text-xl text-gray-900 tracking-tight">Ksh{item.totalPrice.toFixed(0)}</span>
+            </div>
+        </div>
+    );
+});
 
 export default function CheckoutPage() {
     const location = useLocation();
     const navigate = useNavigate();
+
+    // Default to empty to prevent crash on direct access
     const { cartItems = [], customer } = location.state || {};
 
     const [loading, setLoading] = useState(false);
-    const [paymentMethod, setPaymentMethod] = useState(null); // Force user selection
+    const [paymentMethod, setPaymentMethod] = useState(null);
     const [discount, setDiscount] = useState('');
     const [isPartial, setIsPartial] = useState(false);
-    const [amountPaid, setAmountPaid] = useState(''); // Only used if isPartial is true
+    const [amountPaid, setAmountPaid] = useState('');
     const [cashAmount, setCashAmount] = useState('');
-    const [mpesaAmount, setMpesaAmount] = useState('');
 
-    // Calculations
-    const subtotal = cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
-    const tax = subtotal * 0.05;
-    // Discount is NOT allowed for Partial/Credit orders
-    const discountValue = isPartial ? 0 : (parseFloat(discount) || 0);
-    const total = Math.max(0, subtotal + tax - discountValue);
+    const isRegistered = useMemo(() =>
+        customer && customer.id && !customer.id.toString().startsWith('walk-in'),
+        [customer]);
 
-    // Logic for amount to currently pay
-    const currentPayable = isPartial ? (parseFloat(amountPaid) || 0) : total;
-    const balance = Math.max(0, total - currentPayable);
+    // --- OPTIMIZATION: Memoize Financials ---
+    const financials = useMemo(() => {
+        const subtotal = cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
+        const tax = subtotal * 0.05;
+        const discountValue = isPartial ? 0 : (parseFloat(discount) || 0);
+        const total = Math.max(0, subtotal + tax - discountValue);
 
-    const isRegistered = customer && customer.id && !customer.id.toString().startsWith('walk-in');
+        // Payment Logic
+        const currentPayable = isPartial ? (parseFloat(amountPaid) || 0) : total;
+        const balance = Math.max(0, total - currentPayable);
+        const mpesaAutoAmount = Math.max(0, currentPayable - (parseFloat(cashAmount) || 0));
 
-    const handlePayment = () => {
+        return { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount };
+    }, [cartItems, discount, isPartial, amountPaid, cashAmount]);
+
+    const { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount } = financials;
+
+    // --- OPTIMIZATION: Stable Handler ---
+    const handlePayment = useCallback(() => {
         setLoading(true);
-        // Mock payment delay
         setTimeout(() => {
             setLoading(false);
             alert('Payment Successful! Order Placed.');
             navigate('/');
         }, 2000);
-    };
+    }, [navigate]);
 
     if (cartItems.length === 0) {
         return (
@@ -49,7 +131,7 @@ export default function CheckoutPage() {
     return (
         <div className="min-h-screen bg-[#F8F9FA] font-sans text-gray-900 flex flex-col md:flex-row">
 
-            {/* --- LEFT: ORDER SUMMARY (Main Content) --- */}
+            {/* --- LEFT: ORDER SUMMARY (Memoized List) --- */}
             <div className="flex-1 p-8 md:p-12 overflow-y-auto">
                 <div className="max-w-4xl mx-auto">
                     {/* Header Nav */}
@@ -67,57 +149,16 @@ export default function CheckoutPage() {
 
                     {/* Order Items List */}
                     <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden">
-                        {/* Table Header */}
                         <div className="grid grid-cols-12 gap-4 p-6 bg-gray-50 border-b border-gray-100 text-xs font-bold text-gray-400 uppercase tracking-wider">
                             <div className="col-span-6 md:col-span-7">Item Description</div>
                             <div className="col-span-3 md:col-span-3 text-right">Breakdown</div>
                             <div className="col-span-3 md:col-span-2 text-right">Total</div>
                         </div>
 
+                        {/* List rendering is lightweight now */}
                         <div className="divide-y divide-gray-100">
                             {cartItems.map((item, idx) => (
-                                <div key={idx} className="grid grid-cols-12 gap-6 p-6 hover:bg-gray-50/50 transition-colors group">
-                                    {/* Product Info */}
-                                    <div className="col-span-6 md:col-span-7 flex gap-5">
-                                        <div className="w-20 h-20 rounded-xl bg-gray-100 overflow-hidden flex-shrink-0 border border-gray-100 shadow-sm">
-                                            <img src={item.image} className="w-full h-full object-cover mix-blend-multiply opacity-90" alt="" />
-                                        </div>
-                                        <div className="flex flex-col justify-center">
-                                            <h4 className="font-bold text-gray-900 text-lg leading-tight mb-1">{item.name}</h4>
-                                            <div className="flex gap-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                                                {item.details.color && <span className="bg-gray-100 px-2 py-0.5 rounded">{item.details.color}</span>}
-                                                {item.details.thickness && <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded">{item.details.thickness}</span>}
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Breakdown Column */}
-                                    <div className="col-span-3 md:col-span-3 flex flex-col justify-center text-right text-xs text-gray-500 font-mono space-y-1">
-                                        {item.details.glassItems ? (
-                                            item.details.glassItems.map((gi, gIdx) => (
-                                                <div key={gIdx}>
-                                                    <span className="text-gray-600">
-                                                        {gi.type === 'cut' && gi.l && gi.w && gi.u
-                                                            ? `Cut: ${gi.l}x${gi.w} ${gi.u}`
-                                                            : gi.label}
-                                                    </span> <span className="text-gray-400">x{gi.q}</span>
-                                                </div>
-                                            ))
-                                        ) : (
-                                            <>
-                                                {item.details.full > 0 && <div>Full Len x{item.details.full}</div>}
-                                                {item.details.half > 0 && <div>Half Len x{item.details.half}</div>}
-                                                {item.details.fullSheet > 0 && <div>Full Sheet x{item.details.fullSheet}</div>}
-                                                {item.details.cutPieces?.length > 0 && <div className="text-blue-500 font-bold">{item.details.cutPieces.length} custom cuts</div>}
-                                            </>
-                                        )}
-                                    </div>
-
-                                    {/* Price Column */}
-                                    <div className="col-span-3 md:col-span-2 flex items-center justify-end">
-                                        <span className="font-bold text-xl text-gray-900 tracking-tight">Ksh{item.totalPrice.toFixed(0)}</span>
-                                    </div>
-                                </div>
+                                <ReviewItemCard key={`${item.id}-${idx}`} item={item} />
                             ))}
                         </div>
                     </div>
@@ -125,6 +166,7 @@ export default function CheckoutPage() {
             </div>
 
             {/* --- RIGHT: PAYMENT SIDEBAR --- */}
+            {/* Input changes here no longer re-render the left column items */}
             <div className="w-full md:w-[600px] bg-white border-l border-gray-200 h-auto md:h-screen sticky top-0 flex flex-col shadow-[-10px_0_40px_rgba(0,0,0,0.02)] z-20">
                 <div className="p-8 border-b border-gray-100 bg-gray-50/50">
                     <h2 className="text-xl font-bold text-gray-900">Payment</h2>
@@ -142,47 +184,34 @@ export default function CheckoutPage() {
                         </div>
                     </div>
 
-                    {/* Discount Section - Not available for Partial/Later */}
+                    {/* Discount Input */}
                     {!isPartial && (
-                        <div className="space-y-3 animate-fade-in">
+                        <div className="space-y-3">
                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wide flex justify-between">
                                 <span>Discount</span>
                                 <span className="text-gray-300">Optional</span>
                             </label>
-                            <div className="relative">
-                                <span className="absolute left-4 top-3.5 text-gray-400 font-bold"></span>
-                                <input
-                                    type="number"
-                                    value={discount}
-                                    onChange={(e) => setDiscount(e.target.value)}
-                                    className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-8 pr-4 font-bold text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder-gray-300"
-                                    placeholder="0.00"
-                                />
-                            </div>
+                            <input
+                                type="number"
+                                value={discount}
+                                onChange={(e) => setDiscount(e.target.value)}
+                                className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-4 pr-4 font-bold text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder-gray-300"
+                                placeholder="0.00"
+                            />
                         </div>
                     )}
 
-                    {/* Payment Mode (Full vs Partial) - REGISTERED ONLY */}
+                    {/* Partial Toggle */}
                     {isRegistered && (
                         <div className="p-1 bg-gray-100 rounded-xl flex">
-                            <button
-                                onClick={() => setIsPartial(false)}
-                                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${!isPartial ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                Pay Full
-                            </button>
-                            <button
-                                onClick={() => setIsPartial(true)}
-                                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${isPartial ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                Pay Later / Partial
-                            </button>
+                            <button onClick={() => setIsPartial(false)} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${!isPartial ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Pay Full</button>
+                            <button onClick={() => setIsPartial(true)} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${isPartial ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Pay Later / Partial</button>
                         </div>
                     )}
 
-                    {/* Partial Amount Input */}
+                    {/* Amount Paying Input */}
                     {isRegistered && isPartial && (
-                        <div className="space-y-3 animate-fade-in">
+                        <div className="space-y-3">
                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Amount Paying Now</label>
                             <div className="relative">
                                 <span className="absolute left-4 top-3.5 text-green-600 font-bold">Ksh</span>
@@ -190,66 +219,45 @@ export default function CheckoutPage() {
                                     type="number"
                                     value={amountPaid}
                                     onChange={(e) => setAmountPaid(e.target.value)}
-                                    className="w-full bg-green-50/50 border border-green-200 rounded-xl py-3 pl-8 pr-4 font-bold text-green-900 focus:border-green-500 outline-none transition-all"
+                                    className="w-full bg-green-50/50 border border-green-200 rounded-xl py-3 pl-12 pr-4 font-bold text-green-900 focus:border-green-500 outline-none transition-all"
                                     placeholder="Enter amount..."
                                 />
                             </div>
-                            <div className="text-xs font-bold text-red-500 text-right">
-                                Balance: Ksh{(total - (parseFloat(amountPaid) || 0)).toFixed(2)}
-                            </div>
+                            <div className="text-xs font-bold text-red-500 text-right">Balance: Ksh{(total - (parseFloat(amountPaid) || 0)).toFixed(2)}</div>
                         </div>
                     )}
 
-                    {/* Method Selector (Only show if paying > 0) */}
+                    {/* Method Selector */}
                     {currentPayable > 0 && (
-                        <div className="space-y-2 animate-fade-in">
+                        <div className="space-y-2">
                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Select Payment Method</label>
                             <div className="grid grid-cols-3 gap-2">
-                                <button
-                                    onClick={() => setPaymentMethod('cash')}
-                                    className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all h-24
-                                        ${paymentMethod === 'cash'
-                                            ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-sm ring-1 ring-blue-500'
-                                            : 'border-gray-200 hover:bg-gray-50 text-gray-600'
-                                        }`}
-                                >
-                                    <span className="text-2xl mb-1">💵</span>
-                                    <span className="font-bold text-sm">Cash</span>
-                                </button>
-                                <button
-                                    onClick={() => setPaymentMethod('mpesa')}
-                                    className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all h-24
-                                        ${paymentMethod === 'mpesa'
-                                            ? 'border-green-500 bg-green-50 text-green-700 shadow-sm ring-1 ring-green-500'
-                                            : 'border-gray-200 hover:bg-gray-50 text-gray-600'
-                                        }`}
-                                >
-                                    <span className="text-2xl mb-1">📱</span>
-                                    <span className="font-bold text-sm">M-Pesa</span>
-                                </button>
-                                <button
-                                    onClick={() => setPaymentMethod('split')}
-                                    className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all h-24
-                                        ${paymentMethod === 'split'
-                                            ? 'border-purple-500 bg-purple-50 text-purple-700 shadow-sm ring-1 ring-purple-500'
-                                            : 'border-gray-200 hover:bg-gray-50 text-gray-600'
-                                        }`}
-                                >
-                                    <span className="text-2xl mb-1">⚖️</span>
-                                    <span className="font-bold text-sm">Split</span>
-                                </button>
+                                {['cash', 'mpesa', 'split'].map(method => (
+                                    <button
+                                        key={method}
+                                        onClick={() => setPaymentMethod(method)}
+                                        className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all h-24 capitalize
+                                            ${paymentMethod === method
+                                                ? method === 'split' ? 'border-purple-500 bg-purple-50 text-purple-700 ring-1 ring-purple-500' :
+                                                    method === 'mpesa' ? 'border-green-500 bg-green-50 text-green-700 ring-1 ring-green-500' :
+                                                        'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
+                                                : 'border-gray-200 hover:bg-gray-50 text-gray-600'
+                                            }`}
+                                    >
+                                        <span className="text-2xl mb-1">{method === 'cash' ? '💵' : method === 'mpesa' ? '📱' : '⚖️'}</span>
+                                        <span className="font-bold text-sm">{method}</span>
+                                    </button>
+                                ))}
                             </div>
                         </div>
                     )}
 
                     {/* Split Form */}
                     {currentPayable > 0 && paymentMethod === 'split' && (
-                        <div className="p-4 bg-gray-50 rounded-2xl border border-gray-200 space-y-3 animate-fade-in relative overflow-hidden">
+                        <div className="p-4 bg-gray-50 rounded-2xl border border-gray-200 space-y-3 relative overflow-hidden">
                             <div className="absolute top-0 left-0 w-1 h-full bg-purple-500"></div>
                             <div className="space-y-2">
-                                <div className="flex justify-between text-xs font-bold text-gray-500 uppercase">
-                                    <span>Cash</span>
-                                </div>
+                                <span className="text-xs font-bold text-gray-500 uppercase">Cash</span>
                                 <input
                                     type="number"
                                     className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 font-mono font-bold outline-none focus:border-purple-500"
@@ -259,22 +267,19 @@ export default function CheckoutPage() {
                                 />
                             </div>
                             <div className="space-y-2">
-                                <div className="flex justify-between text-xs font-bold text-gray-500 uppercase">
-                                    <span>M-Pesa</span>
-                                </div>
+                                <span className="text-xs font-bold text-gray-500 uppercase">M-Pesa</span>
                                 <input
                                     type="number"
-                                    className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 font-mono font-bold outline-none focus:border-purple-500"
-                                    value={mpesaAmount}
-                                    onChange={(e) => setMpesaAmount(e.target.value)}
-                                    placeholder="0"
+                                    className="w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 font-mono font-bold outline-none text-gray-500 cursor-not-allowed"
+                                    value={mpesaAutoAmount.toFixed(2)}
+                                    readOnly
                                 />
                             </div>
                         </div>
                     )}
                 </div>
 
-                {/* Footer */}
+                {/* Footer Totals & Pay */}
                 <div className="p-8 bg-white border-t border-gray-200 space-y-4 shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
                     <div className="space-y-2 text-sm">
                         <div className="flex justify-between text-gray-500">
@@ -297,7 +302,6 @@ export default function CheckoutPage() {
                         </div>
                     </div>
 
-                    {/* Pay Button */}
                     <button
                         onClick={handlePayment}
                         disabled={loading || (currentPayable > 0 && !paymentMethod)}
@@ -319,7 +323,6 @@ export default function CheckoutPage() {
                     </button>
                 </div>
             </div>
-
         </div>
     );
 }

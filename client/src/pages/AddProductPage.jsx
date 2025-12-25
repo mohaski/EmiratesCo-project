@@ -1,11 +1,16 @@
-import { useState, useMemo } from 'react';
-import { PRODUCTS, CATEGORIES as INITIAL_CATEGORIES } from '../data/mockProducts';
+import { useState, useMemo, useEffect } from 'react';
+import { useProducts } from '../context/ProductContext';
+import ConfigModal from '../components/inventory/ConfigModal';
 
 // --- Initial Data ---
-const INITIAL_COLORS = ['White', 'Silver', 'Gold', 'Bronze', 'Grey', 'Matt Black'];
-const INITIAL_THICKNESSES = ['4mm', '5mm', '6mm', '8mm', '10mm', '12mm'];
-// Constants for variants
-const KE_LENGTHS = [21, 17, 16, 15];
+// Dynamic Attributes Schema (Local defaults for the UI)
+const INITIAL_ATTRIBUTES = {
+    'Color': ['White', 'Silver', 'Gold', 'Bronze', 'Grey', 'Matt Black'],
+    'Thickness': ['4mm', '5mm', '6mm', '8mm', '10mm', '12mm'],
+    'Length': ['21ft', '17ft', '16ft', '15ft'],
+    'Roll Type': ['Big Roll', 'Small Roll'],
+    'Size': ['Standard', 'Large', 'Small']
+};
 
 const INITIAL_SUB_CATEGORIES = {
     'ke-profile': [
@@ -20,7 +25,7 @@ const INITIAL_SUB_CATEGORIES = {
     ],
     'glass': [
         { id: 'clear', label: 'Clear' },
-        { id: 'oneway', label: 'One/Way' }, // Fixed ID
+        { id: 'oneway', label: 'One/Way' },
         { id: 'tint', label: 'Tinted' },
         { id: 'mirror', label: 'Mirror' },
         { id: 'frost', label: 'Frost' },
@@ -33,16 +38,24 @@ const INITIAL_SUB_CATEGORIES = {
 };
 
 export default function AddProductPage() {
+    const { products, categories, addProduct, updateProduct, addCategory } = useProducts();
+
     // --- Config State (Editable by Admin) ---
+    // Initialize categories from Context, others local for now
     const [config, setConfig] = useState({
-        categories: INITIAL_CATEGORIES,
+        categories: categories,
         subCategories: INITIAL_SUB_CATEGORIES,
-        colors: INITIAL_COLORS,
-        thicknesses: INITIAL_THICKNESSES
+        attributes: INITIAL_ATTRIBUTES
     });
+
+    // Sync categories from context if they change
+    useEffect(() => {
+        setConfig(prev => ({ ...prev, categories }));
+    }, [categories]);
+
     const [configModalOpen, setConfigModalOpen] = useState(false);
-    const [activeConfigTab, setActiveConfigTab] = useState('categories'); // categories, subcats, colors, thicknesses
-    const [selectedParentCategory, setSelectedParentCategory] = useState(INITIAL_CATEGORIES[0]?.id || '');
+    const [activeConfigTab, setActiveConfigTab] = useState('categories');
+    const [selectedParentCategory, setSelectedParentCategory] = useState(categories[0]?.id || '');
 
     // Mode: 'new' | 'variant'
     const [mode, setMode] = useState('new');
@@ -55,8 +68,16 @@ export default function AddProductPage() {
         subCategory: 'window',
         sku: '',
         image: null,
-        variants: ['White']
+        applicableAttributes: ['Color'],
+        defaultAttributes: {}, // { 'Color': 'Gold' }
     });
+
+    // Valid values selected for the matrix generator
+    // { 'Color': ['Silver', 'Gold'], 'Length': ['21ft'] }
+    const [matrixSelections, setMatrixSelections] = useState({});
+
+    // { "Silver - 21ft": { stock: 10, priceFull: 1000, ... } }
+    const [matrixValues, setMatrixValues] = useState({});
 
     // --- State for "Existing Variant" ---
     const [existingSearch, setExistingSearch] = useState('');
@@ -64,16 +85,55 @@ export default function AddProductPage() {
     const [filterSubCategory, setFilterSubCategory] = useState('all');
 
     const [selectedExistingProduct, setSelectedExistingProduct] = useState(null);
-    const [variantToAdd, setVariantToAdd] = useState('');
 
-    // New: Full Pricing for Variant
+    // Dynamic Variant Construction State (For "Add Variant" mode)
+    const [variantSelections, setVariantSelections] = useState({});
     const [variantPricing, setVariantPricing] = useState({
         priceFull: '',
         priceHalf: '',
         priceUnit: '',
-        initialStock: '', // Quantity
-        selectedLength: '21', // For KE Profile Length Dropdown
+        initialStock: '',
     });
+
+    // --- Derived: Inferred Attributes for Existing Product ---
+    const activeProductAttributes = useMemo(() => {
+        const p = mode === 'new' ? newProductData : selectedExistingProduct;
+        if (!p) return [];
+
+        if (mode === 'new') return newProductData.applicableAttributes;
+
+        if (p.attributes) return Object.keys(p.attributes);
+        if (p.applicableAttributes) return p.applicableAttributes;
+
+        if (p.category.includes('profile')) return ['Color', 'Length'];
+        if (p.category === 'glass') return ['Thickness'];
+        if (p.category === 'accessories' && p.radius) return ['Roll Type'];
+        if (p.category === 'accessories') return ['Size'];
+        return [];
+    }, [mode, newProductData.applicableAttributes, selectedExistingProduct, newProductData.category]);
+
+    // --- Derived: Matrix Preview (Cartesian Product) ---
+    const matrixPreview = useMemo(() => {
+        if (mode !== 'new' || newProductData.applicableAttributes.length === 0) return [];
+
+        const attrs = newProductData.applicableAttributes;
+        const potentialValues = attrs.map(a => matrixSelections[a] || []);
+
+        if (potentialValues.some(v => v.length === 0)) return [];
+
+        if (potentialValues.length === 0) return [[]];
+
+        const cartesian = (arrays) => {
+            if (arrays.length === 0) return [[]];
+            const [first, ...rest] = arrays;
+            const restCart = cartesian(rest);
+            return first.flatMap(f => restCart.map(r => [f, ...r]));
+        };
+
+        const combinations = cartesian(potentialValues);
+        return combinations.map(combo => combo.join(' - '));
+
+    }, [newProductData.applicableAttributes, matrixSelections, mode]);
 
     // --- Handlers: New Product ---
     const handleNewChange = (e) => {
@@ -81,76 +141,141 @@ export default function AddProductPage() {
         setNewProductData(prev => ({ ...prev, [name]: value }));
     };
 
+    // Handler for Default Attributes
+    const handleDefaultAttributeChange = (attrKey, value) => {
+        const previousDefault = newProductData.defaultAttributes[attrKey];
+
+        setNewProductData(prev => ({
+            ...prev,
+            defaultAttributes: {
+                ...prev.defaultAttributes,
+                [attrKey]: value
+            }
+        }));
+
+        // Auto-select new default in Matrix (and deselect previous default)
+        setMatrixSelections(prev => {
+            const current = prev[attrKey] || [];
+            let updated = [...current];
+
+            // 1. Remove previous default if it exists in the selection
+            if (previousDefault && previousDefault !== value) {
+                updated = updated.filter(v => v !== previousDefault);
+            }
+
+            // 2. Add new value if available and not already selected
+            if (value && !updated.includes(value)) {
+                updated.push(value);
+            }
+
+            return {
+                ...prev,
+                [attrKey]: updated
+            };
+        });
+    };
+
     const handleNewCategoryChange = (e) => {
         const cat = e.target.value;
         const defaultSub = config.subCategories[cat]?.[0]?.id || '';
+        let defaults = [];
+        if (cat.includes('profile')) defaults = ['Color', 'Length'];
+        else if (cat === 'glass') defaults = ['Thickness'];
 
         setNewProductData(prev => ({
             ...prev,
             category: cat,
             subCategory: defaultSub,
-            variants: cat.includes('profile') ? ['White'] : cat === 'glass' ? ['6mm'] : []
+            applicableAttributes: defaults,
+            defaultAttributes: {} // Reset defaults on category change
         }));
+        setMatrixSelections({});
+        setMatrixValues({});
     };
 
-    const handleNewVariantToggle = (variant) => {
+    const toggleApplicableAttribute = (attrKey) => {
         setNewProductData(prev => {
-            const exists = prev.variants.includes(variant);
+            const has = prev.applicableAttributes.includes(attrKey);
+            const nextAttrs = has
+                ? prev.applicableAttributes.filter(a => a !== attrKey)
+                : [...prev.applicableAttributes, attrKey];
+
+            const nextDefaults = { ...prev.defaultAttributes };
+            if (has) {
+                // If removing attribute, remove its default too
+                delete nextDefaults[attrKey];
+                const nextMatrix = { ...matrixSelections };
+                delete nextMatrix[attrKey];
+                setMatrixSelections(nextMatrix);
+            }
+            // Logic to initialize matrixSelections if needed can go here, but usually empty initially
+
             return {
                 ...prev,
-                variants: exists
-                    ? prev.variants.filter(v => v !== variant)
-                    : [...prev.variants, variant]
+                applicableAttributes: nextAttrs,
+                defaultAttributes: nextDefaults
             };
         });
     };
 
+    const toggleMatrixValue = (attrKey, value) => {
+        setMatrixSelections(prev => {
+            const current = prev[attrKey] || [];
+            const has = current.includes(value);
+            return {
+                ...prev,
+                [attrKey]: has ? current.filter(v => v !== value) : [...current, value]
+            };
+        });
+    };
+
+    const handleMatrixValueChange = (variantName, field, value) => {
+        setMatrixValues(prev => ({
+            ...prev,
+            [variantName]: {
+                ...(prev[variantName] || {}),
+                [field]: value
+            }
+        }));
+    };
+
     // --- Handlers: Existing Variant ---
     const filteredExistingProducts = useMemo(() => {
-        return PRODUCTS.filter(p => {
+        return products.filter(p => {
             const matchesSearch = p.name.toLowerCase().includes(existingSearch.toLowerCase());
             const matchesCat = filterCategory === 'all' || p.category === filterCategory;
-            // Corrected logic: if item has no usage field (e.g. accessories), treat as matching if subcat filter is 'all'
             const itemUsage = p.usage || 'general';
             const matchesSub = (filterSubCategory === 'all' || filterCategory === 'all') || itemUsage === filterSubCategory;
             return matchesSearch && matchesCat && matchesSub;
         });
-    }, [existingSearch, filterCategory, filterSubCategory]);
+    }, [products, existingSearch, filterCategory, filterSubCategory]);
 
     const handleSelectExisting = (product) => {
         setSelectedExistingProduct(product);
         setExistingSearch('');
-        setVariantToAdd('');
-        // Pre-populate pricing from parent product
-        setVariantPricing({
-            priceFull: product.priceFull,
-            priceHalf: product.priceHalf,
-            priceUnit: product.priceUnit || product.priceSqFt || '',
-            initialStock: '',
-            selectedLength: '21'
-        });
+        setVariantSelections({});
+        setVariantPricing({ priceFull: product.priceFull || '', priceHalf: product.priceHalf || '', priceUnit: product.priceUnit || product.priceSqFt || '', initialStock: '' });
     };
 
-    const handleVariantPricingChange = (e) => {
+    const handleVariantSelection = (attrKey, value) => {
+        setVariantSelections(prev => ({ ...prev, [attrKey]: value }));
+    };
+
+    const handlePricingChange = (e) => {
         const { name, value } = e.target;
         setVariantPricing(prev => ({ ...prev, [name]: value }));
     };
 
-    // --- Handlers: Config Logic ---
+    // --- Handlers: Config ---
     const handleAddConfigItem = (newItem) => {
         if (!newItem) return;
 
-        // 1. Categories
         if (activeConfigTab === 'categories') {
             const newId = newItem.toLowerCase().replace(/\s+/g, '-');
-            setConfig(prev => ({
-                ...prev,
-                categories: [...prev.categories, { id: newId, label: newItem, icon: '📦' }],
-                subCategories: { ...prev.subCategories, [newId]: [] } // Initialize subcats
-            }));
-        }
-        // 2. Sub-Categories
-        else if (activeConfigTab === 'subcats') {
+            // Update Context
+            addCategory({ id: newId, label: newItem, icon: '📦' });
+            // Config update handled by useEffect
+        } else if (activeConfigTab === 'subcats') {
             if (!selectedParentCategory) return;
             const newId = newItem.toLowerCase().replace(/\s+/g, '-');
             setConfig(prev => ({
@@ -163,26 +288,43 @@ export default function AddProductPage() {
                     ]
                 }
             }));
+        } else {
+            // Dynamic Attributes
+            setConfig(prev => ({
+                ...prev,
+                attributes: {
+                    ...prev.attributes,
+                    [activeConfigTab]: [
+                        ...(prev.attributes[activeConfigTab] || []),
+                        newItem
+                    ]
+                }
+            }));
         }
-        // 3. Colors
-        else if (activeConfigTab === 'colors') {
-            setConfig(prev => ({ ...prev, colors: [...prev.colors, newItem] }));
-        }
-        // 4. Thicknesses
-        else if (activeConfigTab === 'thickness') {
-            setConfig(prev => ({ ...prev, thicknesses: [...prev.thicknesses, newItem] }));
-        }
+    };
+
+    // NEW: Handle adding a whole new Attribute Category (e.g. "Fabric")
+    const handleAddAttributeCategory = (newCategoryName) => {
+        if (!newCategoryName || config.attributes[newCategoryName]) return;
+
+        setConfig(prev => ({
+            ...prev,
+            attributes: {
+                ...prev.attributes,
+                [newCategoryName]: []
+            }
+        }));
+        setActiveConfigTab(newCategoryName);
     };
 
     const handleRemoveConfigItem = (itemToRemove, parentId = null) => {
         if (activeConfigTab === 'categories') {
+            // Not implemented in context yet
             setConfig(prev => ({
                 ...prev,
                 categories: prev.categories.filter(c => c.id !== itemToRemove.id)
-                // Note: Ideally should cleanup subcats too
             }));
         } else if (activeConfigTab === 'subcats') {
-            if (!parentId) return;
             setConfig(prev => ({
                 ...prev,
                 subCategories: {
@@ -190,56 +332,113 @@ export default function AddProductPage() {
                     [parentId]: prev.subCategories[parentId].filter(s => s.id !== itemToRemove.id)
                 }
             }));
-        } else if (activeConfigTab === 'colors') {
-            setConfig(prev => ({ ...prev, colors: prev.colors.filter(c => c !== itemToRemove) }));
-        } else if (activeConfigTab === 'thickness') {
-            setConfig(prev => ({ ...prev, thicknesses: prev.thicknesses.filter(c => c !== itemToRemove) }));
+        } else {
+            setConfig(prev => ({
+                ...prev,
+                attributes: {
+                    ...prev.attributes,
+                    [activeConfigTab]: prev.attributes[activeConfigTab].filter(v => v !== itemToRemove)
+                }
+            }));
         }
     };
-
 
     const handleSubmit = (e) => {
         e.preventDefault();
         setSubmitting(true);
 
-        // Mock API
         setTimeout(() => {
             if (mode === 'new') {
-                alert(`New Product Created!\nVariants: ${newProductData.variants.join(', ')}\n(Stock will be added via "Add Variant")`);
-                setNewProductData({
-                    name: '', category: 'ke-profile', subCategory: 'window', sku: '', image: null, variants: ['White']
-                });
-            } else {
-                const stockMsg = selectedExistingProduct.category === 'ke-profile'
-                    ? `Stock: ${variantPricing.initialStock} units of ${variantPricing.selectedLength}ft`
-                    : `Stock: ${variantPricing.initialStock}`;
+                const variantCount = matrixPreview.length;
 
-                alert(`Variant Added!\n${selectedExistingProduct.name} - ${variantToAdd}\n${stockMsg}\nPrice: ${variantPricing.priceFull}`);
+                // Construct Variants Array
+                const variants = matrixPreview.map(name => {
+                    const vals = matrixValues[name] || {};
+                    // Reverse engineer attributes from name string "Silver - 21ft"
+                    // Helper: assumes order matches applicableAttributes
+                    const parts = name.split(' - ');
+                    const attrs = {};
+                    newProductData.applicableAttributes.forEach((key, i) => {
+                        attrs[key] = parts[i];
+                    });
+
+                    return {
+                        id: `v-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                        name: name,
+                        attributes: attrs,
+                        price: parseFloat(vals.priceFull || 0), // Default logic
+                        stock: parseInt(vals.stock || 0),
+                        // Store full pricing details if needed
+                        details: {
+                            priceFull: parseFloat(vals.priceFull || 0),
+                            priceHalf: parseFloat(vals.priceHalf || 0),
+                            priceUnit: parseFloat(vals.priceUnit || 0),
+                        }
+                    };
+                });
+
+                // Construct Product Object
+                const newProduct = {
+                    id: `p-${Date.now()}`,
+                    ...newProductData,
+                    usage: newProductData.subCategory, // MAP SubCategory to Usage
+                    attributes: matrixSelections, // Store the available options { Color: [Silver, Gold] }
+                    variants: variants,
+                    // Fallbacks for legacy components using root prices
+                    priceFull: variants.length > 0 ? variants[0].details.priceFull : 0,
+                    priceHalf: variants.length > 0 ? variants[0].details.priceHalf : 0,
+                    priceFoot: variants.length > 0 ? variants[0].details.priceUnit : 0,
+                    image: 'https://placehold.co/300x200/555555/FFFFFF?text=New+Product'
+                };
+
+                addProduct(newProduct);
+
+                alert(`Product Created: ${newProductData.name}\n${variants.length} Variants Generated.`);
+                setNewProductData(prev => ({ ...prev, name: '', sku: '' }));
+                setMatrixSelections({});
+                setMatrixValues({});
+            } else {
+                // ADD VARIANT TO EXISTING
+                const updatedProduct = { ...selectedExistingProduct };
+
+                const variantName = Object.values(variantSelections).join(' - ');
+                const newVariant = {
+                    id: `v-${Date.now()}`,
+                    attributes: { ...variantSelections },
+                    price: parseFloat(variantPricing.priceFull || 0),
+                    stock: parseInt(variantPricing.initialStock || 0),
+                    details: {
+                        priceFull: parseFloat(variantPricing.priceFull || 0),
+                        priceHalf: parseFloat(variantPricing.priceHalf || 0),
+                        priceUnit: parseFloat(variantPricing.priceUnit || 0),
+                    }
+                };
+
+                if (!updatedProduct.variants) updatedProduct.variants = [];
+                updatedProduct.variants.push(newVariant);
+
+                // Also update attributes map to include new values if they weren't there?
+                // For simplified scope, assuming attributes map already exists or we just rely on variants list.
+
+                updateProduct(updatedProduct);
+
+                alert(`Variant Added!\n${selectedExistingProduct.name}\nVariant: ${variantName}`);
                 setSelectedExistingProduct(null);
-                setVariantToAdd('');
-                setVariantPricing({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '', selectedLength: '21' });
+                setVariantSelections({});
+                setVariantPricing({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '' });
             }
             setSubmitting(false);
-        }, 1500);
+        }, 800);
     };
 
-    // Helpers
-    const getAvailableVariantsForType = (category) => {
-        if (!category) return [];
-        // Improved logic: Use category ID content rather than hardcoded string inclusion
-        // Or keep simple for now
-        if (category.includes('profile')) return config.colors;
-        if (category === 'glass') return config.thicknesses;
-        return [];
-    };
+    const isVariantComplete = useMemo(() => {
+        if (!selectedExistingProduct) return false;
+        return activeProductAttributes.every(attr => variantSelections[attr]);
+    }, [activeProductAttributes, variantSelections, selectedExistingProduct]);
 
-    const currentVariantsList = mode === 'new'
-        ? getAvailableVariantsForType(newProductData.category)
-        : selectedExistingProduct ? getAvailableVariantsForType(selectedExistingProduct.category) : [];
 
     return (
         <div className="flex-1 flex flex-col h-full bg-slate-50 font-sans text-gray-800 overflow-y-auto custom-scrollbar relative">
-
             {/* Header */}
             <header className="h-24 flex px-8 items-center justify-between border-b border-gray-200 bg-white sticky top-0 z-20 shadow-sm shrink-0">
                 <div className="flex items-center gap-4">
@@ -253,266 +452,281 @@ export default function AddProductPage() {
                 </div>
 
                 <div className="flex gap-4">
-                    {/* Metadata Button */}
-                    <button
-                        onClick={() => setConfigModalOpen(true)}
-                        className="px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-600 font-bold text-sm hover:bg-gray-50 hover:text-blue-600 transition-all flex items-center gap-2"
-                    >
-                        <span>⚙️ Manage Options</span>
-                    </button>
-
-                    {/* Mode Switcher */}
+                    <button onClick={() => setConfigModalOpen(true)} className="px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-600 font-bold text-sm hover:bg-gray-50 flex items-center gap-2"><span>⚙️ Manage Options</span></button>
                     <div className="bg-gray-100 p-1 rounded-xl flex font-bold text-sm">
-                        <button
-                            onClick={() => setMode('new')}
-                            className={`px-6 py-2.5 rounded-lg transition-all ${mode === 'new' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                        >
-                            New Product
-                        </button>
-                        <button
-                            onClick={() => setMode('variant')}
-                            className={`px-6 py-2.5 rounded-lg transition-all ${mode === 'variant' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                        >
-                            Add Variant
-                        </button>
+                        <button onClick={() => setMode('new')} className={`px-6 py-2.5 rounded-lg transition-all ${mode === 'new' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>New Product</button>
+                        <button onClick={() => setMode('variant')} className={`px-6 py-2.5 rounded-lg transition-all ${mode === 'variant' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Add Variant</button>
                     </div>
                 </div>
             </header>
 
             {/* Content */}
             <div className="p-8 max-w-5xl mx-auto w-full pb-20">
-
                 <form onSubmit={handleSubmit} className="space-y-8 animate-fade-in">
 
                     {/* === MODE: NEW PRODUCT === */}
                     {mode === 'new' && (
-                        <>
-                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                                {/* Left Column: Core Info */}
-                                <div className="lg:col-span-2 space-y-8">
-                                    <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
-                                        <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-3">
-                                            <span className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">1</span>
-                                            Product Details
-                                        </h2>
-
-                                        <div className="space-y-6">
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Product Name</label>
-                                                <input required type="text" name="name" value={newProductData.name} onChange={handleNewChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder-gray-300" placeholder="e.g. Heavy Duty Sliding Track" />
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-6">
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Category</label>
-                                                    <select name="category" value={newProductData.category} onChange={handleNewCategoryChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer">
-                                                        {config.categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Sub-Category</label>
-                                                    <select
-                                                        name="subCategory"
-                                                        value={newProductData.subCategory}
-                                                        onChange={handleNewChange}
-                                                        className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer"
-                                                        disabled={!config.subCategories[newProductData.category]}
-                                                    >
-                                                        {config.subCategories[newProductData.category] ? (
-                                                            config.subCategories[newProductData.category].map(sub => (
-                                                                <option key={sub.id} value={sub.id}>{sub.label}</option>
-                                                            ))
-                                                        ) : (
-                                                            <option value="">None</option>
-                                                        )}
-                                                    </select>
-                                                </div>
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-6">
-                                                <div>
-                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Code</label>
-                                                    <input type="text" name="code" value={newProductData.sku} onChange={handleNewChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-mono text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder-gray-300" placeholder="code" />
-                                                </div>
-
-                                                {/* Initial Stock REMOVED for New Product */}
-                                            </div>
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            {/* 1. Core Info (Left Top) */}
+                            <div className="lg:col-span-2 bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
+                                <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-3">
+                                    <span className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm">1</span>
+                                    Core Details
+                                </h2>
+                                <div className="space-y-6">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Product Name</label>
+                                        <input required type="text" name="name" value={newProductData.name} onChange={handleNewChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-bold focus:ring-2 focus:border-blue-500 transition-all" placeholder="e.g. Heavy Duty Sliding Track" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Category</label>
+                                            <select name="category" value={newProductData.category} onChange={handleNewCategoryChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-medium focus:ring-2 focus:border-blue-500 transition-all cursor-pointer">
+                                                {config.categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                            </select>
                                         </div>
-                                    </div>
-
-                                </div>
-
-                                {/* Right Column: Variants & Image */}
-                                <div className="space-y-8">
-                                    <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
-                                        <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-3">
-                                            <span className="w-8 h-8 rounded-full bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-sm">3</span>
-                                            {newProductData.category.includes('profile') ? 'Colors' : newProductData.category === 'glass' ? 'Thicknesses' : 'Variants'}
-                                        </h2>
-
-                                        {currentVariantsList.length > 0 ? (
-                                            <div className="flex flex-wrap gap-2">
-                                                {currentVariantsList.map(v => (
-                                                    <button
-                                                        key={v}
-                                                        type="button"
-                                                        onClick={() => handleNewVariantToggle(v)}
-                                                        className={`px-3 py-2 rounded-lg text-sm font-bold border-2 transition-all ${newProductData.variants.includes(v) ? 'bg-purple-50 border-purple-500 text-purple-700 shadow-sm' : 'bg-white border-transparent text-gray-400 hover:bg-gray-50'}`}
-                                                    >
-                                                        {v}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        ) : (
-                                            <p className="text-gray-400 text-sm italic">Standard items have no variants.</p>
-                                        )}
-                                    </div>
-
-                                    <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
-                                        <div className="border-2 border-dashed border-gray-200 rounded-2xl h-40 flex flex-col items-center justify-center text-gray-400 hover:border-purple-300 hover:bg-purple-50 transition-all cursor-pointer">
-                                            <span className="text-2xl mb-2">📷</span>
-                                            <span className="text-xs font-bold uppercase tracking-wide">Upload Image</span>
+                                        <div>
+                                            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Sub-Category</label>
+                                            <select name="subCategory" value={newProductData.subCategory} onChange={handleNewChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-medium focus:ring-2 focus:border-blue-500 transition-all cursor-pointer">
+                                                {config.subCategories[newProductData.category]?.map(sub => <option key={sub.id} value={sub.id}>{sub.label}</option>)}
+                                            </select>
                                         </div>
                                     </div>
                                 </div>
                             </div>
-                        </>
+
+                            {/* 2. Defining Attributes (Right Side - Moved Up for Mobile Order, Spans to Side on Desktop) */}
+                            <div className="lg:col-span-1 lg:row-span-2 space-y-8">
+                                <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
+                                    <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-3">
+                                        <span className="w-8 h-8 rounded-full bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-sm">2</span>
+                                        Defining Attributes
+                                    </h2>
+                                    <p className="text-xs text-gray-400 mb-4">What makes variants of this product different?</p>
+
+                                    <div className="space-y-3">
+                                        {Object.keys(config.attributes).map(attrKey => {
+                                            const isSelected = newProductData.applicableAttributes.includes(attrKey);
+                                            return (
+                                                <div key={attrKey} className={`p-4 rounded-xl border-2 transition-all flex flex-col gap-3 group ${isSelected ? 'border-purple-500 bg-purple-50/50' : 'border-gray-100 hover:border-purple-200'}`}>
+                                                    <div
+                                                        onClick={() => toggleApplicableAttribute(attrKey)}
+                                                        className="flex items-center justify-between cursor-pointer"
+                                                    >
+                                                        <span className={`font-bold ${isSelected ? 'text-purple-700' : 'text-gray-600'}`}>{attrKey}</span>
+                                                        <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${isSelected ? 'bg-purple-500 border-purple-500' : 'border-gray-300 bg-white'}`}>
+                                                            {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Default Value Selector (Exclude Color as it's selected outside) */}
+                                                    {isSelected && attrKey !== 'Color' && (
+                                                        <div className="mt-1 animate-fade-in pl-1">
+                                                            <label className="text-[10px] font-bold text-gray-500 uppercase mb-1 block">Default {attrKey}</label>
+                                                            <select
+                                                                className="w-full text-xs font-semibold bg-white border border-gray-200 rounded-lg py-1.5 px-2 text-gray-700 focus:outline-none focus:border-purple-500 cursor-pointer"
+                                                                value={newProductData.defaultAttributes[attrKey] || ''}
+                                                                onChange={(e) => handleDefaultAttributeChange(attrKey, e.target.value)}
+                                                                onClick={(e) => e.stopPropagation()}
+                                                            >
+                                                                <option value="">No Default</option>
+                                                                {config.attributes[attrKey].map(opt => (
+                                                                    <option key={opt} value={opt}>{opt}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 3. Matrix Generator (Left Bottom - Moved to 3rd Position) */}
+                            {newProductData.applicableAttributes.length > 0 && (
+                                <div className="lg:col-span-2 bg-white p-8 rounded-3xl border border-gray-100 shadow-sm animate-slide-up">
+                                    <h2 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-3">
+                                        <span className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-sm">3</span>
+                                        Generate Variants
+                                    </h2>
+                                    <p className="text-xs text-gray-400 mb-4">Select values to automatically create variants.</p>
+
+                                    <div className="space-y-6">
+                                        {/* Selection Grids */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            {newProductData.applicableAttributes.map(attrKey => (
+                                                <div key={attrKey} className="bg-gray-50 p-4 rounded-xl">
+                                                    <h3 className="text-xs font-bold text-gray-900 uppercase mb-3">{attrKey} Values</h3>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {config.attributes[attrKey]?.map(val => {
+                                                            const isSelected = (matrixSelections[attrKey] || []).includes(val);
+                                                            return (
+                                                                <button
+                                                                    key={val}
+                                                                    type="button"
+                                                                    onClick={() => toggleMatrixValue(attrKey, val)}
+                                                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${isSelected ? 'bg-emerald-500 border-emerald-500 text-white shadow-sm' : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'}`}
+                                                                >
+                                                                    {val}
+                                                                </button>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        {/* Preview & Pricing */}
+                                        {matrixPreview.length > 0 ? (
+                                            <div className="bg-emerald-50/50 border border-emerald-100 rounded-xl p-4 animate-fade-in">
+                                                <div className="flex justify-between items-center mb-4">
+                                                    <span className="text-xs font-bold text-emerald-800 uppercase">Variants to Create ({matrixPreview.length})</span>
+                                                </div>
+
+                                                <div className="max-h-80 overflow-y-auto custom-scrollbar space-y-2">
+                                                    {matrixPreview.map((name, idx) => (
+                                                        <div key={name} className="bg-white p-3 rounded-xl border border-emerald-100/50 shadow-sm flex flex-col md:flex-row md:items-center gap-4">
+                                                            <div className="md:w-1/4 flex items-center gap-2">
+                                                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+                                                                <span className="text-sm font-bold text-gray-700 truncate" title={name}>{name}</span>
+                                                            </div>
+
+                                                            <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-2">
+                                                                <div>
+                                                                    <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Stock</label>
+                                                                    <input
+                                                                        type="number"
+                                                                        placeholder="0"
+                                                                        className="w-full bg-gray-50 border-gray-200 rounded-lg px-2 py-1.5 text-xs font-bold focus:border-emerald-500 text-gray-700"
+                                                                        value={matrixValues[name]?.stock || ''}
+                                                                        onChange={(e) => handleMatrixValueChange(name, 'stock', e.target.value)}
+                                                                    />
+                                                                </div>
+                                                                <div>
+                                                                    <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Full</label>
+                                                                    <input
+                                                                        type="number"
+                                                                        placeholder="0.00"
+                                                                        className="w-full bg-gray-50 border-gray-200 rounded-lg px-2 py-1.5 text-xs font-bold focus:border-emerald-500 text-gray-700"
+                                                                        value={matrixValues[name]?.priceFull || ''}
+                                                                        onChange={(e) => handleMatrixValueChange(name, 'priceFull', e.target.value)}
+                                                                    />
+                                                                </div>
+                                                                <div>
+                                                                    <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Half</label>
+                                                                    <input
+                                                                        type="number"
+                                                                        placeholder="0.00"
+                                                                        className="w-full bg-gray-50 border-gray-200 rounded-lg px-2 py-1.5 text-xs font-bold focus:border-emerald-500 text-gray-700"
+                                                                        value={matrixValues[name]?.priceHalf || ''}
+                                                                        onChange={(e) => handleMatrixValueChange(name, 'priceHalf', e.target.value)}
+                                                                    />
+                                                                </div>
+                                                                <div>
+                                                                    <label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Unit</label>
+                                                                    <input
+                                                                        type="number"
+                                                                        placeholder="0.00"
+                                                                        className="w-full bg-gray-50 border-gray-200 rounded-lg px-2 py-1.5 text-xs font-bold focus:border-emerald-500 text-gray-700"
+                                                                        value={matrixValues[name]?.priceUnit || ''}
+                                                                        onChange={(e) => handleMatrixValueChange(name, 'priceUnit', e.target.value)}
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="text-center py-4 text-gray-400 text-xs italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                                                Select at least one value for each attribute to generate variants.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     )}
 
                     {/* === MODE: EXISTING VARIANT === */}
                     {mode === 'variant' && (
                         <div className="max-w-4xl mx-auto space-y-8">
-
-                            {/* Step 1: Select Product */}
                             <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-lg shadow-gray-200/50">
-                                <h2 className="text-xl font-bold text-gray-900 mb-6">Find existing product</h2>
-
+                                <h2 className="text-xl font-bold text-gray-900 mb-6">1. Find Existing Product</h2>
                                 {!selectedExistingProduct ? (
                                     <div className="space-y-6">
-
-                                        {/* Filter Tabs */}
-                                        <div className="space-y-4">
-                                            {/* Categories */}
-                                            <div className="flex gap-2 bg-gray-50 p-1.5 rounded-xl w-fit flex-wrap">
-                                                <button type="button" onClick={() => { setFilterCategory('all'); setFilterSubCategory('all'); }} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${filterCategory === 'all' ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>All</button>
-                                                {config.categories.map(c => (
-                                                    <button type="button" key={c.id} onClick={() => { setFilterCategory(c.id); setFilterSubCategory('all'); }} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${filterCategory === c.id ? 'bg-white shadow text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}>{c.label}</button>
-                                                ))}
-                                            </div>
-
-                                            {/* Subcategories (Dynamic) */}
-                                            {config.subCategories[filterCategory] && (
-                                                <div className="flex gap-2 animate-fade-in pl-2 flex-wrap">
-                                                    <button type="button" onClick={() => setFilterSubCategory('all')} className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all ${filterSubCategory === 'all' ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500'}`}>All {filterCategory.split('-')[0]}</button>
-                                                    {config.subCategories[filterCategory].map(s => (
-                                                        <button type="button" key={s.id} onClick={() => setFilterSubCategory(s.id)} className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all ${filterSubCategory === s.id ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-500'}`}>{s.label}</button>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-
                                         <div className="relative">
-                                            <span className="absolute left-5 top-4 text-gray-400 text-lg">🔍</span>
-                                            <input
-                                                type="text"
-                                                autoFocus
-                                                className="w-full bg-gray-50 border-gray-200 rounded-2xl pl-14 pr-6 py-4 text-lg font-medium shadow-inner focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all placeholder-gray-400"
-                                                placeholder="Search by name..."
-                                                value={existingSearch}
-                                                onChange={e => setExistingSearch(e.target.value)}
-                                            />
-
-                                            {(existingSearch || filterCategory !== 'all') && (
-                                                <div className="absolute top-full left-0 right-0 mt-4 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden max-h-60 overflow-y-auto z-10">
-                                                    {filteredExistingProducts.length > 0 ? filteredExistingProducts.map(p => (
-                                                        <div
-                                                            key={p.id}
-                                                            onClick={() => handleSelectExisting(p)}
-                                                            className="px-6 py-4 hover:bg-blue-50 cursor-pointer flex items-center justify-between group transition-colors border-b border-gray-50 last:border-0"
-                                                        >
-                                                            <div className="flex items-center gap-4">
-                                                                <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center overflow-hidden">
-                                                                    {p.image ? <img src={p.image} className="w-full h-full object-cover" alt="" /> : <span className="text-xs">IMG</span>}
-                                                                </div>
-                                                                <div>
-                                                                    <div className="font-bold text-gray-800">{p.name}</div>
-                                                                    <div className="text-[10px] text-gray-400 uppercase font-bold tracking-wide">{p.category} • {p.usage}</div>
-                                                                </div>
-                                                            </div>
-                                                            <div className="text-xs text-blue-500 opacity-0 group-hover:opacity-100 font-bold uppercase tracking-wide">Select</div>
+                                            <span className="absolute left-5 top-4 text-gray-500">🔍</span>
+                                            <input type="text" autoFocus className="w-full bg-slate-50 border-gray-200 rounded-2xl pl-12 pr-6 py-4 font-medium outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" placeholder="Search by name..." value={existingSearch} onChange={e => setExistingSearch(e.target.value)} />
+                                            {existingSearch && (
+                                                <div className="absolute top-full left-0 right-0 mt-4 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden max-h-60 overflow-y-auto z-10 custom-scrollbar">
+                                                    {filteredExistingProducts.map(p => (
+                                                        <div key={p.id} onClick={() => handleSelectExisting(p)} className="px-6 py-4 hover:bg-blue-50 cursor-pointer flex items-center justify-between border-b border-gray-50 last:border-0">
+                                                            <div className="font-bold text-gray-800">{p.name} <span className="text-xs text-gray-400 font-normal ml-2">{p.category}</span></div>
                                                         </div>
-                                                    )) : (
-                                                        <div className="p-8 text-center text-gray-400 text-sm font-medium">
-                                                            No products found matching filters.
-                                                        </div>
-                                                    )}
+                                                    ))}
                                                 </div>
                                             )}
                                         </div>
                                     </div>
                                 ) : (
                                     <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 flex items-center justify-between animate-pop-in">
-                                        <div className="flex items-center gap-4">
-                                            <div className="w-16 h-16 bg-white rounded-xl shadow-sm flex items-center justify-center p-1">
-                                                <img src={selectedExistingProduct.image} className="w-full h-full object-contain mix-blend-multiply" alt="" />
-                                            </div>
-                                            <div>
-                                                <div className="font-bold text-blue-900 text-lg">{selectedExistingProduct.name}</div>
-                                                <div className="text-sm text-blue-600 font-medium">{INITIAL_CATEGORIES.find(c => c.id === selectedExistingProduct.category)?.label} • {selectedExistingProduct.usage}</div>
-                                            </div>
+                                        <div>
+                                            <div className="font-bold text-blue-900 text-lg">{selectedExistingProduct.name}</div>
+                                            <div className="text-sm text-blue-600 font-medium">Adding stock/variants</div>
                                         </div>
-                                        <button onClick={() => setSelectedExistingProduct(null)} className="px-4 py-2 bg-white rounded-lg text-blue-600 font-bold text-sm shadow-sm hover:bg-blue-600 hover:text-white transition-colors">Change</button>
+                                        <button onClick={() => setSelectedExistingProduct(null)} className="px-4 py-2 bg-white rounded-lg text-blue-600 font-bold text-sm shadow-sm hover:bg-blue-100">Change</button>
                                     </div>
                                 )}
                             </div>
 
-                            {/* Step 2: Configure Variant */}
                             {selectedExistingProduct && (
                                 <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-lg shadow-gray-200/50 animate-slide-up">
-                                    <h2 className="text-xl font-bold text-gray-900 mb-6">Select {selectedExistingProduct.category.includes('profile') ? 'Color' : 'Thickness'} & Pricing</h2>
-
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-                                        {currentVariantsList.map(v => (
-                                            <button key={v} type="button" onClick={() => setVariantToAdd(v)} className={`py-4 rounded-xl font-bold border-2 transition-all flex flex-col items-center gap-1 ${variantToAdd === v ? 'bg-gray-900 text-white border-gray-900 shadow-lg transform scale-105' : 'bg-white text-gray-500 border-gray-100 hover:border-gray-300'}`}>
-                                                <span>{v}</span>
-                                            </button>
-                                        ))}
+                                    <h2 className="text-xl font-bold text-gray-900 mb-6">2. Configure Variant</h2>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                                        {activeProductAttributes.length > 0 ? (
+                                            activeProductAttributes.map(attrKey => (
+                                                <div key={attrKey} className="space-y-3">
+                                                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">{attrKey}</label>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {config.attributes[attrKey]?.map(val => (
+                                                            <button
+                                                                key={val}
+                                                                type="button"
+                                                                onClick={() => handleVariantSelection(attrKey, val)}
+                                                                className={`px-4 py-2 rounded-lg text-sm font-bold border transition-all ${variantSelections[attrKey] === val ? 'bg-gray-900 text-white border-gray-900 shadow-md' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'}`}
+                                                            >
+                                                                {val}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="col-span-2 text-gray-400 text-sm italic">Standard product with no specific attributes.</div>
+                                        )}
                                     </div>
 
-                                    {/* Full Pricing for Variant */}
-                                    <div className="pt-6 border-t border-gray-100 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-
-                                        {/* Conditional Stock Input for Variant - Dropdown + Qty logic */}
-                                        {selectedExistingProduct.category === 'ke-profile' ? (
-                                            <div className="md:col-span-1">
-                                                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Length</label>
-                                                <select
-                                                    name="selectedLength"
-                                                    value={variantPricing.selectedLength}
-                                                    onChange={handleVariantPricingChange}
-                                                    className="w-full bg-blue-50 border-blue-100 text-blue-900 rounded-xl px-4 py-3 font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all cursor-pointer shadow-sm"
-                                                >
-                                                    {KE_LENGTHS.map(length => (
-                                                        <option key={length} value={length}>{length}ft</option>
-                                                    ))}
-                                                </select>
+                                    <div className="pt-8 border-t border-gray-100">
+                                        <h3 className="text-sm font-bold text-gray-900 mb-4">Stock & Pricing</h3>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Stock Qty</label>
+                                                <input type="number" name="initialStock" value={variantPricing.initialStock} onChange={handlePricingChange} className="w-full bg-blue-50 border-blue-100 text-blue-900 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500" placeholder="0" />
                                             </div>
-                                        ) : null}
-
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Initial Quantity</label>
-                                            <input type="number" name="initialStock" value={variantPricing.initialStock} onChange={handleVariantPricingChange} className="w-full bg-blue-50 border-blue-100 text-blue-900 rounded-xl px-4 py-3 font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all" placeholder="0" />
-                                        </div>
-
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Price Full</label>
-                                            <input type="number" name="priceFull" value={variantPricing.priceFull} onChange={handleVariantPricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all" placeholder="0.00" />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Price Half</label>
-                                            <input type="number" name="priceHalf" value={variantPricing.priceHalf} onChange={handleVariantPricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all" placeholder="0.00" />
-                                        </div>
-                                        <div>
-                                            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-2">Price Unit</label>
-                                            <input type="number" name="priceUnit" value={variantPricing.priceUnit} onChange={handleVariantPricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-4 py-3 font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all" placeholder="0.00" />
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Price (Full)</label>
+                                                <input type="number" name="priceFull" value={variantPricing.priceFull} onChange={handlePricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500" placeholder="0.00" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Price (Half)</label>
+                                                <input type="number" name="priceHalf" value={variantPricing.priceHalf} onChange={handlePricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500" placeholder="0.00" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Price (Unit)</label>
+                                                <input type="number" name="priceUnit" value={variantPricing.priceUnit} onChange={handlePricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500" placeholder="0.00" />
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -520,12 +734,10 @@ export default function AddProductPage() {
                         </div>
                     )}
 
-
                     {/* Action Bar */}
                     <div className="fixed bottom-0 left-0 right-0 p-6 bg-white/90 backdrop-blur-md border-t border-gray-200 flex justify-center z-30">
                         <div className="w-full max-w-5xl flex justify-end gap-4">
-                            <button type="button" className="px-8 py-4 bg-white border border-gray-200 text-gray-600 font-bold rounded-2xl hover:bg-gray-50 transition-all" onClick={() => window.history.back()}>Cancel</button>
-                            <button type="submit" disabled={submitting || (mode === 'variant' && !variantToAdd)} className="px-10 py-4 bg-gray-900 text-white font-bold rounded-2xl hover:bg-black transition-all shadow-xl shadow-gray-900/20 flex items-center gap-2 disabled:opacity-50 disabled:shadow-none min-w-[200px] justify-center">
+                            <button type="submit" disabled={submitting || (mode === 'variant' && !isVariantComplete)} className="px-10 py-4 bg-gray-900 text-white font-bold rounded-2xl hover:bg-black transition-all shadow-xl shadow-gray-900/20 flex items-center gap-2 disabled:opacity-50 disabled:shadow-none min-w-[200px] justify-center">
                                 {submitting ? <span className="animate-pulse">Processing...</span> : <span>{mode === 'new' ? 'Create Product' : 'Add Variant'}</span>}
                             </button>
                         </div>
@@ -534,70 +746,19 @@ export default function AddProductPage() {
                 </form>
             </div>
 
-            {/* --- CONFIG MODAL (Admin) --- */}
-            {configModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm animate-fade-in">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-pop-in">
-                        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                            <h3 className="text-xl font-bold text-gray-900">Manage Options</h3>
-                            <button onClick={() => setConfigModalOpen(false)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
-                        </div>
-                        <div className="flex border-b border-gray-100">
-                            {/* Enhanced Tabs for Categories/Subcats */}
-                            {['categories', 'subcats', 'colors', 'thickness'].map(tab => (
-                                <button key={tab} onClick={() => setActiveConfigTab(tab)} className={`flex-1 py-3 font-bold text-xs ${activeConfigTab === tab ? 'text-blue-600 border-b-2 border-blue-600 bg-blue-50/50' : 'text-gray-500 hover:bg-gray-50'}`}>
-                                    {tab === 'categories' ? 'Categories' : tab === 'subcats' ? 'Sub-Cats' : tab === 'colors' ? 'Colors' : 'Thicknesses'}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="p-6 h-80 overflow-y-auto custom-scrollbar">
-                            <div className="space-y-4">
+            <ConfigModal
+                isOpen={configModalOpen}
+                onClose={() => setConfigModalOpen(false)}
+                activeTab={activeConfigTab}
+                onTabChange={setActiveConfigTab}
+                config={config}
+                selectedParentCategory={selectedParentCategory}
+                onParentCategoryChange={setSelectedParentCategory}
+                onAdd={handleAddConfigItem}
+                onRemove={handleRemoveConfigItem}
+                onAddCategory={handleAddAttributeCategory}
+            />
 
-                                {/* Sub-Cat Parent Selector */}
-                                {activeConfigTab === 'subcats' && (
-                                    <div className="mb-4">
-                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Parent Category</label>
-                                        <select
-                                            value={selectedParentCategory}
-                                            onChange={e => setSelectedParentCategory(e.target.value)}
-                                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm font-bold"
-                                        >
-                                            {config.categories.map(c => (
-                                                <option key={c.id} value={c.id}>{c.label}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                )}
-
-                                <div className="flex gap-2">
-                                    <input id="newItemInput" type="text" className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm font-medium outline-none focus:border-blue-500" placeholder={`Add new ${activeConfigTab}...`} onKeyDown={e => e.key === 'Enter' && (handleAddConfigItem(e.target.value), e.target.value = '')} />
-                                    <button onClick={() => { const el = document.getElementById('newItemInput'); handleAddConfigItem(el.value); el.value = ''; }} className="bg-blue-600 text-white px-4 rounded-xl font-bold text-sm hover:bg-blue-700">+</button>
-                                </div>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {/* Render Logic Based on Active Tab */}
-                                    {(() => {
-                                        let items = [];
-                                        if (activeConfigTab === 'categories') items = config.categories;
-                                        else if (activeConfigTab === 'subcats') items = config.subCategories[selectedParentCategory] || [];
-                                        else if (activeConfigTab === 'colors') items = config.colors;
-                                        else items = config.thicknesses;
-
-                                        return items.map(item => {
-                                            const label = typeof item === 'string' ? item : item.label;
-                                            return (
-                                                <div key={typeof item === 'string' ? item : item.id} className="flex items-center justify-between p-3 bg-white border border-gray-100 rounded-xl shadow-sm text-sm font-bold text-gray-700">
-                                                    <span>{label}</span>
-                                                    <button onClick={() => handleRemoveConfigItem(item, selectedParentCategory)} className="text-red-400 hover:text-red-600">×</button>
-                                                </div>
-                                            );
-                                        });
-                                    })()}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

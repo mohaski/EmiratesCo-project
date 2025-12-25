@@ -1,83 +1,40 @@
-import React, { useState, useEffect, useMemo, useCallback, useDeferredValue, memo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
 import CartSidebar from '../components/sales/CartSidebar';
-import { PRODUCTS, CATEGORIES } from '../data/mockProducts';
+import { useProducts } from '../context/ProductContext';
 import { CUSTOMERS } from '../data/mockCustomers';
+import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 
-// --- PERFORMANCE: Local Memoization Wrapper ---
-const MemoizedProductCard = memo(ProductCard);
+import CustomerSelectionOverlay from '../components/invoices/CustomerSelectionOverlay';
 
 export default function InvoiceGenPage() {
+    const { products: PRODUCTS } = useProducts(); // Keep for specific helpers if needed, but hook handles filtering
     const location = useLocation();
     const navigate = useNavigate();
 
-    // --- STATE ---
-    const [activeCategory, setActiveCategory] = useState('ke-profile');
-    const [activeSubCategory, setActiveSubCategory] = useState('window');
-    const [searchQuery, setSearchQuery] = useState('');
+    // --- HOOKS ---
+    const {
+        activeCategory, setActiveCategory,
+        activeSubCategory, setActiveSubCategory,
+        searchQuery, setSearchQuery,
+        profileColor, setProfileColor,
+        filteredProducts,
+        currentSubCategories,
+        CATEGORIES,
+        isProfileCategory
+    } = useProductFiltering();
 
-    // Performance: Defer the search query for filtering
-    const deferredQuery = useDeferredValue(searchQuery);
-
+    // --- LOCAL STATE (UI Only) ---
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
     const [editingIndex, setEditingIndex] = useState(null);
     const [initialModalDetails, setInitialModalDetails] = useState(null);
 
     const [selectedCustomer, setSelectedCustomer] = useState(location.state?.customer || null);
-
     const [cart, setCart] = useState(location.state?.cartItems || []);
-    const [profileColor, setProfileColor] = useState('White');
-
-    // --- CONSTANTS (Memoized) ---
-    const PROFILE_COLORS = useMemo(() => [
-        { name: 'White', hex: '#FFFFFF' },
-        { name: 'Brown', hex: '#8B4513' },
-        { name: 'Silver', hex: '#C0C0C0' },
-        { name: 'Grey', hex: '#808080' }
-    ], []);
-
-    const PROFILE_SUB_CATEGORIES = useMemo(() => [
-        { id: 'window', label: 'Window Profile' },
-        { id: 'door', label: 'Door Profile' },
-        { id: 'general', label: 'General Purpose' },
-    ], []);
-
-    const GLASS_SUB_CATEGORIES = useMemo(() => [
-        { id: 'clear', label: 'Clear' },
-        { id: 'oneway', label: 'One/Way' },
-        { id: 'mirror', label: 'Mirror' },
-        { id: 'tint', label: 'Tint' },
-        { id: 'obscure', label: 'Obscure' },
-        { id: 'alucoboard', label: 'Alucoboard' },
-        { id: 'frost', label: 'Frost' },
-    ], []);
-
-    // --- MEMOIZED HELPERS ---
-    const isProfileCategory = useMemo(() =>
-        activeCategory === 'ke-profile' || activeCategory === 'tz-profile',
-        [activeCategory]);
-
-    const isGlassCategory = useMemo(() =>
-        activeCategory === 'glass',
-        [activeCategory]);
-
-    const currentSubCategories = useMemo(() =>
-        isProfileCategory ? PROFILE_SUB_CATEGORIES : (isGlassCategory ? GLASS_SUB_CATEGORIES : []),
-        [isProfileCategory, isGlassCategory, PROFILE_SUB_CATEGORIES, GLASS_SUB_CATEGORIES]);
-
-    // --- EFFECT: Sub-category Reset ---
-    useEffect(() => {
-        if (isProfileCategory) {
-            setActiveSubCategory('window');
-        } else if (isGlassCategory) {
-            setActiveSubCategory('clear');
-        } else {
-            setActiveSubCategory('all');
-        }
-    }, [activeCategory, isProfileCategory, isGlassCategory]);
+    const [isCartOpen, setIsCartOpen] = useState(false); // Mobile Cart Drawer State
 
     // --- STABLE HANDLERS ---
     const handleProductClick = useCallback((product) => {
@@ -90,6 +47,7 @@ export default function InvoiceGenPage() {
     const handleEditCartItem = useCallback((index) => {
         setCart((currentCart) => {
             const item = currentCart[index];
+            // Use filteredProducts or PRODUCTS to find original? generic PRODUCTS is safer as filtered might hide it
             const originalProduct = PRODUCTS.find(p => p.id === item.id);
             if (originalProduct) {
                 // Defer UI updates slightly to avoid conflicts
@@ -98,11 +56,12 @@ export default function InvoiceGenPage() {
                     setEditingIndex(index);
                     setInitialModalDetails(item.details);
                     setModalOpen(true);
+                    setIsCartOpen(true); // Open drawer on edit
                 }, 0);
             }
             return currentCart;
         });
-    }, []);
+    }, [PRODUCTS]);
 
     const handleAddToOrder = useCallback((orderItem) => {
         setCart(prevCart => {
@@ -135,43 +94,39 @@ export default function InvoiceGenPage() {
         setSelectedCustomer(customer);
     }, []);
 
-    // --- MEMOIZED FILTERING ---
-    const filteredProducts = useMemo(() => {
-        const lowerQuery = deferredQuery.toLowerCase();
-
-        return PRODUCTS.filter(p => {
-            const matchesCategory = activeCategory === 'all' || p.category === activeCategory;
-            if (!matchesCategory) return false;
-
-            const matchesSubCategory = activeSubCategory === 'all' || p.usage === activeSubCategory;
-            const matchesSearch = !lowerQuery || p.name.toLowerCase().includes(lowerQuery);
-
-            if (isProfileCategory || isGlassCategory) {
-                return matchesSubCategory && matchesSearch;
-            }
-            return matchesSearch;
-        });
-    }, [activeCategory, activeSubCategory, deferredQuery, isProfileCategory, isGlassCategory]);
-
     return (
         <div className="flex h-full w-full overflow-hidden text-gray-800 font-sans bg-slate-100 relative">
 
             {/* --- Main Content area --- */}
-            <div className="flex-1 flex flex-col relative min-w-0">
+            <div className={`flex-1 flex flex-col relative min-w-0 transition-all duration-300 ${isCartOpen ? 'md:mr-0' : ''}`}>
 
                 {/* Top Header - Inverted Gold/Slate Theme */}
-                <div className="h-20 flex items-center justify-between px-8 bg-slate-900 text-white shadow-md z-10 shrink-0">
-                    <div>
-                        <h1 className="text-2xl font-bold tracking-tight text-amber-500">Invoice Generator</h1>
-                        <p className="text-xs text-slate-400 font-medium">Create Quotations & Estimates</p>
+                <div className="h-auto md:h-20 flex flex-col md:flex-row md:items-center justify-between px-4 md:px-8 bg-slate-900 text-white shadow-md z-10 shrink-0 gap-4 md:gap-0 py-4 md:py-0 transition-all">
+                    <div className="flex items-center justify-between w-full md:w-auto">
+                        <div>
+                            <h1 className="text-xl md:text-2xl font-bold tracking-tight text-amber-500">Invoice Generator</h1>
+                            <p className="text-[10px] md:text-xs text-slate-400 font-medium">Create Quotations & Estimates</p>
+                        </div>
+                        {/* Mobile Cart Toggle */}
+                        <button
+                            onClick={() => setIsCartOpen(!isCartOpen)}
+                            className="md:hidden relative p-2 text-white bg-slate-800 rounded-xl hover:bg-slate-700 transition-colors border border-slate-700"
+                        >
+                            <span className="text-xl">🛒</span>
+                            {cart.length > 0 && (
+                                <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-slate-900 shadow-sm">
+                                    {cart.length}
+                                </span>
+                            )}
+                        </button>
                     </div>
 
                     {/* Search Bar */}
-                    <div className="relative w-96">
-                        <span className="absolute left-4 top-3 text-slate-500">🔍</span>
+                    <div className="relative w-full md:w-96">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">🔍</span>
                         <input
                             type="text"
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl py-3 pl-10 pr-4 text-white shadow-inner focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition-all placeholder-slate-500"
+                            className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2.5 pl-10 pr-4 text-white shadow-inner focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition-all placeholder-slate-500"
                             placeholder="Search products..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
@@ -250,7 +205,7 @@ export default function InvoiceGenPage() {
                 <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-slate-50">
                     <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                         {filteredProducts.map(product => (
-                            <MemoizedProductCard
+                            <ProductCard
                                 key={product.id}
                                 product={product}
                                 onClick={handleProductClick}
@@ -260,15 +215,57 @@ export default function InvoiceGenPage() {
                 </div>
             </div>
 
-            {/* --- Right Cart Panel --- */}
-            <CartSidebar
-                cartItems={cart}
-                onRemoveItem={handleRemoveItem}
-                onEditItem={handleEditCartItem}
-                customer={selectedCustomer}
-                actionLabel="Review Invoice"
-                onAction={handleReviewInvoice}
-            />
+            {/* --- Mobile Cart Overlay --- */}
+            {isCartOpen && (
+                <div
+                    className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm animate-fade-in"
+                    onClick={() => setIsCartOpen(false)}
+                />
+            )}
+
+            {/* --- Right Cart Panel (Responsive Drawer) --- */}
+            <div className={`
+                fixed inset-y-0 right-0 z-50 w-[85vw] sm:w-96 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out
+                md:relative md:translate-x-0 md:shadow-none md:border-l md:border-gray-200 md:w-[400px] shrink-0
+                ${isCartOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
+            `}>
+                <div className="h-full flex flex-col">
+                    {/* Mobile Cart Header */}
+                    <div className="md:hidden flex items-center justify-between p-4 border-b border-gray-100 bg-gray-50/50">
+                        <h3 className="font-bold text-lg">Your Cart ({cart.length})</h3>
+                        <button onClick={() => setIsCartOpen(false)} className="p-2 bg-gray-200 rounded-full hover:bg-gray-300 text-gray-600">
+                            ✕
+                        </button>
+                    </div>
+
+                    {/* Cart Sidebar */}
+                    <div className="flex-1 overflow-hidden relative">
+                        <CartSidebar
+                            cartItems={cart}
+                            onRemoveItem={handleRemoveItem}
+                            onEditItem={handleEditCartItem}
+                            customer={selectedCustomer}
+                            actionLabel="Review Invoice"
+                            onAction={handleReviewInvoice}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* --- Mobile Floating Checkout Button (Only if Cart has items and is closed) --- */}
+            {!isCartOpen && cart.length > 0 && (
+                <div className="md:hidden fixed bottom-6 right-6 z-30 animate-bounce-subtle">
+                    <button
+                        onClick={() => setIsCartOpen(true)}
+                        className="bg-gray-900 text-white p-4 rounded-full shadow-xl shadow-gray-900/40 flex items-center justify-center relative hover:scale-105 active:scale-95 transition-all"
+                    >
+                        <span className="text-2xl">🛒</span>
+                        <span className="absolute -top-2 -right-2 bg-amber-500 text-white text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full border-2 border-white">
+                            {cart.length}
+                        </span>
+                    </button>
+                </div>
+            )}
 
             {/* --- Product Modal --- */}
             <ProductModal
@@ -291,115 +288,3 @@ export default function InvoiceGenPage() {
         </div>
     );
 }
-
-// --- EXTRACTED OVERLAY COMPONENT ---
-// Keeps input state isolated from the main grid to prevent render thrashing
-const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
-    const [customerSearch, setCustomerSearch] = useState('');
-    const [newCustomerName, setNewCustomerName] = useState('');
-    const [newCustomerPhone, setNewCustomerPhone] = useState('');
-
-    const filteredCustomers = useMemo(() => {
-        if (!customerSearch) return [];
-        const lower = customerSearch.toLowerCase();
-        return customers.filter(c => c.name.toLowerCase().includes(lower) || c.phone.includes(lower));
-    }, [customers, customerSearch]);
-
-    return (
-        <div className="absolute inset-0 z-[60] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden animate-pop-in border border-amber-500/20">
-                <div className="p-8 bg-gradient-to-br from-slate-50 to-white">
-                    <h2 className="text-3xl font-bold text-slate-800 mb-2">Invoice Details</h2>
-                    <p className="text-slate-500 mb-8">Who is this quotation for?</p>
-
-                    <div className="mb-8">
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2 block">Search Client</label>
-                        <div className="relative group">
-                            <span className="absolute left-4 top-3.5 text-slate-400">🔍</span>
-                            <input
-                                type="text"
-                                placeholder="Search by name or phone..."
-                                className="w-full bg-white border border-slate-200 rounded-xl py-3 pl-10 pr-4 text-lg focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
-                                value={customerSearch}
-                                onChange={(e) => setCustomerSearch(e.target.value)}
-                            />
-                        </div>
-                        {customerSearch && (
-                            <div className="mt-2 space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
-                                {filteredCustomers.map(c => (
-                                    <button
-                                        key={c.id}
-                                        onClick={() => onSelectCustomer(c)}
-                                        className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-amber-50 border border-transparent hover:border-amber-200 transition-all text-left group"
-                                    >
-                                        <div>
-                                            <div className="font-bold text-slate-800">{c.name}</div>
-                                            <div className="text-xs text-slate-500 font-mono">{c.phone}</div>
-                                        </div>
-                                        <span className="text-amber-500 opacity-0 group-hover:opacity-100 font-medium text-sm">Select</span>
-                                    </button>
-                                ))}
-                                {filteredCustomers.length === 0 && (
-                                    <p className="text-sm text-gray-400 p-2 italic">No clients found.</p>
-                                )}
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="flex items-center gap-4 py-4">
-                        <span className="h-px bg-slate-200 flex-1"></span>
-                        <span className="text-xs text-slate-400 font-bold uppercase">OR</span>
-                        <span className="h-px bg-slate-200 flex-1"></span>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-                        <div>
-                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2 block">New Client</label>
-                            <div className="space-y-3">
-                                <input
-                                    type="text"
-                                    placeholder="Client Name"
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-800 outline-none focus:border-amber-500 transition-all font-medium"
-                                    value={newCustomerName}
-                                    onChange={(e) => setNewCustomerName(e.target.value)}
-                                />
-                                <input
-                                    type="tel"
-                                    placeholder="Phone Number"
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-800 outline-none focus:border-amber-500 transition-all font-medium"
-                                    value={newCustomerPhone}
-                                    onChange={(e) => setNewCustomerPhone(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && newCustomerName.trim()) {
-                                            onSelectCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
-                                        }
-                                    }}
-                                />
-                                <button
-                                    onClick={() => {
-                                        if (newCustomerName.trim()) {
-                                            onSelectCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
-                                        }
-                                    }}
-                                    disabled={!newCustomerName.trim()}
-                                    className="w-full bg-slate-900 text-amber-500 py-3 rounded-xl font-bold disabled:opacity-50 hover:bg-black transition-colors shadow-lg flex items-center justify-center gap-2"
-                                >
-                                    <span>Create Profile</span>
-                                    <span>→</span>
-                                </button>
-                            </div>
-                        </div>
-                        <div className="flex flex-col justify-end">
-                            <button
-                                onClick={() => onSelectCustomer({ id: 'guest', name: 'Guest Client', type: 'walk-in' })}
-                                className="w-full bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold py-3 rounded-xl border border-slate-300 transition-colors"
-                            >
-                                Guest Client
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-});
