@@ -14,35 +14,38 @@ const InvoiceItemRow = ({ item, index, productDef }) => {
 
                 {/* Product Meta Tags */}
                 {/* Product Meta Tags */}
-                <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-2 mb-2">
-                    {item.details.color && (
-                        <span className="bg-slate-100 px-1.5 rounded flex items-center gap-1">
-                            <span
-                                className="w-2 h-2 rounded-full border border-slate-300"
-                                style={{ backgroundColor: item.details.color === 'White' ? '#FFFFFF' : item.details.color }}
-                            ></span>
-                            {item.details.color}
-                        </span>
-                    )}
+                {/* Product Meta Tags (Legacy Fallback - Only show if Universal Attributes are missing) */}
+                {(!item.details.attributes || item.details.attributes.length === 0) && (
+                    <div className="text-xs text-slate-500 mt-1 flex flex-wrap gap-2 mb-2">
+                        {item.details.color && (
+                            <span className="bg-slate-100 px-1.5 rounded flex items-center gap-1">
+                                <span
+                                    className="w-2 h-2 rounded-full border border-slate-300"
+                                    style={{ backgroundColor: item.details.color === 'White' ? '#FFFFFF' : item.details.color }}
+                                ></span>
+                                {item.details.color}
+                            </span>
+                        )}
 
-                    {/* Dynamic Extras */}
-                    {item.details.extras ? (
-                        Object.entries(item.details.extras).map(([key, val]) => {
-                            if (key === 'Color' || key === 'Category') return null;
-                            return (
-                                <span key={key} className="bg-slate-100 px-1.5 rounded">
-                                    {val}{key === 'Length' && typeof val === 'number' ? 'ft' : ''}
-                                </span>
-                            );
-                        })
-                    ) : (
-                        /* Legacy Fallback */
-                        <>
-                            {item.details.length && <span className="bg-slate-100 px-1.5 rounded">{item.details.length}FT</span>}
-                            {item.details.thickness && <span className="bg-slate-100 px-1.5 rounded">{item.details.thickness}</span>}
-                        </>
-                    )}
-                </div>
+                        {/* Dynamic Extras */}
+                        {item.details.extras ? (
+                            Object.entries(item.details.extras).map(([key, val]) => {
+                                if (key === 'Color' || key === 'Category') return null;
+                                return (
+                                    <span key={key} className="bg-slate-100 px-1.5 rounded">
+                                        {val}{key === 'Length' && typeof val === 'number' ? 'ft' : ''}
+                                    </span>
+                                );
+                            })
+                        ) : (
+                            /* Legacy Fallback */
+                            <>
+                                {item.details.length && <span className="bg-slate-100 px-1.5 rounded">{item.details.length}FT</span>}
+                                {item.details.thickness && <span className="bg-slate-100 px-1.5 rounded">{item.details.thickness}</span>}
+                            </>
+                        )}
+                    </div>
+                )}
 
                 {/* Detailed Breakdown */}
                 {/* BREAKDOWN (Universal vs Legacy) */}

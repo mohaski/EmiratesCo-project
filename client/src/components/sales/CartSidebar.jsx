@@ -225,23 +225,17 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
 
     // --- OPTIMIZATION 3: Stable Handler ---
     const handleAction = useCallback(() => {
-        if (mode === 'edit') {
-            if (isOwing) {
-                if (window.confirm(`Charge Customer Ksh${balance.toFixed(2)}?`)) {
-                    onAction && onAction();
-                }
-            } else if (isRefund) {
-                if (window.confirm(`Refund Customer Ksh${Math.abs(balance).toFixed(2)}?`)) {
-                    onAction && onAction();
-                }
-            } else {
-                onAction && onAction();
-            }
+        if (onAction) {
+            onAction();
         } else {
-            if (onAction) onAction();
-            else navigate('/checkout', { state: { cartItems, customer } });
+            navigate('/checkout', {
+                state: {
+                    cartItems,
+                    customer
+                }
+            });
         }
-    }, [mode, isOwing, isRefund, balance, onAction, navigate, cartItems, customer]);
+    }, [onAction, navigate, cartItems, customer]);
 
     return (
         <div className="w-96 flex-shrink-0 bg-white border-l border-gray-100 flex flex-col h-full shadow-[0_0_50px_rgba(0,0,0,0.05)] z-30 font-sans tracking-tight">
@@ -296,10 +290,10 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
 
             {/* Footer / Checkout */}
             <div className="p-8 bg-gray-50 border-t border-gray-100 z-10">
-                {mode === 'edit' && (
+                {originalTotal > 0 && (
                     <div className="mb-4 pt-2 border-t border-gray-200">
                         <div className="flex justify-between text-gray-400 text-xs mb-1">
-                            <span className="font-medium">Original Total</span>
+                            <span className="font-medium">Original Paid</span>
                             <span className="font-mono">Ksh{originalTotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-baseline">
@@ -313,7 +307,7 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                     </div>
                 )}
 
-                {!mode && (
+                {originalTotal === 0 && (
                     <div className="space-y-4 mb-8">
                         <div className="flex justify-between text-gray-500 text-sm">
                             <span className="font-medium">Subtotal</span>

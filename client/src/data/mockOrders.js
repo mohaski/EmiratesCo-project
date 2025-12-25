@@ -3,7 +3,7 @@ export const MOCK_ORDERS = [
     {
         id: 'ORD-PERFECT-001',
         date: '2024-12-18T16:45:00',
-        customer: { name: 'Master Builder Co', phone: '055-123-9876', type: 'registered' },
+        customer: { id: 'CUST-001', name: 'Master Builder Co', phone: '055-123-9876', type: 'registered' },
         items: [
             // Item 1: Clear Glass 4mm (Mixed Sheets & Cuts)
             {
@@ -119,14 +119,14 @@ export const MOCK_ORDERS = [
                 }
             }
         ],
-        totalAmount: 10450,
+        totalAmount: 10972.5,
         status: 'completed',
         paymentMethod: 'invoice'
     },
     {
         id: 'ORD-SIMPLE-002',
         date: '2024-12-18T10:15:00',
-        customer: { name: 'Studio Design', phone: '04-333-4444', type: 'registered' },
+        customer: { id: 'CUST-002', name: 'Studio Design', phone: '04-333-4444', type: 'registered' },
         items: [
             {
                 id: 't1',
@@ -137,7 +137,7 @@ export const MOCK_ORDERS = [
                 details: { full: 10, half: 0, feet: 0, color: 'Champagne', length: 19, qty: 10, unit: 'pcs' }
             }
         ],
-        totalAmount: 2400,
+        totalAmount: 2520,
         status: 'completed',
         paymentMethod: 'invoice'
     }
@@ -148,16 +148,45 @@ export const MOCK_INVOICES = [
         id: 'INV-100234',
         date: '2024-12-17T11:00:00',
         customer: { name: 'Sarah J.', phone: '052-555-1234', type: 'new' },
-        items: 3,
-        totalAmount: 1250.50,
+        items: [
+            {
+                id: 'inv-item-1',
+                name: '4mm Clear Glass',
+                totalPrice: 1250.50,
+                details: {
+                    attributes: [
+                        { label: 'Thickness', value: '4mm' }
+                    ],
+                    lineItems: [
+                        { label: 'Custom Cut', qty: 5, rate: 250.10, total: 1250.50, meta: { l: 100, w: 100, u: 'cm' } }
+                    ]
+                }
+            }
+        ],
+        totalAmount: 1313.03,
         status: 'generated'
     },
     {
         id: 'INV-100233',
         date: '2024-12-16T09:30:00',
         customer: { name: 'Tech Solutions Office', phone: '04-111-2222', type: 'registered' },
-        items: 12,
-        totalAmount: 8400.00,
+        items: [
+            {
+                id: 'inv-item-2',
+                name: 'Heavy Duty Frame (TZ)',
+                totalPrice: 8400.00,
+                details: {
+                    attributes: [
+                        { label: 'Color', value: 'Silver' },
+                        { label: 'Length', value: '19ft' }
+                    ],
+                    lineItems: [
+                        { label: 'Full Length', qty: 20, rate: 420.00, total: 8400.00 }
+                    ]
+                }
+            }
+        ],
+        totalAmount: 8820.00,
         status: 'generated'
     }
 ];

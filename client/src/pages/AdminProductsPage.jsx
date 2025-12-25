@@ -15,11 +15,53 @@ export default function AdminProductsPage() {
     });
     const [selectedUsage, setSelectedUsage] = useState('window');
 
-    const usages = [
-        { id: 'window', label: 'Window' },
-        { id: 'door', label: 'Door' },
-        { id: 'general', label: 'General' },
-    ];
+    // Dynamic Sub-Categories (Mirrors AddProductPage config)
+    const SUB_CATEGORIES = {
+        'ke-profile': [
+            { id: 'window', label: 'Windows' },
+            { id: 'door', label: 'Doors' },
+            { id: 'general', label: 'General' },
+        ],
+        'tz-profile': [
+            { id: 'window', label: 'Windows' },
+            { id: 'door', label: 'Doors' },
+            { id: 'general', label: 'General' },
+        ],
+        'glass': [
+            { id: 'clear', label: 'Clear' },
+            { id: 'oneway', label: 'One/Way' },
+            { id: 'tint', label: 'Tinted' },
+            { id: 'mirror', label: 'Mirror' },
+            { id: 'frost', label: 'Frost' },
+            { id: 'obscure', label: 'Obscure' },
+            { id: 'alucoboard', label: 'Alucoboard' },
+        ],
+        'accessories': [
+            { id: 'general', label: 'General' }
+        ]
+    };
+
+    const usages = useMemo(() => {
+        return SUB_CATEGORIES[selectedCategory] || [];
+    }, [selectedCategory]);
+
+    // Reset usage when category changes
+    // (We use a ref or effect, but here we can just default safely in render or use an effect)
+    // Actually, let's use a simple effect to reset if the current usage isn't valid for the new category
+    // but better is to simple make "selectedUsage" derive or auto-select first if invalid.
+    // For simplicity, let's just use effect.
+    React.useEffect(() => {
+        const validUsages = SUB_CATEGORIES[selectedCategory] || [];
+        if (validUsages.length > 0) {
+            // If current selectedUsage is not in the new valid list, reset to first
+            const exists = validUsages.find(u => u.id === selectedUsage);
+            if (!exists) {
+                setSelectedUsage(validUsages[0].id);
+            }
+        } else {
+            setSelectedUsage('');
+        }
+    }, [selectedCategory]);
 
     // Modal States
     const [deleteModal, setDeleteModal] = useState({ open: false, product: null });

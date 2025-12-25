@@ -80,9 +80,21 @@ export default function AddProductPage() {
     const [matrixValues, setMatrixValues] = useState({});
 
     // --- State for "Existing Variant" ---
-    const [existingSearch, setExistingSearch] = useState('');
-    const [filterCategory, setFilterCategory] = useState('all');
-    const [filterSubCategory, setFilterSubCategory] = useState('all');
+
+    const [filterCategory, setFilterCategory] = useState(() => {
+        return (categories && categories.length > 0) ? categories[0].id : 'ke-profile';
+    });
+    const [filterSubCategory, setFilterSubCategory] = useState('window');
+
+    // Auto-reset subcategory filter when category changes in "Add Variant" mode
+    useEffect(() => {
+        const validSubs = config.subCategories[filterCategory] || [];
+        if (validSubs.length > 0) {
+            setFilterSubCategory(validSubs[0].id);
+        } else {
+            setFilterSubCategory('');
+        }
+    }, [filterCategory, config.subCategories]);
 
     const [selectedExistingProduct, setSelectedExistingProduct] = useState(null);
 
@@ -241,20 +253,17 @@ export default function AddProductPage() {
 
     // --- Handlers: Existing Variant ---
     const filteredExistingProducts = useMemo(() => {
-        return products.filter(p => {
-            const matchesSearch = p.name.toLowerCase().includes(existingSearch.toLowerCase());
-            const matchesCat = filterCategory === 'all' || p.category === filterCategory;
-            const itemUsage = p.usage || 'general';
-            const matchesSub = (filterSubCategory === 'all' || filterCategory === 'all') || itemUsage === filterSubCategory;
-            return matchesSearch && matchesCat && matchesSub;
-        });
-    }, [products, existingSearch, filterCategory, filterSubCategory]);
+        return products.filter(p =>
+            p.category === filterCategory &&
+            (p.usage === filterSubCategory || (!p.usage && filterSubCategory === 'general'))
+        );
+    }, [products, filterCategory, filterSubCategory]);
 
     const handleSelectExisting = (product) => {
         setSelectedExistingProduct(product);
-        setExistingSearch('');
         setVariantSelections({});
-        setVariantPricing({ priceFull: product.priceFull || '', priceHalf: product.priceHalf || '', priceUnit: product.priceUnit || product.priceSqFt || '', initialStock: '' });
+        // User requested NO initial amounts, so we start blank
+        setVariantPricing({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '' });
     };
 
     const handleVariantSelection = (attrKey, value) => {
@@ -433,8 +442,19 @@ export default function AddProductPage() {
 
     const isVariantComplete = useMemo(() => {
         if (!selectedExistingProduct) return false;
-        return activeProductAttributes.every(attr => variantSelections[attr]);
-    }, [activeProductAttributes, variantSelections, selectedExistingProduct]);
+
+        // 1. All Attributes Selected
+        const attrsComplete = activeProductAttributes.every(attr => variantSelections[attr]);
+
+        // 2. Pricing & Stock Filled (Compulsory)
+        const pricingComplete =
+            variantPricing.initialStock !== '' &&
+            variantPricing.priceFull !== '' &&
+            variantPricing.priceHalf !== '' &&
+            variantPricing.priceUnit !== '';
+
+        return attrsComplete && pricingComplete;
+    }, [activeProductAttributes, variantSelections, selectedExistingProduct, variantPricing]);
 
 
     return (
@@ -656,18 +676,59 @@ export default function AddProductPage() {
                                 <h2 className="text-xl font-bold text-gray-900 mb-6">1. Find Existing Product</h2>
                                 {!selectedExistingProduct ? (
                                     <div className="space-y-6">
-                                        <div className="relative">
-                                            <span className="absolute left-5 top-4 text-gray-500">🔍</span>
-                                            <input type="text" autoFocus className="w-full bg-slate-50 border-gray-200 rounded-2xl pl-12 pr-6 py-4 font-medium outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" placeholder="Search by name..." value={existingSearch} onChange={e => setExistingSearch(e.target.value)} />
-                                            {existingSearch && (
-                                                <div className="absolute top-full left-0 right-0 mt-4 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden max-h-60 overflow-y-auto z-10 custom-scrollbar">
-                                                    {filteredExistingProducts.map(p => (
-                                                        <div key={p.id} onClick={() => handleSelectExisting(p)} className="px-6 py-4 hover:bg-blue-50 cursor-pointer flex items-center justify-between border-b border-gray-50 last:border-0">
-                                                            <div className="font-bold text-gray-800">{p.name} <span className="text-xs text-gray-400 font-normal ml-2">{p.category}</span></div>
+                                        <div className="flex flex-col gap-4">
+                                            {/* Filters - Matching AdminProductsPage */}
+                                            <div className="flex gap-2 w-full overflow-x-auto pb-1 scrollbar-hide border-b border-gray-100 pb-4">
+                                                {categories.map(cat => (
+                                                    <button
+                                                        key={cat.id}
+                                                        onClick={() => setFilterCategory(cat.id)}
+                                                        type="button"
+                                                        className={`px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${filterCategory === cat.id ? 'bg-gray-900 text-white shadow-lg shadow-gray-900/20' : 'bg-gray-100/50 text-gray-500 hover:bg-gray-100 border border-gray-100'}`}
+                                                    >
+                                                        {cat.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            <div className="flex gap-2 w-full overflow-x-auto pb-2 scrollbar-hide">
+                                                {(config.subCategories[filterCategory] || []).map(u => (
+                                                    <button
+                                                        key={u.id}
+                                                        onClick={() => setFilterSubCategory(u.id)}
+                                                        type="button"
+                                                        className={`flex-none px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap ${filterSubCategory === u.id ? 'bg-blue-100 text-blue-700 ring-1 ring-blue-200' : 'bg-gray-50 text-gray-400 hover:bg-gray-100'}`}
+                                                    >
+                                                        {u.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            {/* Product Grid */}
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4 max-h-[400px] overflow-y-auto custom-scrollbar p-1">
+                                                {filteredExistingProducts.length === 0 ? (
+                                                    <div className="col-span-full py-12 text-center text-gray-400 italic bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                                                        No products found.
+                                                    </div>
+                                                ) : (
+                                                    filteredExistingProducts.map(p => (
+                                                        <div
+                                                            key={p.id}
+                                                            onClick={() => handleSelectExisting(p)}
+                                                            className="flex flex-col p-4 bg-white border border-gray-100 rounded-2xl hover:border-blue-300 hover:shadow-lg hover:shadow-blue-500/10 transition-all cursor-pointer group"
+                                                        >
+                                                            <div className="flex justify-between items-start mb-2">
+                                                                <div className="w-10 h-10 bg-gray-50 rounded-lg p-1 group-hover:bg-blue-50 transition-colors">
+                                                                    <img src={p.image} alt={p.name} className="w-full h-full object-contain mix-blend-multiply opacity-50 group-hover:opacity-100 transition-opacity" />
+                                                                </div>
+                                                                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">{p.category}</span>
+                                                            </div>
+                                                            <div className="font-bold text-gray-800 group-hover:text-blue-700 transition-colors line-clamp-2">{p.name}</div>
+                                                            <div className="text-xs text-gray-400 mt-1">{p.variants?.length || 0} existing variants</div>
                                                         </div>
-                                                    ))}
-                                                </div>
-                                            )}
+                                                    ))
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                 ) : (
@@ -708,24 +769,27 @@ export default function AddProductPage() {
                                         )}
                                     </div>
 
-                                    <div className="pt-8 border-t border-gray-100">
-                                        <h3 className="text-sm font-bold text-gray-900 mb-4">Stock & Pricing</h3>
-                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div className="mt-8 bg-gradient-to-br from-gray-50 to-blue-50/50 p-6 rounded-2xl border border-blue-100">
+                                        <h3 className="text-sm font-bold text-blue-900 mb-4 flex items-center gap-2">
+                                            <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs">💲</span>
+                                            Stock & Pricing Details
+                                        </h3>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
                                             <div>
                                                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Stock Qty</label>
-                                                <input type="number" name="initialStock" value={variantPricing.initialStock} onChange={handlePricingChange} className="w-full bg-blue-50 border-blue-100 text-blue-900 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500" placeholder="0" />
+                                                <input type="number" name="initialStock" value={variantPricing.initialStock} onChange={handlePricingChange} className="w-full bg-white border-gray-200 text-gray-900 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 shadow-sm" placeholder="0" />
                                             </div>
                                             <div>
-                                                <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Price (Full)</label>
-                                                <input type="number" name="priceFull" value={variantPricing.priceFull} onChange={handlePricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500" placeholder="0.00" />
+                                                <label className="block text-[10px] font-bold text-blue-400 uppercase mb-1">Price (Full)</label>
+                                                <input type="number" name="priceFull" value={variantPricing.priceFull} onChange={handlePricingChange} className="w-full bg-white border-blue-200 text-gray-900 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 shadow-sm" placeholder="0.00" />
                                             </div>
                                             <div>
                                                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Price (Half)</label>
-                                                <input type="number" name="priceHalf" value={variantPricing.priceHalf} onChange={handlePricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500" placeholder="0.00" />
+                                                <input type="number" name="priceHalf" value={variantPricing.priceHalf} onChange={handlePricingChange} className="w-full bg-white border-gray-200 text-gray-900 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 shadow-sm" placeholder="0.00" />
                                             </div>
                                             <div>
                                                 <label className="block text-[10px] font-bold text-gray-400 uppercase mb-1">Price (Unit)</label>
-                                                <input type="number" name="priceUnit" value={variantPricing.priceUnit} onChange={handlePricingChange} className="w-full bg-gray-50 border-gray-200 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500" placeholder="0.00" />
+                                                <input type="number" name="priceUnit" value={variantPricing.priceUnit} onChange={handlePricingChange} className="w-full bg-white border-gray-200 text-gray-900 rounded-xl px-3 py-2.5 font-bold focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 shadow-sm" placeholder="0.00" />
                                             </div>
                                         </div>
                                     </div>

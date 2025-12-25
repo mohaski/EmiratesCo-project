@@ -35,46 +35,52 @@ const AppLayout = () => {
   );
 };
 
+import { OrderProvider } from './context/OrderContext';
+
+// ...
+
 function App() {
   return (
     <AuthProvider>
       <ProductProvider>
-        <Router>
-          <Routes>
-            {/* Public Routes */}
-            <Route path="/login" element={<Login />} />
-            <Route path="/forgot-password" element={<ForgotPassword />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
+        <OrderProvider>
+          <Router>
+            <Routes>
+              {/* Public Routes */}
+              <Route path="/login" element={<Login />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
 
-            {/* Standalone Protected Routes */}
-            <Route path="/checkout" element={
-              <ProtectedRoute>
-                <CheckoutPage />
-              </ProtectedRoute>
-            } />
+              {/* Standalone Protected Routes */}
+              <Route path="/checkout" element={
+                <ProtectedRoute>
+                  <CheckoutPage />
+                </ProtectedRoute>
+              } />
 
-            <Route path="/select-role" element={
-              <ProtectedRoute>
-                <RoleSelectionPage />
-              </ProtectedRoute>
-            } />
+              <Route path="/select-role" element={
+                <ProtectedRoute>
+                  <RoleSelectionPage />
+                </ProtectedRoute>
+              } />
 
-            {/* Protected Main Layout Routes */}
-            <Route element={<AppLayout />}>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/sales" element={<SalesDashboard />} />
-              <Route path="/inventory" element={<InventoryPage />} />
-              <Route path="/add-product" element={<AddProductPage />} />
-              <Route path="/manage-products" element={<AdminProductsPage />} />
-              <Route path="/orders" element={<OrdersPage />} />
+              {/* Protected Main Layout Routes */}
+              <Route element={<AppLayout />}>
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/sales" element={<SalesDashboard />} />
+                <Route path="/inventory" element={<InventoryPage />} />
+                <Route path="/add-product" element={<AddProductPage />} />
+                <Route path="/manage-products" element={<AdminProductsPage />} />
+                <Route path="/orders" element={<OrdersPage />} />
 
-              {/* Invoice Routes */}
-              <Route path="/invoice" element={<InvoiceGenPage />} />
-              <Route path="/invoice/review" element={<InvoiceReviewPage />} />
-            </Route>
+                {/* Invoice Routes */}
+                <Route path="/invoice" element={<InvoiceGenPage />} />
+                <Route path="/invoice/review" element={<InvoiceReviewPage />} />
+              </Route>
 
-          </Routes>
-        </Router>
+            </Routes>
+          </Router>
+        </OrderProvider>
       </ProductProvider>
     </AuthProvider>
   );

@@ -1,16 +1,37 @@
-import React, { useMemo, useRef } from 'react';
+import { useOrders } from '../context/OrderContext';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { PRODUCTS } from '../data/mockProducts';
+import { useMemo } from 'react';
 import logo from '../assets/logo.png';
-
+import { PRODUCTS } from '../data/mockProducts';
 import InvoiceItemRow from '../components/invoices/InvoiceItemRow';
 
+
+// ... inside component ...
 export default function InvoiceReviewPage() {
+    const { addInvoice } = useOrders();
     const location = useLocation();
     const navigate = useNavigate();
 
-    // Default to empty if accessed directly
-    const { cartItems, customer } = location.state || { cartItems: [], customer: null };
+    // Extract data from location state (supports both "New" and "View" modes)
+    const { cartItems, customer, savedInvoice } = useMemo(() => {
+        if (!location.state) return { cartItems: [], customer: null, savedInvoice: null };
+
+        // Mode 1: Viewing a saved invoice
+        if (location.state.invoice) {
+            return {
+                cartItems: location.state.invoice.items || [],
+                customer: location.state.invoice.customer,
+                savedInvoice: location.state.invoice
+            };
+        }
+
+        // Mode 2: Creating new (from Generator)
+        return {
+            cartItems: location.state.cartItems || [],
+            customer: location.state.customer,
+            savedInvoice: null
+        };
+    }, [location.state]);
 
     // --- OPTIMIZATION: Memoize Product Lookup Map ---
     // Converts array search O(n) to object lookup O(1)
@@ -22,19 +43,38 @@ export default function InvoiceReviewPage() {
     }, []);
 
     // --- OPTIMIZATION: Stable Invoice Metadata ---
-    // Prevents Date/Invoice# from changing if the component re-renders
+    // Use saved invoice data if viewing, otherwise generate new defaults
     const invoiceMeta = useMemo(() => ({
-        number: `INV-${Date.now().toString().slice(-6)}`,
-        date: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
-    }), []);
+        number: savedInvoice ? savedInvoice.id : `INV-${Date.now().toString().slice(-6)}`,
+        date: savedInvoice ? new Date(savedInvoice.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+    }), [savedInvoice]);
 
-    // --- OPTIMIZATION: Memoize Totals ---
+    // ... (keep existing memos) ...
+
+    // --- OPTIMIZATION: Memoize Totals (keep existing)
     const totals = useMemo(() => {
         const grandTotal = cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
         const vat = grandTotal * 0.05;
         const total = grandTotal + vat;
         return { grandTotal, vat, total };
     }, [cartItems]);
+
+    const handleSave = () => {
+        if (!customer || cartItems.length === 0) return;
+
+        const invoiceData = {
+            ...invoiceMeta, // number, date
+            customer,
+            items: cartItems,
+            totals,
+            type: 'invoice' // or quote
+        };
+
+        addInvoice(invoiceData);
+        // Show feedback (could use a toast, but basic alert ok for now or just navigate)
+        // alert('Invoice Saved!'); 
+        navigate('/orders'); // Go to orders page to see it
+    };
 
     const handlePrint = () => {
         window.print();
@@ -74,7 +114,7 @@ export default function InvoiceReviewPage() {
                 <div className="flex gap-4 w-full md:w-auto">
                     <button
                         className="flex-1 md:flex-none px-6 py-2 rounded-lg bg-slate-700 text-slate-200 hover:bg-slate-600 font-bold transition-colors shadow-sm"
-                        onClick={() => alert('Save functionality mock')}
+                        onClick={handleSave}
                     >
                         Save as Draft
                     </button>
@@ -84,7 +124,7 @@ export default function InvoiceReviewPage() {
                     >
                         <span>🖨️ Print Invoice</span>
                     </button>
-                </div>
+                </div >
             </div>
 
             {/* Invoice Paper A4 size approx - Scrollable on mobile */}
@@ -167,12 +207,6 @@ export default function InvoiceReviewPage() {
                                 </div>
                             </div>
                         </div>
-                    </div>
-
-                    {/* Bottom Watermark */}
-                    <div className="mt-16 pt-8 border-t border-slate-100 text-center text-xs text-slate-400 print:mt-auto">
-                        <p>System Generated Invoice • All prices include VAT where applicable.</p>
-                        <p className="mt-1 font-mono">EmiratesCo Management System</p>
                     </div>
                 </div>
             </div>

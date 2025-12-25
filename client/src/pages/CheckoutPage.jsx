@@ -79,7 +79,8 @@ export default function CheckoutPage() {
     const navigate = useNavigate();
 
     // Default to empty to prevent crash on direct access
-    const { cartItems = [], customer } = location.state || {};
+    // Default to empty to prevent crash on direct access
+    const { cartItems = [], customer, mode, originalTotal = 0 } = location.state || {};
 
     const [loading, setLoading] = useState(false);
     const [paymentMethod, setPaymentMethod] = useState(null);
@@ -89,7 +90,10 @@ export default function CheckoutPage() {
     const [cashAmount, setCashAmount] = useState('');
 
     const isRegistered = useMemo(() =>
-        customer && customer.id && !customer.id.toString().startsWith('walk-in'),
+        customer && (
+            (customer.type === 'registered') ||
+            (customer.id && !customer.id.toString().startsWith('walk-in'))
+        ),
         [customer]);
 
     // --- OPTIMIZATION: Memoize Financials ---
@@ -99,15 +103,21 @@ export default function CheckoutPage() {
         const discountValue = isPartial ? 0 : (parseFloat(discount) || 0);
         const total = Math.max(0, subtotal + tax - discountValue);
 
+        // Edit Mode Logic
+        const effectiveTotal = mode === 'edit' ? (total - originalTotal) : total;
+        // If effectiveTotal is negative, it's a refund. If positive, it's balance due.
+
         // Payment Logic
-        const currentPayable = isPartial ? (parseFloat(amountPaid) || 0) : total;
-        const balance = Math.max(0, total - currentPayable);
+        // For edit mode, we default to paying the difference
+        const currentPayable = isPartial ? (parseFloat(amountPaid) || 0) : Math.max(0, effectiveTotal);
+
+        const balance = Math.max(0, total - ((mode === 'edit' ? originalTotal : 0) + currentPayable));
         const mpesaAutoAmount = Math.max(0, currentPayable - (parseFloat(cashAmount) || 0));
 
-        return { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount };
-    }, [cartItems, discount, isPartial, amountPaid, cashAmount]);
+        return { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, originalTotal };
+    }, [cartItems, discount, isPartial, amountPaid, cashAmount, mode, originalTotal]);
 
-    const { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount } = financials;
+    const { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal } = financials;
 
     // --- OPTIMIZATION: Stable Handler ---
     const handlePayment = useCallback(() => {
@@ -135,8 +145,17 @@ export default function CheckoutPage() {
             <div className="flex-1 p-8 md:p-12 overflow-y-auto">
                 <div className="max-w-4xl mx-auto">
                     {/* Header Nav */}
+                    {/* Header Nav */}
                     <button
-                        onClick={() => navigate('/sales', { state: { cartItems, customer } })}
+                        onClick={() => navigate('/sales', {
+                            state: {
+                                mode: 'resume',
+                                orderData: {
+                                    items: cartItems,
+                                    customer: customer
+                                }
+                            }
+                        })}
                         className="text-gray-400 hover:text-gray-600 text-sm font-bold mb-6 flex items-center gap-2 transition-colors uppercase tracking-wide"
                     >
                         <span>←</span> Back to Dashboard
@@ -202,7 +221,7 @@ export default function CheckoutPage() {
                     )}
 
                     {/* Partial Toggle */}
-                    {isRegistered && (
+                    {isRegistered && effectiveTotal > 0 && (
                         <div className="p-1 bg-gray-100 rounded-xl flex">
                             <button onClick={() => setIsPartial(false)} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${!isPartial ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Pay Full</button>
                             <button onClick={() => setIsPartial(true)} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${isPartial ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Pay Later / Partial</button>
@@ -210,7 +229,7 @@ export default function CheckoutPage() {
                     )}
 
                     {/* Amount Paying Input */}
-                    {isRegistered && isPartial && (
+                    {isRegistered && isPartial && effectiveTotal > 0 && (
                         <div className="space-y-3">
                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Amount Paying Now</label>
                             <div className="relative">
@@ -223,33 +242,77 @@ export default function CheckoutPage() {
                                     placeholder="Enter amount..."
                                 />
                             </div>
-                            <div className="text-xs font-bold text-red-500 text-right">Balance: Ksh{(total - (parseFloat(amountPaid) || 0)).toFixed(2)}</div>
+                            <div className="text-xs font-bold text-amber-600 text-right">New Balance: Ksh{balance.toFixed(2)}</div>
                         </div>
                     )}
 
-                    {/* Method Selector */}
-                    {currentPayable > 0 && (
-                        <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Select Payment Method</label>
-                            <div className="grid grid-cols-3 gap-2">
-                                {['cash', 'mpesa', 'split'].map(method => (
+                    {/* Payment / Refund Method Selector */}
+                    {effectiveTotal < 0 ? (
+                        /* --- REFUND OPTIONS --- */
+                        <div className="space-y-4">
+                            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
+                                <span className="text-2xl mt-1">⚠️</span>
+                                <div>
+                                    <h3 className="font-bold text-amber-900">Refund Required</h3>
+                                    <p className="text-sm text-amber-700 mt-1">
+                                        This order update results in a negative balance. Please select how to refund the customer.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Select Refund Method</label>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    onClick={() => setPaymentMethod('cash-refund')}
+                                    className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all h-24
+                                        ${paymentMethod === 'cash-refund'
+                                            ? 'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
+                                            : 'border-gray-200 hover:bg-gray-50 text-gray-600'
+                                        }`}
+                                >
+                                    <span className="text-2xl mb-1">💸</span>
+                                    <span className="font-bold text-sm">Cash Refund</span>
+                                </button>
+                                {isRegistered && (
                                     <button
-                                        key={method}
-                                        onClick={() => setPaymentMethod(method)}
-                                        className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all h-24 capitalize
-                                            ${paymentMethod === method
-                                                ? method === 'split' ? 'border-purple-500 bg-purple-50 text-purple-700 ring-1 ring-purple-500' :
-                                                    method === 'mpesa' ? 'border-green-500 bg-green-50 text-green-700 ring-1 ring-green-500' :
-                                                        'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
+                                        onClick={() => setPaymentMethod('store-credit')}
+                                        className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all h-24
+                                            ${paymentMethod === 'store-credit'
+                                                ? 'border-purple-500 bg-purple-50 text-purple-700 ring-1 ring-purple-500'
                                                 : 'border-gray-200 hover:bg-gray-50 text-gray-600'
                                             }`}
                                     >
-                                        <span className="text-2xl mb-1">{method === 'cash' ? '💵' : method === 'mpesa' ? '📱' : '⚖️'}</span>
-                                        <span className="font-bold text-sm">{method}</span>
+                                        <span className="text-2xl mb-1">💳</span>
+                                        <span className="font-bold text-sm">Store Credit</span>
                                     </button>
-                                ))}
+                                )}
                             </div>
                         </div>
+                    ) : (
+                        /* --- STANDARD PAYMENT OPTIONS --- */
+                        currentPayable > 0 && (
+                            <div className="space-y-2">
+                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Select Payment Method</label>
+                                <div className="grid grid-cols-3 gap-2">
+                                    {['cash', 'mpesa', 'split'].map(method => (
+                                        <button
+                                            key={method}
+                                            onClick={() => setPaymentMethod(method)}
+                                            className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all h-24 capitalize
+                                                ${paymentMethod === method
+                                                    ? method === 'split' ? 'border-purple-500 bg-purple-50 text-purple-700 ring-1 ring-purple-500' :
+                                                        method === 'mpesa' ? 'border-green-500 bg-green-50 text-green-700 ring-1 ring-green-500' :
+                                                            'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
+                                                    : 'border-gray-200 hover:bg-gray-50 text-gray-600'
+                                                }`}
+                                        >
+                                            <span className="text-2xl mb-1">{method === 'cash' ? '💵' : method === 'mpesa' ? '📱' : '⚖️'}</span>
+                                            <span className="font-bold text-sm">{method}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )
                     )}
 
                     {/* Split Form */}
@@ -296,9 +359,21 @@ export default function CheckoutPage() {
                                 <span className="font-mono">-${discountValue.toFixed(2)}</span>
                             </div>
                         )}
-                        <div className="flex justify-between text-gray-900 font-bold pt-2 border-t border-gray-100">
-                            <span>Total</span>
-                            <span className="font-mono text-lg">Ksh{total.toFixed(2)}</span>
+                        {mode === 'edit' && (
+                            <div className="flex justify-between text-blue-600 font-medium bg-blue-50 px-2 py-1 rounded">
+                                <span>Original Paid</span>
+                                <span className="font-mono">- Ksh{originalTotal.toFixed(2)}</span>
+                            </div>
+                        )}
+                        <div className="flex justify-between text-gray-900 pt-2 border-t border-gray-100 font-bold text-lg items-baseline">
+                            <span>
+                                {mode === 'edit'
+                                    ? (effectiveTotal >= 0 ? 'Balance Due' : 'Refund Due')
+                                    : 'Total'}
+                            </span>
+                            <span className={`text-2xl tracking-tight ${mode === 'edit' ? (effectiveTotal >= 0 ? 'text-amber-600' : 'text-blue-600') : ''}`}>
+                                Ksh{Math.abs(mode === 'edit' ? effectiveTotal : total).toFixed(2)}
+                            </span>
                         </div>
                     </div>
 

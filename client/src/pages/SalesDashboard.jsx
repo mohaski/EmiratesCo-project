@@ -45,7 +45,7 @@ export default function SalesDashboard() {
 
     // --- INITIALIZATION EFFECT ---
     useEffect(() => {
-        if (location.state?.mode === 'edit' && location.state?.orderData) {
+        if ((location.state?.mode === 'edit' || location.state?.mode === 'resume') && location.state?.orderData) {
             setCart(location.state.orderData.items);
             setSelectedCustomer(location.state.orderData.customer);
         } else if (location.state?.mode === 'link' && location.state?.customer) {
@@ -272,12 +272,19 @@ export default function SalesDashboard() {
                             onRemoveItem={handleRemoveItem}
                             onEditItem={handleEditCartItem}
                             customer={selectedCustomer}
-                            mode={location.state?.mode}
+                            mode={location.state?.mode === 'edit' ? 'edit' : undefined}
                             originalTotal={location.state?.mode === 'edit' ? location.state.orderData.totalAmount : 0}
                             actionLabel={location.state?.mode === 'edit' ? 'Update Order' : 'Checkout'}
                             onAction={location.state?.mode === 'edit' ? () => {
-                                alert("Order Updated Successfully!");
-                                navigate('/orders');
+                                navigate('/checkout', {
+                                    state: {
+                                        cartItems: cart,
+                                        customer: selectedCustomer,
+                                        mode: 'edit',
+                                        originalTotal: location.state.orderData.totalAmount || 0,
+                                        orderId: location.state.orderData.id
+                                    }
+                                });
                             } : undefined}
                         />
                     </div>

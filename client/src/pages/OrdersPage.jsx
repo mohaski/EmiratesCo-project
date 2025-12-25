@@ -1,43 +1,78 @@
-import React, { useState, useMemo, useCallback, useDeferredValue, memo } from 'react';
+import { useOrders } from '../context/OrderContext';
 import { useNavigate } from 'react-router-dom';
-import { MOCK_ORDERS, MOCK_INVOICES } from '../data/mockOrders';
-
-// --- Imports ---
+import { useState, useCallback, useMemo, useDeferredValue } from 'react';
 import OrderCard from '../components/orders/OrderCard';
 import InvoiceCard from '../components/orders/InvoiceCard';
+
+// ...
 
 // --- MAIN COMPONENT ---
 export default function OrdersPage() {
     const navigate = useNavigate();
+    const { orders, invoices, convertInvoiceToOrder, deleteOrder, deleteInvoice } = useOrders();
     const [activeTab, setActiveTab] = useState('orders'); // 'orders' | 'invoices'
     const [searchQuery, setSearchQuery] = useState('');
 
     // OPTIMIZATION: Deferred value keeps the UI responsive while filtering
     const deferredQuery = useDeferredValue(searchQuery);
 
-    // --- OPTIMIZATION: Memoized Filtering ---
-    const filteredOrders = useMemo(() => {
-        // Return empty if not active tab to save calculation
+    // --- HELPERS ---
+    const groupItemsByDate = useCallback((items) => {
+        const groups = {};
+
+        // Sort by date descending first
+        const sorted = [...items].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        sorted.forEach(item => {
+            const date = new Date(item.date);
+            const today = new Date();
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+
+            let key = date.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+            if (date.toDateString() === today.toDateString()) {
+                key = 'Today';
+            } else if (date.toDateString() === yesterday.toDateString()) {
+                key = 'Yesterday';
+            }
+
+            if (!groups[key]) {
+                groups[key] = [];
+            }
+            groups[key].push(item);
+        });
+
+        // Convert to array for rendering (keys preserve insertion order mostly, but safety check)
+        return Object.entries(groups).map(([title, items]) => ({ title, items }));
+    }, []);
+
+    // --- OPTIMIZATION: Memoize Filtering & Grouping ---
+    const groupedOrders = useMemo(() => {
         if (activeTab !== 'orders') return [];
 
         const lowerQuery = deferredQuery.toLowerCase();
-        return MOCK_ORDERS.filter(o =>
+        const filtered = orders.filter(o =>
             !lowerQuery ||
             o.id.toLowerCase().includes(lowerQuery) ||
             o.customer.name.toLowerCase().includes(lowerQuery)
-        ).sort((a, b) => new Date(b.date) - new Date(a.date));
-    }, [activeTab, deferredQuery]);
+        );
 
-    const filteredInvoices = useMemo(() => {
+        return groupItemsByDate(filtered);
+    }, [activeTab, deferredQuery, orders, groupItemsByDate]);
+
+    const groupedInvoices = useMemo(() => {
         if (activeTab !== 'invoices') return [];
 
         const lowerQuery = deferredQuery.toLowerCase();
-        return MOCK_INVOICES.filter(i =>
+        const filtered = invoices.filter(i =>
             !lowerQuery ||
             i.id.toLowerCase().includes(lowerQuery) ||
             i.customer.name.toLowerCase().includes(lowerQuery)
-        ).sort((a, b) => new Date(b.date) - new Date(a.date));
-    }, [activeTab, deferredQuery]);
+        );
+
+        return groupItemsByDate(filtered);
+    }, [activeTab, deferredQuery, invoices, groupItemsByDate]);
 
     // -- Actions (Stable Handlers) --
     const handleAddTo = useCallback((order) => {
@@ -62,7 +97,15 @@ export default function OrdersPage() {
     const handleViewInvoice = useCallback((invoice) => {
         navigate('/invoice/review', {
             state: {
-                cartItems: [], // load real items here
+                invoice: invoice
+            }
+        });
+    }, [navigate]);
+
+    const handleConvertInvoice = useCallback((invoice) => {
+        navigate('/checkout', {
+            state: {
+                cartItems: invoice.items,
                 customer: invoice.customer
             }
         });
@@ -115,31 +158,46 @@ export default function OrdersPage() {
             <div className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar">
 
                 {activeTab === 'orders' && (
-                    <div className="grid grid-cols-1 gap-4">
-                        {filteredOrders.map(order => (
-                            <OrderCard
-                                key={order.id}
-                                order={order}
-                                onAddTo={handleAddTo}
-                                onEdit={handleEdit}
-                            />
+                    <div className="flex flex-col gap-8">
+                        {groupedOrders.map(group => (
+                            <div key={group.title}>
+                                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 pl-1">{group.title}</h3>
+                                <div className="grid grid-cols-1 gap-4">
+                                    {group.items.map(order => (
+                                        <OrderCard
+                                            key={order.id}
+                                            order={order}
+                                            onAddTo={handleAddTo}
+                                            onEdit={handleEdit}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
                         ))}
-                        {filteredOrders.length === 0 && (
+                        {groupedOrders.length === 0 && (
                             <div className="text-center text-gray-400 py-12">No orders found matching "{searchQuery}"</div>
                         )}
                     </div>
                 )}
 
                 {activeTab === 'invoices' && (
-                    <div className="grid grid-cols-1 gap-4">
-                        {filteredInvoices.map(inv => (
-                            <InvoiceCard
-                                key={inv.id}
-                                invoice={inv}
-                                onView={handleViewInvoice}
-                            />
+                    <div className="flex flex-col gap-8">
+                        {groupedInvoices.map(group => (
+                            <div key={group.title}>
+                                <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 pl-1">{group.title}</h3>
+                                <div className="grid grid-cols-1 gap-4">
+                                    {group.items.map(inv => (
+                                        <InvoiceCard
+                                            key={inv.id}
+                                            invoice={inv}
+                                            onView={handleViewInvoice}
+                                            onConvert={handleConvertInvoice}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
                         ))}
-                        {filteredInvoices.length === 0 && (
+                        {groupedInvoices.length === 0 && (
                             <div className="text-center text-gray-400 py-12">No invoices found matching "{searchQuery}"</div>
                         )}
                     </div>
