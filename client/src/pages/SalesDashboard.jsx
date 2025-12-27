@@ -4,6 +4,7 @@ import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
 import CartSidebar from '../components/sales/CartSidebar';
 import { useProducts } from '../context/ProductContext';
+import { useCart } from '../context/CartContext';
 import { CUSTOMERS } from '../data/mockCustomers';
 import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 import logo from '../assets/logo.png';
@@ -28,33 +29,52 @@ export default function SalesDashboard() {
         isProfileCategory
     } = useProductFiltering();
 
-    // --- LOCAL STATE ---
+    // --- LOCAL STATE (UI Only) ---
     // Modal & Selection State
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
     const [editingIndex, setEditingIndex] = useState(null);
     const [initialModalDetails, setInitialModalDetails] = useState(null);
 
-    // Customer State
-    const [selectedCustomer, setSelectedCustomer] = useState(location.state?.customer || null);
+    // --- GLOBAL CART STATE (Context) ---
+    const {
+        cartItems: cart,
+        customer: selectedCustomer,
+        setCustomer: setSelectedCustomer,
+        taxEnabled: enableTax,
+        setTaxEnabled: setEnableTax,
+        addToCart,
+        updateCartItem,
+        removeFromCart,
+        loadOrder
+    } = useCart();
 
-    // Cart State
-    const [cart, setCart] = useState([]);
-    const [isCartOpen, setIsCartOpen] = useState(false); // Mobile Cart Drawer State
+    // Mobile Cart Drawer State
+    const [isCartOpen, setIsCartOpen] = useState(false);
 
 
     // --- INITIALIZATION EFFECT ---
     useEffect(() => {
+        // Only override context logic if strictly necessary (e.g. Editing/Resuming)
+        // Normal navigation shouldn't wipe the cart because Context handles persistence.
+
         if ((location.state?.mode === 'edit' || location.state?.mode === 'resume') && location.state?.orderData) {
-            setCart(location.state.orderData.items);
-            setSelectedCustomer(location.state.orderData.customer);
+            // Load historical order
+            loadOrder(location.state.orderData);
+
+            // Tax Logic for historical
+            const cust = location.state.orderData.customer;
+            setEnableTax(!cust || cust.type === 'corporate');
+
         } else if (location.state?.mode === 'link' && location.state?.customer) {
+            // Linking (New Order for specific customer)
+            // Ideally clear cart? 
+            // clearCart(); // Dependent on UX requirements. Assume yes for new link.
             setSelectedCustomer(location.state.customer);
-            setCart([]);
-        } else if (location.state?.cartItems) {
-            setCart(location.state.cartItems);
+            setEnableTax(!location.state.customer || location.state.customer.type === 'corporate');
         }
-    }, [location.state]);
+        // Note: We removed the generic `location.state.cartItems` check because Context persistence > passing state.
+    }, [location.state, loadOrder, setSelectedCustomer, setEnableTax]);
 
 
     // --- OPTIMIZED HANDLERS (useCallback) ---
@@ -66,38 +86,33 @@ export default function SalesDashboard() {
     }, []);
 
     const handleEditCartItem = useCallback((index) => {
-        setCart((currentCart) => {
-            const item = currentCart[index];
-            const originalProduct = PRODUCTS.find(p => p.id === item.id);
-            if (originalProduct) {
-                // We need to defer state updates to avoid conflicts during render
-                // But in event handlers, it's fine.
-                setSelectedProduct(originalProduct);
-                setEditingIndex(index);
-                setInitialModalDetails(item.details);
-                setModalOpen(true);
-                setIsCartOpen(true); // Open drawer on edit
-            }
-            return currentCart;
-        });
-    }, [PRODUCTS]);
+        // Access current cart from context/prop directly
+        const item = cart[index];
+        if (!item) return;
+        const originalProduct = PRODUCTS.find(p => p.id === item.id);
+        if (originalProduct) {
+            // We need to defer state updates to avoid conflicts during render
+            // But in event handlers, it's fine.
+            setSelectedProduct(originalProduct);
+            setEditingIndex(index);
+            setInitialModalDetails(item.details);
+            setModalOpen(true);
+            setIsCartOpen(true); // Open drawer on edit
+        }
+    }, [cart, PRODUCTS]);
 
     const handleAddToOrder = useCallback((orderItem) => {
-        setCart(prevCart => {
-            if (editingIndex !== null) {
-                const newCart = [...prevCart];
-                newCart[editingIndex] = orderItem;
-                setEditingIndex(null); // Reset after update
-                return newCart;
-            } else {
-                return [...prevCart, orderItem];
-            }
-        });
-    }, [editingIndex]);
+        if (editingIndex !== null) {
+            updateCartItem(editingIndex, orderItem);
+            setEditingIndex(null);
+        } else {
+            addToCart(orderItem);
+        }
+    }, [editingIndex, addToCart, updateCartItem]);
 
     const handleRemoveItem = useCallback((index) => {
-        setCart(prev => prev.filter((_, i) => i !== index));
-    }, []);
+        removeFromCart(index);
+    }, [removeFromCart]);
 
     const handleModalClose = useCallback(() => {
         setModalOpen(false);
@@ -107,6 +122,8 @@ export default function SalesDashboard() {
 
     const handleCustomerSelect = useCallback((customer) => {
         setSelectedCustomer(customer);
+        // Auto-set tax defaults when changing customer
+        setEnableTax(!customer || customer.type === 'corporate');
     }, []);
 
     return (
@@ -272,6 +289,8 @@ export default function SalesDashboard() {
                             onRemoveItem={handleRemoveItem}
                             onEditItem={handleEditCartItem}
                             customer={selectedCustomer}
+                            enableTax={enableTax}
+                            onToggleTax={setEnableTax}
                             mode={location.state?.mode === 'edit' ? 'edit' : undefined}
                             originalTotal={location.state?.mode === 'edit' ? location.state.orderData.totalAmount : 0}
                             actionLabel={location.state?.mode === 'edit' ? 'Update Order' : 'Checkout'}

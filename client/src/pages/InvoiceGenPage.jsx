@@ -4,6 +4,7 @@ import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
 import CartSidebar from '../components/sales/CartSidebar';
 import { useProducts } from '../context/ProductContext';
+import { useCart } from '../context/CartContext'; // Import Context
 import { CUSTOMERS } from '../data/mockCustomers';
 import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 
@@ -32,9 +33,20 @@ export default function InvoiceGenPage() {
     const [editingIndex, setEditingIndex] = useState(null);
     const [initialModalDetails, setInitialModalDetails] = useState(null);
 
-    const [selectedCustomer, setSelectedCustomer] = useState(location.state?.customer || null);
-    const [cart, setCart] = useState(location.state?.cartItems || []);
-    const [isCartOpen, setIsCartOpen] = useState(false); // Mobile Cart Drawer State
+    // --- GLOBAL CART STATE (Context) ---
+    const {
+        cartItems: cart,
+        customer: selectedCustomer,
+        setCustomer: setSelectedCustomer,
+        taxEnabled: enableTax,
+        setTaxEnabled: setEnableTax,
+        addToCart,
+        updateCartItem,
+        removeFromCart
+    } = useCart();
+
+    // Mobile Cart Drawer State
+    const [isCartOpen, setIsCartOpen] = useState(false);
 
     // --- STABLE HANDLERS ---
     const handleProductClick = useCallback((product) => {
@@ -45,40 +57,34 @@ export default function InvoiceGenPage() {
     }, []);
 
     const handleEditCartItem = useCallback((index) => {
-        setCart((currentCart) => {
-            const item = currentCart[index];
-            // Use filteredProducts or PRODUCTS to find original? generic PRODUCTS is safer as filtered might hide it
-            const originalProduct = PRODUCTS.find(p => p.id === item.id);
-            if (originalProduct) {
-                // Defer UI updates slightly to avoid conflicts
-                setTimeout(() => {
-                    setSelectedProduct(originalProduct);
-                    setEditingIndex(index);
-                    setInitialModalDetails(item.details);
-                    setModalOpen(true);
-                    setIsCartOpen(true); // Open drawer on edit
-                }, 0);
-            }
-            return currentCart;
-        });
-    }, [PRODUCTS]);
+        const item = cart[index];
+        if (!item) return;
+
+        const originalProduct = PRODUCTS.find(p => p.id === item.id);
+        if (originalProduct) {
+            // Defer UI updates slightly to avoid conflicts
+            setTimeout(() => {
+                setSelectedProduct(originalProduct);
+                setEditingIndex(index);
+                setInitialModalDetails(item.details);
+                setModalOpen(true);
+                setIsCartOpen(true); // Open drawer on edit
+            }, 0);
+        }
+    }, [cart, PRODUCTS]);
 
     const handleAddToOrder = useCallback((orderItem) => {
-        setCart(prevCart => {
-            if (editingIndex !== null) {
-                const newCart = [...prevCart];
-                newCart[editingIndex] = orderItem;
-                setEditingIndex(null);
-                return newCart;
-            } else {
-                return [...prevCart, orderItem];
-            }
-        });
-    }, [editingIndex]);
+        if (editingIndex !== null) {
+            updateCartItem(editingIndex, orderItem);
+            setEditingIndex(null);
+        } else {
+            addToCart(orderItem);
+        }
+    }, [editingIndex, addToCart, updateCartItem]);
 
     const handleRemoveItem = useCallback((index) => {
-        setCart(prev => prev.filter((_, i) => i !== index));
-    }, []);
+        removeFromCart(index);
+    }, [removeFromCart]);
 
     const handleModalClose = useCallback(() => {
         setModalOpen(false);
@@ -87,12 +93,14 @@ export default function InvoiceGenPage() {
     }, []);
 
     const handleReviewInvoice = useCallback(() => {
-        navigate('/invoice/review', { state: { cartItems: cart, customer: selectedCustomer } });
-    }, [cart, selectedCustomer, navigate]);
+        // Navigate implies we rely on Context Persistence now
+        navigate('/invoice/review');
+    }, [navigate]);
 
     const handleCustomerSelect = useCallback((customer) => {
         setSelectedCustomer(customer);
-    }, []);
+        setEnableTax(!customer || customer.type === 'corporate');
+    }, [setSelectedCustomer, setEnableTax]);
 
     return (
         <div className="flex h-full w-full overflow-hidden text-gray-800 font-sans bg-slate-100 relative">
@@ -247,6 +255,8 @@ export default function InvoiceGenPage() {
                             customer={selectedCustomer}
                             actionLabel="Review Invoice"
                             onAction={handleReviewInvoice}
+                            enableTax={enableTax}
+                            onToggleTax={setEnableTax}
                         />
                     </div>
                 </div>

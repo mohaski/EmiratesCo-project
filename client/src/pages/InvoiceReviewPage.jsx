@@ -4,6 +4,8 @@ import { useMemo } from 'react';
 import logo from '../assets/logo.png';
 import { PRODUCTS } from '../data/mockProducts';
 import InvoiceItemRow from '../components/invoices/InvoiceItemRow';
+import { useCart } from '../context/CartContext';
+import { useCartTotals } from '../hooks/useCartTotals';
 
 
 // ... inside component ...
@@ -12,26 +14,29 @@ export default function InvoiceReviewPage() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    // Extract data from location state (supports both "New" and "View" modes)
-    const { cartItems, customer, savedInvoice } = useMemo(() => {
-        if (!location.state) return { cartItems: [], customer: null, savedInvoice: null };
+    // --- GLOBAL CONTEXT ---
+    const { cartItems: ctxCart, customer: ctxCustomer, taxEnabled: ctxTax } = useCart();
 
-        // Mode 1: Viewing a saved invoice
-        if (location.state.invoice) {
+    // Extract data from location state (supports both "New" and "View" modes)
+    const { cartItems, customer, savedInvoice, enableTax } = useMemo(() => {
+        // Mode 1: Viewing a saved invoice (passed via location)
+        if (location.state?.invoice) {
             return {
                 cartItems: location.state.invoice.items || [],
                 customer: location.state.invoice.customer,
-                savedInvoice: location.state.invoice
+                savedInvoice: location.state.invoice,
+                enableTax: true // Default/Assumption for saved invocies
             };
         }
 
-        // Mode 2: Creating new (from Generator)
+        // Mode 2: Creating new (from Generator/Context)
         return {
-            cartItems: location.state.cartItems || [],
-            customer: location.state.customer,
-            savedInvoice: null
+            cartItems: ctxCart, // Use Context
+            customer: ctxCustomer,
+            savedInvoice: null,
+            enableTax: ctxTax
         };
-    }, [location.state]);
+    }, [location.state, ctxCart, ctxCustomer, ctxTax]);
 
     // --- OPTIMIZATION: Memoize Product Lookup Map ---
     // Converts array search O(n) to object lookup O(1)
@@ -43,7 +48,6 @@ export default function InvoiceReviewPage() {
     }, []);
 
     // --- OPTIMIZATION: Stable Invoice Metadata ---
-    // Use saved invoice data if viewing, otherwise generate new defaults
     const invoiceMeta = useMemo(() => ({
         number: savedInvoice ? savedInvoice.id : `INV-${Date.now().toString().slice(-6)}`,
         date: savedInvoice ? new Date(savedInvoice.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -51,13 +55,15 @@ export default function InvoiceReviewPage() {
 
     // ... (keep existing memos) ...
 
-    // --- OPTIMIZATION: Memoize Totals (keep existing)
-    const totals = useMemo(() => {
-        const grandTotal = cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
-        const vat = grandTotal * 0.05;
-        const total = grandTotal + vat;
-        return { grandTotal, vat, total };
-    }, [cartItems]);
+    // --- OPTIMIZATION: Memoize Totals (via Hook) ---
+    const { subtotal, tax, total } = useCartTotals(cartItems, enableTax);
+
+    // Adapter for existing code expecting 'totals' object with 'grandTotal' as subtotal
+    const totals = useMemo(() => ({
+        grandTotal: subtotal,
+        vat: tax,
+        total
+    }), [subtotal, tax, total]);
 
     const handleSave = () => {
         if (!customer || cartItems.length === 0) return;
@@ -106,7 +112,7 @@ export default function InvoiceReviewPage() {
             {/* Action Bar (Hidden when printing) */}
             <div className="w-full md:max-w-[210mm] mx-auto mb-6 flex flex-col md:flex-row justify-between items-center gap-4 md:gap-0 print:hidden">
                 <button
-                    onClick={() => navigate('/invoice', { state: { cartItems, customer } })}
+                    onClick={() => navigate('/invoice')}
                     className="flex items-center text-slate-300 hover:text-white transition-colors font-medium self-start md:self-auto"
                 >
                     ← Back to Edit
@@ -198,7 +204,7 @@ export default function InvoiceReviewPage() {
                                     <span className="font-mono">${totals.grandTotal.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between text-slate-500 text-sm">
-                                    <span className="font-medium">VAT (5%)</span>
+                                    <span className="font-medium">VAT (16%)</span>
                                     <span className="font-mono">${totals.vat.toFixed(2)}</span>
                                 </div>
                                 <div className="flex justify-between text-slate-900 pt-4 border-t border-slate-200 text-xl font-bold">

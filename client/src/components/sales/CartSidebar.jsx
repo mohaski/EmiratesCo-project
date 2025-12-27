@@ -1,5 +1,6 @@
-import React, { useMemo, useCallback, memo } from 'react';
+import React, { useMemo, useCallback, memo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useCartTotals } from '../../hooks/useCartTotals';
 
 // --- OPTIMIZATION 1: Extract and Memoize the List Item ---
 // This prevents every single item from re-rendering when you add/remove just one.
@@ -193,35 +194,21 @@ const CartItem = memo(({ item, index, onEdit, onRemove }) => {
 });
 
 // --- MAIN COMPONENT ---
-export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, customer, actionLabel, onAction, mode, originalTotal = 0 }) {
+export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, customer, actionLabel, onAction, mode, originalTotal = 0, enableTax, onToggleTax }) {
     const navigate = useNavigate();
+
+
 
     // --- OPTIMIZATION 2: Memoize Financial Math ---
     // Only recalculate when cartItems or originalTotal changes
-    const financials = useMemo(() => {
-        const subTotal = (cartItems || []).reduce((sum, item) => sum + (item.totalPrice || 0), 0);
-        const vat = subTotal * 0.05;
-        const grandTotal = subTotal + vat;
+    // --- OPTIMIZATION 2: Centralized Financials via Hook ---
+    const { subtotal: subTotal, tax: vat, total: grandTotal } = useCartTotals(cartItems, enableTax);
 
-        // Final total logic from your code (grandTotal * 1.05)
-        //const displayTotal = grandTotal * 1.05;
-
-        // Reconciliation
-        const balance = grandTotal - originalTotal;
-
-        return {
-            subTotal,
-            vat,
-            grandTotal,
-            //displayTotal,
-            balance,
-            isOwing: balance > 0,
-            isRefund: balance < 0,
-            isBalanced: Math.abs(balance) < 10
-        };
-    }, [cartItems, originalTotal]);
-
-    const { subTotal, vat, grandTotal, balance, isOwing, isRefund, isBalanced } = financials;
+    // Balance / Edit Mode Logic (Specific to this component's needs)
+    const balance = grandTotal - originalTotal;
+    const isOwing = balance > 0;
+    const isRefund = balance < 0;
+    const isBalanced = Math.abs(balance) < 10;
 
     // --- OPTIMIZATION 3: Stable Handler ---
     const handleAction = useCallback(() => {
@@ -231,11 +218,12 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
             navigate('/checkout', {
                 state: {
                     cartItems,
-                    customer
+                    customer,
+                    enableTax // Pass tax state
                 }
             });
         }
-    }, [onAction, navigate, cartItems, customer]);
+    }, [onAction, navigate, cartItems, customer, enableTax]);
 
     return (
         <div className="w-96 flex-shrink-0 bg-white border-l border-gray-100 flex flex-col h-full shadow-[0_0_50px_rgba(0,0,0,0.05)] z-30 font-sans tracking-tight">
@@ -309,14 +297,28 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
 
                 {originalTotal === 0 && (
                     <div className="space-y-4 mb-8">
-                        <div className="flex justify-between text-gray-500 text-sm">
-                            <span className="font-medium">Subtotal</span>
+                        <div className="flex justify-between text-gray-500 text-sm group relative">
+                            <div className="flex items-center gap-2">
+                                <span className="font-medium">Subtotal</span>
+                                {/* Stealth Tax Toggle */}
+                                <input
+                                    type="checkbox"
+                                    checked={enableTax}
+                                    onChange={(e) => onToggleTax && onToggleTax(e.target.checked)}
+                                    className="w-3 h-3 rounded border-gray-300 text-gray-400 focus:ring-0 opacity-0 group-hover:opacity-30 transition-opacity cursor-pointer"
+                                    title="Toggle Tax"
+                                />
+                            </div>
                             <span className="font-mono tracking-tight">Ksh{subTotal.toFixed(2)}</span>
                         </div>
-                        <div className="flex justify-between text-gray-500 text-sm">
-                            <span className="font-medium">VAT (5%)</span>
-                            <span className="font-mono tracking-tight">Ksh{vat.toFixed(2)}</span>
-                        </div>
+
+                        {enableTax && (
+                            <div className="flex justify-between text-gray-500 text-sm animate-fade-in">
+                                <span className="font-medium">VAT (16%)</span>
+                                <span className="font-mono tracking-tight">Ksh{vat.toFixed(2)}</span>
+                            </div>
+                        )}
+
                         <div className="flex justify-between text-gray-900 items-baseline pt-4 border-t border-gray-200">
                             <span className="font-bold text-xl">Total</span>
                             <span className="font-bold text-3xl tracking-tighter">Ksh{grandTotal.toFixed(2)}</span>

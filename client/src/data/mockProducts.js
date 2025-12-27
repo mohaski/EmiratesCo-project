@@ -17,6 +17,19 @@ export const PRODUCTS = [
         ]
     },
 
+    {
+        id: 'g1',
+        name: '4mm Clear Glass',
+        category: 'glass',
+        priceFull: 2200, // Price per sheet
+        image: 'https://placehold.co/300x200/87CEEB/333333?text=4mm+Glass',
+        attributes: {
+            Color: ['Clear', 'Tinted', 'Reflective', 'Frosted'],
+            Thickness: ['4mm', '5mm', '6mm']
+        },
+        defaultAttributes: { Color: 'Clear', Thickness: '4mm' }
+    },
+
     // --- Accessories ---
     {
         id: 'a1',
@@ -84,3 +97,4 @@ export const CATEGORIES = [
     { id: 'glass', label: 'Glass', icon: '🪟' },
     { id: 'accessories', label: 'Accessories', icon: '🔩' },
 ];
+

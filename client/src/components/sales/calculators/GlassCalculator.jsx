@@ -13,7 +13,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             ? product.attributes
             : Object.keys(product.attributes || {});
 
-        const allowedKeys = attrKeys.filter(key => key !== 'Category' && key !== 'Color');
+        const allowedKeys = attrKeys.filter(key => key !== 'Category');
 
         if (product.variants && product.variants.length > 0) {
             product.variants.forEach(v => {

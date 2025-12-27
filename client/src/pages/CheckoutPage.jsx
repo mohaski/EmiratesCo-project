@@ -1,13 +1,14 @@
 import React, { useState, useMemo, useCallback, memo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { PRODUCTS } from '../data/mockProducts';
+import { useCart } from '../context/CartContext';
+import { useCartTotals } from '../hooks/useCartTotals';
 
 // --- SUB-COMPONENT: Memoized Item Card ---
 // Extracts complex rendering logic so the list doesn't re-render when payment inputs change
 // --- SUB-COMPONENT: Memoized Item Card ---
 const ReviewItemCard = memo(({ item }) => {
     // Helper to find product def safely
-    console.log(item)
     return (
         <div className="grid grid-cols-12 gap-6 p-6 hover:bg-gray-50/50 transition-colors group border-b border-gray-100 last:border-0">
             {/* Product Info */}
@@ -78,9 +79,11 @@ export default function CheckoutPage() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    // Default to empty to prevent crash on direct access
-    // Default to empty to prevent crash on direct access
-    const { cartItems = [], customer, mode, originalTotal = 0 } = location.state || {};
+    // --- GLOBAL STATE (Context) ---
+    const { cartItems, customer, taxEnabled: enableTax, clearCart } = useCart();
+
+    // Mode specific state still comes from location (e.g. are we editing?)
+    const { mode, originalTotal = 0 } = location.state || {};
 
     const [loading, setLoading] = useState(false);
     const [paymentMethod, setPaymentMethod] = useState(null);
@@ -89,19 +92,20 @@ export default function CheckoutPage() {
     const [amountPaid, setAmountPaid] = useState('');
     const [cashAmount, setCashAmount] = useState('');
 
-    const isRegistered = useMemo(() =>
-        customer && (
-            (customer.type === 'registered') ||
-            (customer.id && !customer.id.toString().startsWith('walk-in'))
-        ),
-        [customer]);
+    const isRegistered = useMemo(() => {
+        if (!customer) return false;
+        // Strict check: Only allow credit for specific account types
+        const CREDIT_TYPES = ['registered', 'corporate', 'frequent'];
+        return CREDIT_TYPES.includes(customer.type);
+    }, [customer]);
 
     // --- OPTIMIZATION: Memoize Financials ---
+    // --- OPTIMIZATION: Memoize Financials via Hook ---
+    const { subtotal, tax, total: baseTotal } = useCartTotals(cartItems, enableTax);
+
     const financials = useMemo(() => {
-        const subtotal = cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
-        const tax = subtotal * 0.05;
         const discountValue = isPartial ? 0 : (parseFloat(discount) || 0);
-        const total = Math.max(0, subtotal + tax - discountValue);
+        const total = Math.max(0, baseTotal - discountValue);
 
         // Edit Mode Logic
         const effectiveTotal = mode === 'edit' ? (total - originalTotal) : total;
@@ -115,19 +119,21 @@ export default function CheckoutPage() {
         const mpesaAutoAmount = Math.max(0, currentPayable - (parseFloat(cashAmount) || 0));
 
         return { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, originalTotal };
-    }, [cartItems, discount, isPartial, amountPaid, cashAmount, mode, originalTotal]);
+    }, [baseTotal, subtotal, tax, discount, isPartial, amountPaid, cashAmount, mode, originalTotal]);
 
-    const { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal } = financials;
+    const { discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal } = financials;
 
+    // --- OPTIMIZATION: Stable Handler ---
     // --- OPTIMIZATION: Stable Handler ---
     const handlePayment = useCallback(() => {
         setLoading(true);
         setTimeout(() => {
             setLoading(false);
             alert('Payment Successful! Order Placed.');
+            clearCart(); // Clear context state
             navigate('/');
         }, 2000);
-    }, [navigate]);
+    }, [navigate, clearCart]);
 
     if (cartItems.length === 0) {
         return (
@@ -147,15 +153,7 @@ export default function CheckoutPage() {
                     {/* Header Nav */}
                     {/* Header Nav */}
                     <button
-                        onClick={() => navigate('/sales', {
-                            state: {
-                                mode: 'resume',
-                                orderData: {
-                                    items: cartItems,
-                                    customer: customer
-                                }
-                            }
-                        })}
+                        onClick={() => navigate('/sales')}
                         className="text-gray-400 hover:text-gray-600 text-sm font-bold mb-6 flex items-center gap-2 transition-colors uppercase tracking-wide"
                     >
                         <span>←</span> Back to Dashboard
@@ -338,9 +336,16 @@ export default function CheckoutPage() {
                                     readOnly
                                 />
                             </div>
+                            {(parseFloat(cashAmount) || 0) > currentPayable && (
+                                <div className="text-red-500 text-xs font-bold pt-1">
+                                    Cash violates total (Max: {currentPayable.toFixed(2)})
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
+
+
 
                 {/* Footer Totals & Pay */}
                 <div className="p-8 bg-white border-t border-gray-200 space-y-4 shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
@@ -350,7 +355,7 @@ export default function CheckoutPage() {
                             <span className="font-mono">Ksh{subtotal.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between text-gray-500">
-                            <span>VAT (5%)</span>
+                            <span>VAT (16%)</span>
                             <span className="font-mono">Ksh{tax.toFixed(2)}</span>
                         </div>
                         {discountValue > 0 && (
@@ -379,7 +384,7 @@ export default function CheckoutPage() {
 
                     <button
                         onClick={handlePayment}
-                        disabled={loading || (currentPayable > 0 && !paymentMethod)}
+                        disabled={loading || (currentPayable > 0 && !paymentMethod) || (paymentMethod === 'split' && (parseFloat(cashAmount) || 0) > currentPayable)}
                         className={`w-full py-4 rounded-xl font-bold shadow-xl transform active:scale-[0.99] transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed group
                             ${balance > 0 ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-orange-500/20' : 'bg-gray-900 hover:bg-black text-white shadow-gray-900/10'}
                         `}
@@ -398,6 +403,6 @@ export default function CheckoutPage() {
                     </button>
                 </div>
             </div>
-        </div>
+        </div >
     );
 }

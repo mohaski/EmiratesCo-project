@@ -35,7 +35,7 @@ const AppLayout = () => {
   );
 };
 
-import { OrderProvider } from './context/OrderContext';
+import { CartProvider } from './context/CartContext';
 
 // ...
 
@@ -43,7 +43,7 @@ function App() {
   return (
     <AuthProvider>
       <ProductProvider>
-        <OrderProvider>
+        <CartProvider>
           <Router>
             <Routes>
               {/* Public Routes */}
@@ -80,7 +80,7 @@ function App() {
 
             </Routes>
           </Router>
-        </OrderProvider>
+        </CartProvider>
       </ProductProvider>
     </AuthProvider>
   );
