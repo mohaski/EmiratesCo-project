@@ -9,7 +9,7 @@ class Message(SQLModel, table=True):
     __tablename__ = "messages"
 
     messageId: Optional[int] = Field(default= None, primary_key= True)
-    senderId: int = Field(foreign_key= "users.userId")
+    senderId: UUID = Field(foreign_key= "users.userId")
     content: str
     sent_at: datetime = Field(sa_column_kwargs={"server_default": func.now()})
 

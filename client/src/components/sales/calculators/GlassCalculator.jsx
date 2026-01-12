@@ -1,43 +1,57 @@
 
 import React, { memo, useState, useMemo, useEffect } from 'react';
-import { mmToSquareFeet, inchesToSquareFeet } from '../../../utils/calculations';
+import { mmToSquareFeet, inchesToSquareFeet, roundToHalfWithRule } from '../../../utils/calculations';
 
 // --- SUB-COMPONENT: Glass Calculator (Refactored) ---
 const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
     // 1. EXTRACT AVAILABLE OPTIONS (Dynamic)
+    // 1. EXTRACT AVAILABLE OPTIONS (Dynamic)
     const extraAttributes = useMemo(() => {
         const extras = {};
-        // Identify attributes from schema (Exclude Color/Category)
-        const attrKeys = Array.isArray(product.attributes)
-            ? product.attributes
-            : Object.keys(product.attributes || {});
+        console.log("GlassCalculator Product:", product);
 
-        const allowedKeys = attrKeys.filter(key => key !== 'Category');
-
-        if (product.variants && product.variants.length > 0) {
+        // 1. Infer keys from variants if available (Primary Source)
+        if (Array.isArray(product.variants) && product.variants.length > 0) {
             product.variants.forEach(v => {
-                allowedKeys.forEach(key => {
-                    const val = v.attributes?.[key];
-                    if (val) {
+                const attrs = v.attributes;
+                if (attrs) {
+                    // Handle both object and potentially stringified attributes (safety)
+                    const entries = typeof attrs === 'object' ? Object.entries(attrs) : [];
+
+                    entries.forEach(([key, val]) => {
+                        // Filter out metadata or standard keys
+                        if (['Category', 'id', 'itemCode', 'sku'].includes(key)) return;
+                        if (val === null || val === undefined || val === '') return;
+
                         if (!extras[key]) extras[key] = new Set();
                         extras[key].add(val);
-                    }
-                });
+                    });
+                }
             });
-        }
-        // fallback for legacy thicknessPrices to simulate Thickness attribute
-        else if (product.thicknessPrices?.length > 0) {
-            extras['Thickness'] = new Set(product.thicknessPrices.map(t => t.thickness));
         }
 
-        return Object.entries(extras).reduce((acc, [key, set]) => {
-            acc[key] = Array.from(set).sort((a, b) => {
-                const numA = parseFloat(String(a).replace(/[^\d.]/g, ''));
-                const numB = parseFloat(String(b).replace(/[^\d.]/g, ''));
-                if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-                return String(a).localeCompare(String(b));
+        // 2. Merge with schema-defined attributes (e.g. from Description)
+        if (product.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)) {
+            Object.entries(product.attributes).forEach(([key, vals]) => {
+                if (key !== 'Category' && Array.isArray(vals) && vals.length > 0) {
+                    if (!extras[key]) extras[key] = new Set();
+                    vals.forEach(v => extras[key].add(v));
+                }
             });
+        }
+
+        console.log("Extracted Attributes:", extras);
+
+        return Object.entries(extras).reduce((acc, [key, set]) => {
+            if (set.size > 0) {
+                acc[key] = Array.from(set).sort((a, b) => {
+                    const numA = parseFloat(String(a).replace(/[^\d.]/g, ''));
+                    const numB = parseFloat(String(b).replace(/[^\d.]/g, ''));
+                    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                    return String(a).localeCompare(String(b));
+                });
+            }
             return acc;
         }, {});
     }, [product]);
@@ -58,10 +72,6 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                 defaults[key] = extraAttributes[key][0];
             }
         });
-        // Legacy fallback
-        if (!defaults['Thickness'] && initialDetails?.thickness) {
-            defaults['Thickness'] = initialDetails.thickness;
-        }
         return defaults;
     });
 
@@ -96,28 +106,40 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             });
         }
 
-        // Legacy fallback check (if utilizing thicknessPrices map)
-        if (!match && product.thicknessPrices && extraSelections['Thickness']) {
-            match = product.thicknessPrices.find(t => t.thickness === extraSelections['Thickness']);
-        }
 
         if (match) {
             return {
-                priceFull: match.details?.priceFull || match.priceFull || 0,
-                priceHalf: match.details?.priceHalf || match.priceHalf || 0,
-                priceSqFt: match.details?.priceUnit || match.priceSqFt || match.priceFoot || 0
+                // Context maps variant price to 'price', price_half to 'priceHalf', price_unit to 'priceUnit'
+                priceFull: match.price !== undefined ? match.price : (match.priceFull || 0),
+                priceHalf: match.priceHalf !== undefined ? match.priceHalf : (match.priceHalf || 0),
+                priceSqFt: match.priceUnit !== undefined ? match.priceUnit : (match.priceSqFt || match.priceFoot || 0),
+                availableStock: match.stock !== undefined ? match.stock : (product.stock || 0),
+                variantId: match.variantId
             };
         }
 
         return {
-            priceFull: product.priceFullSheet || 0,
-            priceHalf: product.priceHalfSheet || 0,
-            priceSqFt: product.priceSqFt || 0
+            // Context maps product price_full to 'priceFull', price_half to 'priceHalf', price_unit to 'priceFoot'
+            priceFull: product.priceFull !== undefined ? product.priceFull : (product.priceFullSheet || 0),
+            priceHalf: product.priceHalf !== undefined ? product.priceHalf : (product.priceHalfSheet || 0),
+            priceSqFt: product.priceFoot !== undefined ? product.priceFoot : (product.priceSqFt || 0),
+            availableStock: product.stock || 0
         };
     }, [product, extraSelections]);
 
+    const [error, setError] = useState(null);
+
     // Update Parent
     useEffect(() => {
+        // Validation
+        let isValid = true;
+        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) {
+            setError(`Only ${pricing.availableStock} Full Sheets available`);
+            isValid = false;
+        } else {
+            setError(null);
+        }
+
         const fullTotal = fullQty * pricing.priceFull;
         const halfTotal = halfQty * pricing.priceHalf;
         const cutsCost = cutPieces.reduce((sum, cut) => sum + (cut.area * cut.q * pricing.priceSqFt), 0);
@@ -175,23 +197,23 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             attributes,
 
             // Legacy / Specific Fields
-            thickness: extraSelections['Thickness'] || '',
             fullSheet: fullQty,
             halfSheet: halfQty,
             cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })),
-            glassItems: [],
             extras: extraSelections,
 
-            // Snapshot current rates
-            priceFull: pricing.priceFull,
-            priceHalf: pricing.priceHalf,
-            priceSqFt: pricing.priceSqFt
+            variantId: pricing.variantId,
+            isValid // Pass validation status
         });
     }, [fullQty, halfQty, cutPieces, pricing, extraSelections, onUpdate]);
 
     // Helpers
     const getArea = (l, w, u) => {
-        if (u === 'ft') return l * w;
+        if (u === 'ft') {
+            const rl = roundToHalfWithRule(l);
+            const rw = roundToHalfWithRule(w);
+            return rl * rw;
+        }
         if (u === 'mm') return mmToSquareFeet(l, w);
         if (u === 'inch') return inchesToSquareFeet(l, w)
         return 0;
@@ -245,12 +267,19 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                         <h4 className="font-bold text-gray-800">Full Sheet</h4>
                         <p className="text-xs text-blue-600 font-bold">Ksh{pricing.priceFull}</p>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <div className="flex items-center bg-white rounded-lg p-1 border border-gray-200 flex-1">
-                            <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200">-</button>
-                            <input type="number" value={fullQty} onChange={e => setFullQty(Math.max(0, parseInt(e.target.value) || 0))} className="w-full text-center bg-transparent text-gray-800 font-mono focus:outline-none font-bold" />
-                            <button onClick={() => setFullQty(fullQty + 1)} className="w-8 h-8 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100">+</button>
+                    <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                            <div className="flex items-center bg-white rounded-lg p-1 border border-gray-200 flex-1">
+                                <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200">-</button>
+                                <input type="number" value={fullQty} onChange={e => setFullQty(Math.max(0, parseInt(e.target.value) || 0))} className="w-full text-center bg-transparent text-gray-800 font-mono focus:outline-none font-bold" />
+                                <button onClick={() => setFullQty(fullQty + 1)} className="w-8 h-8 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100">+</button>
+                            </div>
                         </div>
+                        {error && (
+                            <div className="text-center text-red-500 text-[10px] font-bold uppercase tracking-wide animate-pulse">
+                                {error}
+                            </div>
+                        )}
                     </div>
                 </div>
 

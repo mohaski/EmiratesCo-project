@@ -6,7 +6,7 @@ import DynamicCalculator from './calculators/DynamicCalculator';
 import StandardCalculator from './calculators/StandardCalculator';
 
 // --- MAIN COMPONENT ---
-export default function ProductModal({ product, isOpen, onClose, onAddToOrder, color, initialDetails }) {
+export default function ProductModal({ product, isOpen, onClose, onAddToOrder, color, initialDetails, source = 'sales' }) {
     // State lifted from children
     console.log(product);
     const [total, setTotal] = useState(0);
@@ -20,7 +20,11 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
 
     // Helper to add to order
     const handleAdd = () => {
+        // Enforce validation only for Sales
+        const isStockValid = details?.isValid !== false;
+        if (source === 'sales' && !isStockValid) return;
         if (total <= 0) return;
+
         onAddToOrder({
             image: product.image,
             id: product.id,
@@ -39,6 +43,10 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
     const isAccessory = product.category === 'accessories';
     // Check for dynamic schema
     const isDynamic = !!product.variants;
+
+    // Validation State
+    const isStockValid = details?.isValid !== false;
+    const canProceed = total > 0 && (source !== 'sales' || isStockValid);
 
     return (
         <div className="absolute inset-0 z-50 flex items-center justify-center p-4">
@@ -116,13 +124,13 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                     </div>
                     <button
                         onClick={handleAdd}
-                        disabled={total <= 0}
-                        className={`px-8 py-3 rounded-2xl font-bold text-lg shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 ${total > 0
+                        disabled={!canProceed}
+                        className={`px-8 py-3 rounded-2xl font-bold text-lg shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-0.5 ${canProceed
                             ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white'
                             : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                             }`}
                     >
-                        Add to Order
+                        {source === 'invoice' ? 'Add to Invoice' : 'Add to Order'}
                     </button>
                 </div>
             </div>

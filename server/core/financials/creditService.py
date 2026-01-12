@@ -3,14 +3,14 @@ from sqlmodel import Session, select
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from datetime import datetime
-from ...entities.credits import Credit
-from ...entities.customers import Customer
-from ...db.database import get_session
-from ...app_logging import logger
+from entities.credits import Credit
+from entities.customers import Customer
+from db.database import get_session
+from loggiing import logger
 from . import model
 
 
-def create_credit(credit_data: model.CreditCreate, db: Session = Depends(get_session)) -> model.CreditCreateResponse:
+def create_credit(credit_data: model.CreditCreateRequest, db: Session = Depends(get_session)) -> model.CreditCreateResponse:
     """Create a new credit entry in the database."""
     try:
         new_credit = Credit(

@@ -1,248 +1,332 @@
-import React, { useState, useEffect, memo } from 'react';
+import React, { useState, useEffect, useMemo, memo } from 'react';
 
 const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
-    const isMeter = product.unit === 'meter';
-    const hasColor = product.hasColor;
-    const hasThickness = product.thicknesses && product.thicknesses.length > 0;
+    // --- 1. Determine Product Nature ---
+    const hasVariants = product.variants && product.variants.length > 0;
 
-    // Support either enhanced rollOptions OR legacy single priceRoll
-    const rollOptions = product.rollOptions || (product.priceRoll ? [{ label: 'Standard Roll', length: product.rollLength, price: product.priceRoll }] : []);
-    const hasRollOption = isMeter && rollOptions.length > 0;
+    // --- 2. Attribute Selection State (For Variable Products) ---
+    // If we have initial details, use them. Otherwise, try to pick defaults or first available.
+    const [selections, setSelections] = useState(() => {
+        if (initialDetails?.selectedAttributes) return initialDetails.selectedAttributes;
 
-    // Constants
-    const ACCESSORY_COLORS = ['Black', 'Grey', 'White', 'Silver', 'Brown'];
+        const defaults = {};
+        if (hasVariants) {
+            // Populate with first available options or product defaults
+            // Extract all attribute keys from first variant to know what to look for
+            const attrKeys = Object.keys(product.variants[0].attributes || {});
+            attrKeys.forEach(key => {
+                // Try to find a default from product config or pick first value
+                // For now, empty until user selects, or pick first valid option logic
+                // Let's safe default to null to force user/UI to resolve
+                defaults[key] = null;
+            });
+            // Smart Reset: Preselect if only one option exists?
+            // Not strictly needed but good UX.
+        }
+        return defaults;
+    });
 
-    // State
-    const [salesMode, setSalesMode] = useState(initialDetails?.salesMode || 'roll'); // 'meter' or 'roll'
+    // --- 3. Resolve Variant ---
+    const selectedVariant = useMemo(() => {
+        if (!hasVariants) return product; // Treat product as the only "variant"
+
+        // Find variant matching selections
+        return product.variants.find(v => {
+            return Object.entries(selections).every(([key, val]) => v.attributes[key] === val);
+        }) || null;
+    }, [product, hasVariants, selections]);
+
+    // Available Attributes Logic (to drive UI selectors)
+    const availableAttributes = useMemo(() => {
+        if (!hasVariants) return {};
+
+        const attrs = {};
+        product.variants.forEach(v => {
+            Object.entries(v.attributes).forEach(([key, val]) => {
+                if (!attrs[key]) attrs[key] = new Set();
+                attrs[key].add(val);
+            });
+        });
+
+        // Convert Sets to Arrays
+        const result = {};
+        Object.keys(attrs).forEach(k => result[k] = Array.from(attrs[k]));
+        return result;
+    }, [product.variants, hasVariants]);
+
+    // Auto-select first options by default
+    useEffect(() => {
+        if (hasVariants) {
+            setSelections(prev => {
+                const next = { ...prev };
+                let changed = false;
+                Object.entries(availableAttributes).forEach(([key, opts]) => {
+                    // Always select first option if not already selected
+                    if (opts.length > 0 && !next[key]) {
+                        next[key] = opts[0];
+                        changed = true;
+                    }
+                });
+                return changed ? next : prev;
+            });
+        }
+    }, [availableAttributes, hasVariants]);
+
+    // --- 4. Core State ---
+    // Offcut Mode State
+    const [qtyFull, setQtyFull] = useState(initialDetails?.qtyFull || 0);
+    const [qtyHalf, setQtyHalf] = useState(initialDetails?.qtyHalf || 0);
+
+    // Single Custom Cut State (Reverted from Multiple)
+    const [cutLength, setCutLength] = useState(initialDetails?.cutLength || '');
+
+    // Standard Mode State
     const [qty, setQty] = useState(initialDetails?.qty || 1);
-    const [length, setLength] = useState(initialDetails?.length || (isMeter ? 1 : 0));
-    const [color, setColor] = useState(initialDetails?.color || (hasColor ? 'Black' : null));
-    const [thickness, setThickness] = useState(initialDetails?.thickness || (hasThickness ? product.thicknesses[0] : null));
+    const [salesMode, setSalesMode] = useState(initialDetails?.salesMode || 'roll'); // 'meter' or 'roll' for legacy rolls
+
+    // Legacy Roll Handling
+    const rollOptions = product.rollOptions || (product.priceRoll ? [{ label: 'Standard Roll', length: product.rollLength, price: product.priceRoll }] : []);
+    const hasRollOption = rollOptions.length > 0 && !hasVariants;
     const [selectedRoll, setSelectedRoll] = useState(initialDetails?.selectedRoll || (hasRollOption ? rollOptions[0] : null));
 
+    const [error, setError] = useState(null);
+
+    // --- 5. Calculation Logic ---
     useEffect(() => {
+        if (hasVariants && !selectedVariant) {
+            onUpdate(0, { isValid: false, warning: 'Please select options' });
+            return;
+        }
+
+        const activeItem = selectedVariant || product;
+        const trackOffcuts = activeItem.trackOffcuts || product.trackOffcuts;
+
         let total = 0;
         const lineItems = [];
-        const attributes = [];
+        const attributesDetail = [];
+        let isValid = true;
+        let finalError = null;
 
-        // Attributes
-        if (color) attributes.push({ label: 'Color', value: color });
-        if (thickness) attributes.push({ label: 'Thickness', value: thickness });
-
-        // Mode Switching Logic
-        if (hasRollOption && salesMode === 'roll') {
-            // Selling by Roll
-            const price = selectedRoll?.price || 0;
-            total = qty * price;
-
-            lineItems.push({
-                type: 'accessory-roll',
-                label: selectedRoll?.label || 'Roll',
-                qty: qty,
-                rate: price,
-                total: total,
-                meta: { length: selectedRoll?.length }
+        // Populate Attributes
+        if (hasVariants) {
+            Object.entries(selections).forEach(([k, v]) => {
+                if (v) attributesDetail.push({ label: k, value: v });
             });
-            if (selectedRoll?.label) attributes.push({ label: 'Roll Type', value: selectedRoll.label });
+        }
+        if (!hasVariants && product.hasColor && initialDetails?.color) attributesDetail.push({ label: 'Color', value: initialDetails.color });
 
-        } else if (isMeter) {
-            // Selling by Meter
-            const price = product.price;
-            total = length * price;
+        const stock = activeItem.stock || 0;
 
-            lineItems.push({
-                type: 'accessory-meter',
-                label: 'Meter Length',
-                qty: length, // Length is basically quantity here
-                rate: price,
-                total: total,
-                meta: { unit: 'm' }
+        if (trackOffcuts) {
+            // --- OFFCUT CALCULATION ---
+            const pFull = activeItem.priceFull || activeItem.price || 0;
+            const pHalf = activeItem.priceHalf || 0;
+            const pCut = activeItem.priceUnit || activeItem.priceFoot || 0;
+
+            const totalFullPrice = qtyFull * pFull;
+            const totalHalfPrice = qtyHalf * pHalf;
+
+            // Calculate Cuts Total (Single Cut Logic, Qty=1)
+            let totalCutPrice = 0;
+            const q = 1; // Fixed Qty
+            const l = parseFloat(cutLength) || 0;
+
+            if (l > 0) {
+                totalCutPrice = l * pCut * q;
+            }
+
+            total = totalFullPrice + totalHalfPrice + totalCutPrice;
+
+            if (qtyFull > stock) {
+                finalError = `Insufficient Stock (Full). Have ${stock}`;
+                isValid = false;
+            }
+
+            if (qtyFull > 0) lineItems.push({ type: 'accessory-full', label: 'Full', qty: qtyFull, rate: pFull, total: totalFullPrice });
+            if (qtyHalf > 0) lineItems.push({ type: 'accessory-half', label: 'Half', qty: qtyHalf, rate: pHalf, total: totalHalfPrice });
+
+            // Add Single Cut if exists
+            if (totalCutPrice > 0) {
+                lineItems.push({
+                    type: 'accessory-cut',
+                    label: `Cut ${l}${activeItem.unit || ''}`,
+                    qty: q,
+                    rate: pCut * l, // Rate per piece of this length (Total cost of the cut)
+                    total: totalCutPrice,
+                    meta: { length: l, unit: activeItem.unit || '' }
+                });
+            }
+
+            onUpdate(total, {
+                lineItems, // Containing Full, Half, and Cut
+                attributes: attributesDetail,
+                qtyFull,
+                qtyHalf,
+                cutLength: l > 0 ? l : null,
+                cutQty: 1,
+                trackOffcuts: true,
+                variantId: hasVariants && selectedVariant ? (selectedVariant.variantId || selectedVariant.id) : null,
+                isValid,
+                warning: finalError
             });
 
         } else {
-            // Standard Unit Item
-            const price = product.price;
-            total = qty * price;
+            // --- STANDARD CALCULATION ---
+            if (hasRollOption && salesMode === 'roll') {
+                const price = selectedRoll?.price || 0;
+                total = qty * price;
+                lineItems.push({ type: 'accessory-roll', label: selectedRoll?.label || 'Roll', qty: qty, rate: price, total, meta: { length: selectedRoll?.length } });
+                attributesDetail.push({ label: 'Roll Type', value: selectedRoll?.label });
 
-            lineItems.push({
-                type: 'accessory-unit',
-                label: 'Quantity',
+            } else {
+                const price = activeItem.price || activeItem.priceFull || 0;
+                total = qty * price;
+                if (qty > stock) {
+                    finalError = `Only ${stock} items available`;
+                    isValid = false;
+                }
+                lineItems.push({ type: 'accessory-unit', label: 'Quantity', qty: qty, rate: price, total, meta: { unit: activeItem.unit } });
+            }
+
+            onUpdate(total, {
+                lineItems,
+                attributes: attributesDetail,
                 qty: qty,
-                rate: price,
-                total: total,
-                meta: { unit: product.unit }
+                salesMode,
+                selectedRoll,
+                variantId: activeItem.variantId || activeItem.id,
+                isValid,
+                warning: finalError
             });
         }
+        setError(finalError);
+    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, selectedRoll, hasRollOption, onUpdate]);
 
-        onUpdate(total, {
-            // Universal Schema
-            lineItems,
-            attributes,
+    // --- UI HELPERS ---
+    const handleVariantSelect = (key, val) => {
+        setSelections(prev => ({ ...prev, [key]: val }));
+    };
 
-            // Legacy
-            qty: (hasRollOption && salesMode === 'roll') ? qty : (isMeter ? 1 : qty),
-            length: (isMeter && salesMode === 'meter') ? length : null,
-            color: color,
-            thickness: thickness,
-            unit: (hasRollOption && salesMode === 'roll') ? 'roll' : product.unit,
-            salesMode: (hasRollOption) ? salesMode : null,
-            rollLength: (hasRollOption && salesMode === 'roll') ? selectedRoll?.length : null,
-            rollLabel: (hasRollOption && salesMode === 'roll') ? selectedRoll?.label : null
-        });
-    }, [qty, length, color, thickness, selectedRoll, product, isMeter, salesMode, hasRollOption, onUpdate]);
+    // --- RENDER ---
+    const activeItem = selectedVariant || product;
+    const trackOffcuts = activeItem.trackOffcuts || activeItem.track_offcuts || product.trackOffcuts || product.track_offcuts;
 
     return (
-        <div className="space-y-3">
-            {/* Color Selector */}
-            {hasColor && (
-                <div className="bg-gray-50 p-2 rounded-lg border border-gray-200">
-                    <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-2">Select Color</h3>
-                    <div className="flex gap-1">
-                        {ACCESSORY_COLORS.map(c => (
-                            <button
-                                key={c}
-                                onClick={() => setColor(c)}
-                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md border transition-all ${color === c
-                                    ? 'bg-white border-blue-500 ring-1 ring-blue-500 shadow-sm'
-                                    : 'bg-white border-gray-200 hover:bg-gray-50'
-                                    }`}
-                            >
-                                <span
-                                    className="w-3 h-3 rounded-full border border-gray-200 shadow-inner"
-                                    style={{
-                                        background: c === 'Silver' ? 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)' :
-                                            c === 'Gold' ? 'linear-gradient(135deg, #fceabb 0%, #f8b500 100%)' :
-                                                c === 'Grey' ? '#808080' :
-                                                    c === 'Black' ? '#222' :
-                                                        c === 'Brown' ? '#8B4513' : c
-                                    }}
-                                ></span>
-                                <span className={`text-xs font-semibold tracking-wide ${color === c ? 'text-gray-900' : 'text-gray-500'}`}>{c}</span>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Thickness Selector */}
-            {hasThickness && (
-                <div className="bg-gray-50 p-2 rounded-lg border border-gray-200">
-                    <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-2">Thickness</h3>
-                    <div className="flex gap-1">
-                        {product.thicknesses.map(t => (
-                            <button
-                                key={t}
-                                onClick={() => setThickness(t)}
-                                className={`px-2 py-1 rounded text-xs font-bold transition-all border ${thickness === t
-                                    ? 'bg-white border-blue-500 text-blue-600 shadow-sm'
-                                    : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                                    }`}
-                            >
-                                {t}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* Input Section */}
-            <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-lg shadow-blue-900/5 flex flex-col items-center justify-center relative overflow-hidden group">
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-400 to-purple-400 opacity-50"></div>
-
-                {/* Roll vs Meter Toggle */}
-                {hasRollOption && (
-                    <div className="w-full max-w-xs mb-4">
-                        {/* Toggle Switch */}
-                        <div className="flex bg-gray-100 p-1 rounded-lg relative">
-                            <button
-                                onClick={() => setSalesMode('roll')}
-                                className={`flex-1 py-1 rounded text-xs font-bold transition-all z-10 ${salesMode === 'roll' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                Full Roll
-                            </button>
-                            <button
-                                onClick={() => setSalesMode('meter')}
-                                className={`flex-1 py-1 rounded text-xs font-bold transition-all z-10 ${salesMode === 'meter' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                            >
-                                Per Meter
-                            </button>
-                        </div>
-
-                        {/* Sub-Selection for Roll Type (Big vs Small) */}
-                        {salesMode === 'roll' && rollOptions.length > 1 && (
-                            <div className="mt-2 flex gap-1 justify-center animate-fade-in">
-                                {rollOptions.map((opt) => (
+        <div className="space-y-4">
+            {/* 1. Attribute Selectors (if variable) */}
+            {hasVariants && (
+                <div className="space-y-2">
+                    {Object.entries(availableAttributes).map(([key, options]) => (
+                        <div key={key} className="space-y-1">
+                            <label className="text-[10px] font-bold text-gray-400 uppercase mb-1 ml-1">{key}</label>
+                            <div className="flex flex-wrap gap-1.5">
+                                {options.map(opt => (
                                     <button
-                                        key={opt.label}
-                                        onClick={() => setSelectedRoll(opt)}
-                                        className={`px-3 py-1 rounded text-[10px] font-bold border transition-all ${selectedRoll?.label === opt.label
-                                            ? 'bg-blue-50 border-blue-200 text-blue-700'
-                                            : 'bg-white border-gray-100 text-gray-500 hover:bg-gray-50'
+                                        key={opt}
+                                        onClick={() => handleVariantSelect(key, opt)}
+                                        className={`px-3 py-1.5 rounded-md text-xs font-bold border transition-all ${selections[key] === opt
+                                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                                            : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
                                             }`}
                                     >
-                                        {opt.label} ({opt.length}m)
+                                        {opt}
                                     </button>
                                 ))}
                             </div>
-                        )}
-                    </div>
-                )}
-
-                {/* Meter Logic */}
-                {isMeter && salesMode === 'meter' && (
-                    <>
-                        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Total Length (Meters)</h3>
-                        <div className="flex items-center gap-4 mb-2">
-                            <button onClick={() => setLength(Math.max(1, length - 1))} className="w-10 h-10 rounded-xl bg-white hover:bg-gray-50 text-lg text-gray-400 hover:text-gray-600 border border-gray-200 shadow-sm font-bold transition-all active:scale-95">-</button>
-                            <div className="flex flex-col items-center">
-                                <input
-                                    type="number"
-                                    value={length}
-                                    onChange={(e) => setLength(Math.max(0, parseFloat(e.target.value) || 0))}
-                                    className="w-24 text-center bg-transparent border-none p-0 text-3xl font-black text-gray-800 font-mono focus:ring-0"
-                                />
-                                <span className="text-xs font-bold text-gray-400">meters</span>
-                            </div>
-                            <button onClick={() => setLength(length + 1)} className="w-10 h-10 rounded-xl bg-blue-50 hover:bg-blue-100 text-lg text-blue-600 hover:text-blue-700 border border-blue-100 shadow-sm font-bold transition-all active:scale-95">+</button>
                         </div>
-                    </>
-                )}
+                    ))}
+                </div>
+            )}
 
-                {/* Quantity Logic (Rolls or Standard Items) */}
-                {(!isMeter || (hasRollOption && salesMode === 'roll')) && (
-                    <>
-                        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">
-                            {hasRollOption && salesMode === 'roll' ? 'Number of Rolls' : `Quantity (${product.unit}s)`}
+            {/* 3. Input Section */}
+            {trackOffcuts ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Standard */}
+                    <div className="bg-gray-50 p-5 rounded-xl border border-gray-200">
+                        <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                            <span>📏</span> Standard
                         </h3>
-                        <div className="flex items-center gap-4 mb-2">
-                            <button onClick={() => setQty(Math.max(1, qty - 1))} className="w-10 h-10 rounded-xl bg-white hover:bg-gray-50 text-lg text-gray-400 hover:text-gray-600 border border-gray-200 shadow-sm font-bold transition-all active:scale-95">-</button>
-                            <span className="text-3xl font-black text-gray-800 font-mono w-16 text-center">{qty}</span>
-                            <button onClick={() => setQty(qty + 1)} className="w-10 h-10 rounded-xl bg-blue-50 hover:bg-blue-100 text-lg text-blue-600 hover:text-blue-700 border border-blue-100 shadow-sm font-bold transition-all active:scale-95">+</button>
-                        </div>
-                        {(hasRollOption && salesMode === 'roll') && (
-                            <p className="text-[10px] text-blue-500 font-bold mb-2">1 {selectedRoll?.label || 'Roll'} = {selectedRoll?.length} Meters</p>
-                        )}
-                    </>
-                )}
+                        <div className="space-y-4">
+                            {/* Full */}
+                            <div className="flex flex-col gap-1">
+                                <div className="flex items-center justify-between">
+                                    <div className="text-gray-600 font-medium">Full</div>
+                                    <div className="flex items-center bg-white rounded-lg p-1 border border-gray-200 shadow-sm">
+                                        <button onClick={() => setQtyFull(Math.max(0, qtyFull - 1))} className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200 font-bold">-</button>
+                                        <input type="number" value={qtyFull} onChange={(e) => setQtyFull(Math.max(0, parseInt(e.target.value) || 0))} className="w-12 text-center bg-transparent text-gray-800 font-mono focus:outline-none font-bold" />
+                                        <button onClick={() => setQtyFull(qtyFull + 1)} className="w-8 h-8 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100 font-bold">+</button>
+                                    </div>
+                                </div>
+                            </div>
 
-                {/* Dynamic Price Summary */}
-                <div className="mt-4 flex flex-col items-center animate-fade-in">
-                    <p className="text-xs font-medium text-gray-400 mb-1">
-                        {hasRollOption && salesMode === 'roll'
-                            ? `${qty} x ${selectedRoll?.label || 'Roll'} @ Ksh${selectedRoll?.price}/roll` // Roll Price
-                            : isMeter
-                                ? `${length} meters × Ksh${product.price}/${product.unit}` // Meter Price
-                                : `${qty} ${product.unit}s × Ksh${product.price}/${product.unit}` // Standard Price
-                        }
-                    </p>
-                    <div className="px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-bold border border-blue-100">
-                        Total: Ksh{(
-                            (hasRollOption && salesMode === 'roll') ? qty * (selectedRoll?.price || 0) :
-                                (isMeter ? length * product.price : qty * product.price)
-                        ).toLocaleString()}
+                            {/* Half (Toggle) */}
+                            <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+                                <div className="text-gray-600 font-medium">Half</div>
+                                <div className="flex items-center">
+                                    <button
+                                        onClick={() => setQtyHalf(qtyHalf > 0 ? 0 : 1)}
+                                        className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors focus:outline-none ${qtyHalf > 0 ? 'bg-blue-600' : 'bg-gray-200'}`}
+                                    >
+                                        <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${qtyHalf > 0 ? 'translate-x-7' : 'translate-x-1'}`} />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Custom Cut (Single Item) */}
+                    <div className="bg-gray-50 p-5 rounded-xl border border-gray-200 flex flex-col h-full">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                                <span>✂️</span> Custom Cut
+                            </h3>
+                        </div>
+
+                        <div className="flex-1 flex flex-col justify-center space-y-4">
+                            <div className="flex items-center gap-2">
+                                <div className="flex-1 relative">
+                                    <input
+                                        type="number"
+                                        step="1"
+                                        value={cutLength}
+                                        onChange={(e) => setCutLength(e.target.value)}
+                                        className="w-full pl-3 pr-8 py-3 rounded-xl border border-gray-200 text-lg font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none shadow-sm"
+                                        placeholder="Length"
+                                    />
+                                    <span className="absolute right-3 top-4 text-xs text-gray-400 font-bold uppercase">{activeItem.unit || ''}</span>
+                                </div>
+                            </div>
+
+                            <div className="text-xs text-right text-gray-500 font-medium">
+                                Rate: <span className="text-blue-600 font-bold">Ksh{activeItem.priceUnit || activeItem.priceFoot || 0} / {activeItem.unit || 'unit'}</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
+
+            ) : (
+                /* --- SIMPLE / LEGACY UI --- */
+                <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 text-center">
+                    {/* Simple Qty Input */}
+                    <div className="space-y-3">
+                        <label className="text-sm font-bold text-gray-500 uppercase tracking-wider">{hasRollOption ? 'Number of Rolls' : 'Quantity'}</label>
+                        <div className="flex items-center justify-center gap-4">
+                            <button onClick={() => setQty(Math.max(1, qty - 1))} className="w-12 h-12 rounded-xl bg-white border border-gray-200 text-xl font-bold text-gray-400 hover:text-gray-600 hover:border-gray-300 transition-all shadow-sm">-</button>
+                            <span className="text-4xl font-black text-gray-800 w-24">{qty}</span>
+                            <button onClick={() => setQty(qty + 1)} className="w-12 h-12 rounded-xl bg-blue-600 border border-blue-600 text-xl font-bold text-white hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/30">+</button>
+                        </div>
+                        {hasRollOption && <p className="text-xs text-gray-400 font-medium">Standard Roll Length: {product.rollLength}m</p>}
+                    </div>
+                </div>
+            )}
+
+            {/* 4. Validation Messages */}
+            {error && (
+                <div className="mt-6 p-3 bg-red-50 text-red-600 text-xs font-bold rounded-xl flex items-center justify-center gap-2 animate-shake">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                    {error}
+                </div>
+            )}
         </div>
     );
 });

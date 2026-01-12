@@ -1,10 +1,13 @@
 import React, { useState, useMemo, memo } from 'react';
+import api from '../../services/api';
 
 const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
     // Local state for the overlay only
     const [customerSearch, setCustomerSearch] = useState('');
     const [newCustomerName, setNewCustomerName] = useState('');
     const [newCustomerPhone, setNewCustomerPhone] = useState('');
+    const [newCustomerType, setNewCustomerType] = useState('individual');
+    const [isRegistering, setIsRegistering] = useState(false);
 
     // Memoize the filtering list for speed
     const filteredCustomers = useMemo(() => {
@@ -15,6 +18,36 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
             c.phone.includes(lowerSearch)
         );
     }, [customers, customerSearch]);
+
+    const handleRegister = async () => {
+        if (!newCustomerName.trim() || !newCustomerPhone.trim()) return;
+
+        setIsRegistering(true);
+        try {
+            const payload = {
+                name: newCustomerName,
+                phoneNumber: newCustomerPhone,
+                type: newCustomerType
+            };
+
+            const response = await api.userService.createCustomer(payload);
+
+            // Construct customer object for parent (Sales/Invoice)
+            const newCustomer = {
+                id: response.customerId,
+                name: newCustomerName,
+                phone: newCustomerPhone,
+                type: newCustomerType
+            };
+
+            onSelectCustomer(newCustomer);
+        } catch (err) {
+            console.error("Registration failed", err);
+            alert("Registration failed: " + (err.response?.data?.detail || "Please check phone number format"));
+        } finally {
+            setIsRegistering(false);
+        }
+    };
 
     return (
         <div className="absolute inset-0 z-[60] bg-slate-900/50 backdrop-blur-md flex items-center justify-center p-4">
@@ -69,6 +102,23 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
                         <div>
                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wide mb-2 block">New Customer Registration</label>
+
+                            {/* Type Selection */}
+                            <div className="flex gap-2 mb-3">
+                                <button
+                                    onClick={() => setNewCustomerType('individual')}
+                                    className={`flex-1 py-2 px-3 rounded-lg text-sm font-bold border transition-all ${newCustomerType === 'individual' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'}`}
+                                >
+                                    Individual
+                                </button>
+                                <button
+                                    onClick={() => setNewCustomerType('cooperate')}
+                                    className={`flex-1 py-2 px-3 rounded-lg text-sm font-bold border transition-all ${newCustomerType === 'cooperate' ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-300'}`}
+                                >
+                                    Corporate
+                                </button>
+                            </div>
+
                             <div className="space-y-3">
                                 <input
                                     type="text"
@@ -84,22 +134,24 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
                                     value={newCustomerPhone}
                                     onChange={(e) => setNewCustomerPhone(e.target.value)}
                                     onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && newCustomerName.trim() && newCustomerPhone.trim()) {
-                                            onSelectCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
+                                        if (e.key === 'Enter') {
+                                            handleRegister();
                                         }
                                     }}
                                 />
                                 <button
-                                    onClick={() => {
-                                        if (newCustomerName.trim() && newCustomerPhone.trim()) {
-                                            onSelectCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
-                                        }
-                                    }}
-                                    disabled={!newCustomerName.trim() || !newCustomerPhone.trim()}
+                                    onClick={handleRegister}
+                                    disabled={!newCustomerName.trim() || !newCustomerPhone.trim() || isRegistering}
                                     className="w-full bg-gray-900 text-white py-3 rounded-xl font-bold disabled:opacity-50 hover:bg-black transition-colors shadow-lg shadow-gray-900/10 flex items-center justify-center gap-2"
                                 >
-                                    <span>Register & Start Sale</span>
-                                    <span>→</span>
+                                    {isRegistering ? (
+                                        <span>Registering...</span>
+                                    ) : (
+                                        <>
+                                            <span>Register & Start Sale</span>
+                                            <span>→</span>
+                                        </>
+                                    )}
                                 </button>
                             </div>
                         </div>

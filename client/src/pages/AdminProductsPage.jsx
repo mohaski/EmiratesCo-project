@@ -72,7 +72,7 @@ export default function AdminProductsPage() {
     const filteredProducts = useMemo(() => {
         return products.filter(p =>
             p.category === selectedCategory &&
-            (p.usage === selectedUsage || (!p.usage && selectedUsage === 'general')) // Fallback for missing usage
+            (p.subCategory === selectedUsage || (!p.subCategory && selectedUsage === 'general')) // Fallback for missing usage
         );
     }, [products, selectedCategory, selectedUsage]);
 
@@ -192,7 +192,7 @@ export default function AdminProductsPage() {
                                                 </div>
                                                 <div>
                                                     <div className="font-bold text-gray-900">{p.name}</div>
-                                                    <div className="text-xs text-gray-500">{p.sku || 'No SKU'}</div>
+                                                    <div className="text-xs text-gray-500">{p.itemCode || ''}</div>
                                                 </div>
                                             </div>
                                         </td>
@@ -245,7 +245,7 @@ export default function AdminProductsPage() {
             <EditProductModal
                 isOpen={editModal.open}
                 onClose={() => setEditModal({ open: false, product: null })}
-                product={editModal.product}
+                product={editModal.product ? products.find(p => p.id === editModal.product.id) || editModal.product : null}
             />
 
             <ConfirmationModal
@@ -261,7 +261,7 @@ export default function AdminProductsPage() {
             <ManageVariantsModal
                 isOpen={variantsModal.open}
                 onClose={() => setVariantsModal({ open: false, product: null })}
-                product={variantsModal.product}
+                product={variantsModal.product ? products.find(p => p.id === variantsModal.product.id) || variantsModal.product : null}
             />
 
         </div>

@@ -7,22 +7,16 @@ from fastapi import Depends, HTTPException
 from sqlmodel import Session, select
 #from sqlalchemy.exc import IntegrityError
 
-from ...entities.orderItems import OrderItem
-from ...app_logging import logger
-from ...db.database import get_session
+from entities.orderItems import OrderItem
+from loggiing import logger
+from db.database import get_session
+from .orderService import _calculate_complex_item_total
 from . import model
 
 
 # --------------------------------------------------------------------------- #
 # Pure business logic (no DB, no HTTP)
-# --------------------------------------------------------------------------- #
-def compute_item_total(*, quantity: int, price: float) -> float:
-    """Return quantity * price. Raise ValueError on invalid inputs."""
-    if quantity < 0:
-        raise ValueError("quantity must be non-negative")
-    if price < 0:
-        raise ValueError("price must be non-negative")
-    return quantity * price
+# --------------------------------------------------------------------------- #    
 
 
 def validate_item(item: model.OrderItemCreate) -> None:
@@ -51,19 +45,26 @@ def create_orderItems(order_items: list[model.OrderItemCreate], db: Session = De
     created_item_ids = []
     try:
         for item in order_items:
-            total= compute_item_total(quantity=item.quantity, price=item.price)
+            
             new_order_item = OrderItem(
-                orderId=item.orderId,
-                productId=item.productId,
-                unitType=item.unit_type,
+                order_id=item.orderId,
+                product_id=item.productId,
+                variant_id=item.variantId,
                 quantity=item.quantity,
-                price=item.price,
-                totalAmount=total
+                unit_price=item.unitPrice,
+                unit_type=item.unitType,
+                details=item.details
             )
+
+            total = _calculate_complex_item_total(item)
+            print(total)
+            new_order_item.total_price = total
+
             db.add(new_order_item)
             db.commit()
             db.refresh(new_order_item)
-            created_item_ids.append(new_order_item.orderItemId)
+
+            created_item_ids.append(new_order_item.item_id)
 
         logger.info(f"Created {len(created_item_ids)} order items.")
         return model.OrderItemCreateResponse(
@@ -83,19 +84,24 @@ def get_orderItems_by_orderId(order_id: int, db: Session = Depends(get_session))
     - Returns a list of order items associated with the given order ID.
     """
     try:
-        statement = select(OrderItem).where(OrderItem.orderId == order_id)
+        statement = select(OrderItem).where(OrderItem.order_id == order_id)
         results = db.exec(statement).all()
         
         if not results:
-            raise HTTPException(status_code=404, detail="No order items found for this order ID")
+            # Return empty list instead of 404? 
+            # Ideally an order might have no items initially.
+            return []
         
         order_items = [
             model.OrderItemResponse(
-                productId=item.productId,
+                productId=item.product_id,
+                orderId=item.order_id,
                 quantity=item.quantity,
-                unitType= item.unit_price,  # Assuming a default unit type; adjust as necessary
-                price=item.price,
-                totalPrice=item.totalAmount
+                unitType=item.unit_type,
+                unitPrice=item.unit_price,
+                totalPrice=item.total_price,
+                details=item.details,
+                status=item.status
             ) for item in results
         ]
         

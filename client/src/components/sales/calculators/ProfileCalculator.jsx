@@ -152,20 +152,19 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
         }
 
         if (matchingVariant) {
-            const pFull = matchingVariant.details?.priceFull || matchingVariant.price || product.priceFull || 0;
-            const pHalf = matchingVariant.details?.priceHalf || (matchingVariant.price ? matchingVariant.price / 2 : 0) || product.priceHalf || 0;
+            const pFull = matchingVariant.price || matchingVariant.priceFull || product.priceFull || 0;
+            const pHalf = matchingVariant.priceHalf || product.priceHalf || 0;
 
             // Per Foot Calculation
-            let pFoot = matchingVariant.details?.priceUnit || product.priceFoot || 0;
-
-            if (!pFoot && selectedLengthNum > 0 && matchingVariant.price) {
-                pFoot = matchingVariant.price / selectedLengthNum;
-            }
+            let pFoot = matchingVariant.priceUnit || product.priceFoot || 0;
+            const vStock = matchingVariant.stock !== undefined ? matchingVariant.stock : (product.stock || 0);
 
             return {
                 priceFull: pFull,
                 priceHalf: pHalf,
-                priceFoot: pFoot
+                priceFoot: pFoot,
+                availableStock: vStock,
+                variantId: matchingVariant.variantId
             };
         }
 
@@ -173,14 +172,25 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
         return {
             priceFull: product.priceFull || 0,
             priceHalf: product.priceHalf || 0,
-            priceFoot: product.priceFoot || 0
+            priceFoot: product.priceFoot || 0,
+            availableStock: product.stock || 0
         };
 
     }, [product, color, extraSelections, selectedLengthNum]);
 
+    const [error, setError] = useState(null);
 
     // 4. UPDATE PARENT
     useEffect(() => {
+        // Validation
+        let isValid = true;
+        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) {
+            setError(`Only ${pricing.availableStock} Full Lengths available`);
+            isValid = false;
+        } else {
+            setError(null);
+        }
+
         const total = (fullQty * pricing.priceFull) +
             (halfQty * pricing.priceHalf) +
             (feet * pricing.priceFoot);
@@ -212,7 +222,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
         }
         if (feet > 0) {
             lineItems.push({
-                type: 'profile-feet',
+                type: 'profile-cut',
                 label: `Custom Feet (${feet}ft)`,
                 qty: feet,
                 rate: pricing.priceFoot,
@@ -241,12 +251,9 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
             half: halfQty,
             feet: feet,
             color: color || 'White',
-            length: extraSelections['Length'] || null,
             extras: extraSelections,
-            unitPrice: pricing.priceFull,
-            priceFull: pricing.priceFull,
-            priceHalf: pricing.priceHalf,
-            priceFoot: pricing.priceFoot
+            variantId: pricing.variantId,
+            isValid // Pass validation status
         });
     }, [fullQty, halfQty, feet, pricing, color, extraSelections, onUpdate]);
 
@@ -286,13 +293,20 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
                 <div className="bg-gray-50 p-5 rounded-xl border border-gray-200">
                     <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><span>📏</span> Standard Lengths</h3>
                     <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <div><p className="text-gray-600 font-medium">Full Length</p><p className="text-xs text-blue-600 font-bold">Ksh{pricing.priceFull}/pc</p></div>
-                            <div className="flex items-center bg-white rounded-lg p-1 border border-gray-200 shadow-sm">
-                                <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200">-</button>
-                                <input type="number" value={fullQty} onChange={(e) => setFullQty(Number(e.target.value))} className="w-12 text-center bg-transparent text-gray-800 font-mono focus:outline-none font-bold" />
-                                <button onClick={() => setFullQty(fullQty + 1)} className="w-8 h-8 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100">+</button>
+                        <div className="flex flex-col gap-1">
+                            <div className="flex items-center justify-between">
+                                <div><p className="text-gray-600 font-medium">Full Length</p><p className="text-xs text-blue-600 font-bold">Ksh{pricing.priceFull}/pc</p></div>
+                                <div className="flex items-center bg-white rounded-lg p-1 border border-gray-200 shadow-sm">
+                                    <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200">-</button>
+                                    <input type="number" value={fullQty} onChange={(e) => setFullQty(Number(e.target.value))} className="w-12 text-center bg-transparent text-gray-800 font-mono focus:outline-none font-bold" />
+                                    <button onClick={() => setFullQty(fullQty + 1)} className="w-8 h-8 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100">+</button>
+                                </div>
                             </div>
+                            {error && (
+                                <div className="text-right text-red-500 text-[10px] font-bold uppercase tracking-wide animate-pulse">
+                                    {error}
+                                </div>
+                            )}
                         </div>
                         <div className="flex items-center justify-between pt-2 border-t border-gray-200">
                             <div><p className="text-gray-600 font-medium">Half Length</p><p className="text-xs text-blue-600 font-bold">Ksh{pricing.priceHalf}/pc</p></div>

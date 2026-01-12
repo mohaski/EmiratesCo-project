@@ -1,11 +1,11 @@
 from fastapi import Depends, HTTPException, status
 from sqlmodel import Session, select
-from ...db.database import get_session
-from ...entities.users import User
+from db.database import get_session
+from entities.users import User
 from .authService import hash_password, verify_password
-from . import models
+from . import model
 
-from ...app_logging import logger
+from loggiing import logger
 
 def get_users(db: Session = Depends(get_session)) -> list[User]:
     """Fetch all users with limited columns."""
@@ -25,7 +25,7 @@ def get_users(db: Session = Depends(get_session)) -> list[User]:
 def get_user_by_id(id: str, db: Session = Depends(get_session)) -> User:
     """Fetch a single user by ID."""
     try:
-        user = db.exec(select(User).where(User.id == id)).first()
+        user = db.exec(select(User).where(User.userId == id)).first()
         if not user:
             logger.warning(f"User with ID {id} not found.")
             raise HTTPException(status_code=404, detail="User not found")
@@ -38,7 +38,7 @@ def get_user_by_id(id: str, db: Session = Depends(get_session)) -> User:
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-def password_reset(id: str, password_data: models.passwordResetRequest, db: Session = Depends(get_session)):
+def password_reset(id: str, password_data: model.passwordResetRequest, db: Session = Depends(get_session)):
     """Reset a user's password with proper validation."""
     try:
         # ✅ Reuse get_user_by_id for cleaner code
@@ -75,7 +75,7 @@ def password_reset(id: str, password_data: models.passwordResetRequest, db: Sess
         logger.error(f"Error resetting password for user {id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
-def password_change(id: str, passwordChangeRequest: models.passwordReequestChange, db: Session = Depends(get_session)):
+def password_change(id: str, passwordChangeRequest: model.passwordChangeRequest, db: Session = Depends(get_session)):
     """Change a user's password while already logged on."""
     try:
         user = get_user_by_id(id, db)

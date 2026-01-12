@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import api from '../services/api';
 import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
 import CartSidebar from '../components/sales/CartSidebar';
 import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext'; // Import Context
-import { CUSTOMERS } from '../data/mockCustomers';
 import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 
-import CustomerSelectionOverlay from '../components/invoices/CustomerSelectionOverlay';
+import CustomerSelectionOverlay from '../components/sales/CustomerSelectionOverlay';
 
 export default function InvoiceGenPage() {
     const { products: PRODUCTS } = useProducts(); // Keep for specific helpers if needed, but hook handles filtering
     const location = useLocation();
     const navigate = useNavigate();
+    const [customers, setCustomers] = useState([]);
 
     // --- HOOKS ---
     const {
@@ -27,6 +28,24 @@ export default function InvoiceGenPage() {
         isProfileCategory
     } = useProductFiltering();
 
+    useEffect(() => {
+        const fetchCustomers = async () => {
+            try {
+                const fetched = await api.userService.getCustomers();
+                const mapped = fetched.map(c => ({
+                    id: c.customerId,
+                    name: c.name,
+                    phone: c.phoneNumber,
+                    type: c.type || 'registered'
+                }));
+                setCustomers(mapped);
+            } catch (err) {
+                console.error("Failed to load customers", err);
+            }
+        };
+        fetchCustomers();
+    }, []);
+
     // --- LOCAL STATE (UI Only) ---
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
@@ -38,15 +57,34 @@ export default function InvoiceGenPage() {
         cartItems: cart,
         customer: selectedCustomer,
         setCustomer: setSelectedCustomer,
-        taxEnabled: enableTax,
-        setTaxEnabled: setEnableTax,
+        // Decoupled tax state
         addToCart,
         updateCartItem,
-        removeFromCart
+        removeFromCart,
+        clearCart,
+        sessionType,
+        setSessionType
     } = useCart();
+
+    // Local Tax State (Independent)
+    const [enableTax, setEnableTax] = useState(() => {
+        return location.state?.enableTax !== undefined ? location.state.enableTax : true;
+    });
 
     // Mobile Cart Drawer State
     const [isCartOpen, setIsCartOpen] = useState(false);
+
+    // --- INITIALIZATION EFFECT (Fresh Start Logic) ---
+    useEffect(() => {
+        // If entering fresh (no mode), FORCE RESET session
+        if (!location.state?.mode) {
+            clearCart();
+            setSessionType('invoice');
+        } else if (sessionType !== 'invoice') {
+            // Even if editing, ensure we tag this as invoice session
+            setSessionType('invoice');
+        }
+    }, [location.state, clearCart, setSessionType, sessionType]);
 
     // --- STABLE HANDLERS ---
     const handleProductClick = useCallback((product) => {
@@ -93,13 +131,21 @@ export default function InvoiceGenPage() {
     }, []);
 
     const handleReviewInvoice = useCallback(() => {
-        // Navigate implies we rely on Context Persistence now
-        navigate('/invoice/review');
-    }, [navigate]);
+        navigate('/invoice/review', {
+            state: {
+                enableTax
+            }
+        });
+    }, [navigate, enableTax]);
 
     const handleCustomerSelect = useCallback((customer) => {
         setSelectedCustomer(customer);
-        setEnableTax(!customer || customer.type === 'corporate');
+        // Default to enabled for all customers unless 'individual'
+        if (customer && customer.type === 'individual') {
+            setEnableTax(false);
+        } else {
+            setEnableTax(true);
+        }
     }, [setSelectedCustomer, setEnableTax]);
 
     return (
@@ -217,6 +263,7 @@ export default function InvoiceGenPage() {
                                 key={product.id}
                                 product={product}
                                 onClick={handleProductClick}
+                                selectedColor={profileColor}
                             />
                         ))}
                     </div>
@@ -253,6 +300,7 @@ export default function InvoiceGenPage() {
                             onRemoveItem={handleRemoveItem}
                             onEditItem={handleEditCartItem}
                             customer={selectedCustomer}
+                            onChangeCustomer={() => setSelectedCustomer(null)}
                             actionLabel="Review Invoice"
                             onAction={handleReviewInvoice}
                             enableTax={enableTax}
@@ -285,12 +333,13 @@ export default function InvoiceGenPage() {
                 onAddToOrder={handleAddToOrder}
                 color={initialModalDetails?.color || profileColor}
                 initialDetails={initialModalDetails}
+                source="invoice"
             />
 
             {/* --- OPTIMIZED CUSTOMER OVERLAY --- */}
             {!selectedCustomer && (
                 <CustomerSelectionOverlay
-                    customers={CUSTOMERS}
+                    customers={customers}
                     onSelectCustomer={handleCustomerSelect}
                 />
             )}

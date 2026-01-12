@@ -37,3 +37,7 @@ class CreditUpdate(BaseModel):
     amount_due: float
     status: str
     settledAt: Optional[str] = None
+
+class CreditUpdateResponse(BaseModel):
+    message: str
+    creditId: Optional[int]

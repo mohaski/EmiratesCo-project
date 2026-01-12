@@ -6,30 +6,10 @@ import AddStockModal from '../components/inventory/AddStockModal';
 const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Bronze', 'Grey', 'Matt Black'];
 const GLASS_THICKNESSES = ['4mm', '6mm', '8mm', '10mm', '12mm']; // Fallback if not in product
 
-const SUB_CATEGORIES = {
-    'ke-profile': [
-        { id: 'window', label: 'Windows' },
-        { id: 'door', label: 'Doors' },
-        { id: 'general', label: 'General' },
-    ],
-    'tz-profile': [
-        { id: 'window', label: 'Windows' },
-        { id: 'door', label: 'Doors' },
-        { id: 'general', label: 'General' },
-    ],
-    'glass': [
-        { id: 'clear', label: 'Clear' },
-        { id: 'one/way', label: 'One/Way' },
-        { id: 'tint', label: 'Tinted' },
-        { id: 'mirror', label: 'Mirror' },
-        { id: 'frost', label: 'Frost' },
-        { id: 'obscure', label: 'Obscure' },
-        { id: 'alucoboard', label: 'Alucoboard' },
-    ]
-};
+
 
 export default function InventoryPage() {
-    const { products, categories: CATEGORIES, updateProduct } = useProducts();
+    const { products, categories: CATEGORIES, updateProduct, updateProductVariant } = useProducts();
 
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('ke-profile');
@@ -91,12 +71,11 @@ export default function InventoryPage() {
     const filteredInventory = useMemo(() => {
         return inventory.filter(item => {
             const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
-            const matchesCategory = filterCategory === 'all' || item.category === filterCategory;
+            const matchesCategory = item.category === filterCategory;
 
             let matchesSub = true;
-            if (filterSubCategory !== 'all' && filterCategory !== 'all') {
-                // Assumes 'usage' field in mockProducts maps to subcategory
-                matchesSub = item.usage === filterSubCategory;
+            if (matchesCategory) {
+                matchesSub = item.subCategory === filterSubCategory;
             }
 
             return matchesSearch && matchesCategory && matchesSub;
@@ -104,9 +83,18 @@ export default function InventoryPage() {
     }, [inventory, searchTerm, filterCategory, filterSubCategory]);
 
     // Handle Category Click (Reset Subcat)
+    // Handle Category Click (Reset Subcat)
     const handleCategoryChange = (catId) => {
         setFilterCategory(catId);
-        setFilterSubCategory('all');
+        // Default to first subcategory if available
+        const cat = CATEGORIES.find(c => c.id === catId);
+        const subCats = cat?.subCategories || [];
+
+        if (subCats.length > 0) {
+            setFilterSubCategory(subCats[0].id);
+        } else {
+            setFilterSubCategory('general');
+        }
     };
 
     const handleAddStockClick = (product) => {
@@ -120,50 +108,41 @@ export default function InventoryPage() {
         setAddStockModalOpen(true);
     };
 
-    const confirmAddStock = () => {
+    const confirmAddStock = async () => {
         if (!selectedProduct || !stockToAdd || !selectedVariant) return;
 
         const qty = parseInt(stockToAdd);
         if (isNaN(qty) || qty <= 0) return;
 
-        // 1. Update Local Inventory State for UI responsiveness
-        setInventory(prev => prev.map(item => {
-            if (item.id === selectedProduct.id) {
-                return {
-                    ...item,
-                    stockVariants: {
-                        ...item.stockVariants,
-                        [selectedVariant]: (item.stockVariants[selectedVariant] || 0) + qty
-                    }
-                };
-            }
-            return item;
-        }));
-
-        // 2. Persist to Global Context (if it's a dynamic product with variants)
-        // Find the original product in context
+        // Find Variant ID
         const original = products.find(p => p.id === selectedProduct.id);
-        if (original && original.variants) {
-            // Find the variant
-            const updatedVariants = original.variants.map(v => {
-                const vName = v.name || Object.values(v.attributes).join(' - ');
-                if (vName === selectedVariant) {
-                    return { ...v, stock: (v.stock || 0) + qty };
-                }
-                return v;
-            });
-            updateProduct({ ...original, variants: updatedVariants });
+        if (!original || !original.variants) return;
+
+        const targetVariant = original.variants.find(v => {
+            const vName = v.name || Object.values(v.attributes).join(' - ');
+            return vName === selectedVariant;
+        });
+
+        if (targetVariant) {
+            try {
+                await updateProductVariant(targetVariant.id, {
+                    stock_change: qty
+                });
+
+                // Log Update
+                setRecentUpdates(prev => [{
+                    id: Date.now(),
+                    product: `${selectedProduct.name} (${selectedVariant})`,
+                    qty: qty,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                }, ...prev]);
+
+                setAddStockModalOpen(false);
+            } catch (err) {
+                console.error("Stock update failed", err);
+                alert("Failed to update stock.");
+            }
         }
-
-        // Log Update
-        setRecentUpdates(prev => [{
-            id: Date.now(),
-            product: `${selectedProduct.name} (${selectedVariant})`,
-            qty: qty,
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        }, ...prev]);
-
-        setAddStockModalOpen(false);
     };
 
     // Calculate total stock for list display
@@ -222,9 +201,10 @@ export default function InventoryPage() {
                         </div>
 
                         {/* 2. Sub Categories (Dynamic) */}
-                        {(filterCategory === 'ke-profile' || filterCategory === 'tz-profile' || filterCategory === 'glass') && (
+                        {/* 2. Sub Categories (Dynamic) */}
+                        {CATEGORIES.find(c => c.id === filterCategory)?.subCategories?.length > 0 && (
                             <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide animate-fade-in">
-                                {(filterCategory === 'glass' ? SUB_CATEGORIES['glass'] : SUB_CATEGORIES[filterCategory]).map(sub => (
+                                {CATEGORIES.find(c => c.id === filterCategory).subCategories.map(sub => (
                                     <button
                                         key={sub.id}
                                         onClick={() => setFilterSubCategory(sub.id)}
@@ -242,7 +222,7 @@ export default function InventoryPage() {
                             <input
                                 type="text"
                                 className="w-full bg-white border border-gray-200 rounded-2xl pl-16 pr-4 py-4 text-lg font-medium outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm placeholder-gray-400"
-                                placeholder="Search by name, SKU, or variant..."
+                                placeholder="Search by name, Item Code, or variant..."
                                 value={searchTerm}
                                 onChange={(e) => setSearchTerm(e.target.value)}
                             />
@@ -266,6 +246,9 @@ export default function InventoryPage() {
                                                 <h3 className="font-bold text-gray-900 text-lg">{item.name}</h3>
                                                 <div className="flex items-center gap-3 text-sm text-gray-500">
                                                     <span className="bg-gray-100 px-2 py-0.5 rounded text-xs uppercase tracking-wide font-bold">{CATEGORIES.find(c => c.id === item.category)?.label}</span>
+                                                    {item.itemCode && (
+                                                        <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-xs font-bold font-mono border border-blue-100 uppercase">{item.itemCode}</span>
+                                                    )}
                                                     {isLow && <span className="bg-red-50 text-red-600 px-2 py-0.5 rounded text-xs uppercase tracking-wide font-bold animate-pulse">Low Stock</span>}
                                                 </div>
                                             </div>

@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import api from '../services/api';
 import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
 import CartSidebar from '../components/sales/CartSidebar';
 import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext';
-import { CUSTOMERS } from '../data/mockCustomers';
 import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 import logo from '../assets/logo.png';
 import CustomerSelectionOverlay from '../components/sales/CustomerSelectionOverlay';
@@ -41,40 +41,76 @@ export default function SalesDashboard() {
         cartItems: cart,
         customer: selectedCustomer,
         setCustomer: setSelectedCustomer,
-        taxEnabled: enableTax,
-        setTaxEnabled: setEnableTax,
+        // Decoupled tax state from context
         addToCart,
         updateCartItem,
         removeFromCart,
-        loadOrder
+        loadOrder,
+        clearCart,
+        sessionType,
+        setSessionType
     } = useCart();
+
+    // Local Tax State (Independent)
+    const [enableTax, setEnableTax] = useState(() => {
+        return location.state?.enableTax !== undefined ? location.state.enableTax : true;
+    });
+
+    // --- SESSION ENFORCEMENT ---
+    useEffect(() => {
+        if (!location.state?.mode && sessionType !== 'sales') {
+            console.log("Switching session to Sales - Clearing Invoice Cart");
+            clearCart();
+            setSessionType('sales');
+        }
+    }, [sessionType, setSessionType, clearCart, location.state]);
 
     // Mobile Cart Drawer State
     const [isCartOpen, setIsCartOpen] = useState(false);
 
 
     // --- INITIALIZATION EFFECT ---
+    const [customers, setCustomers] = useState([]);
+
     useEffect(() => {
-        // Only override context logic if strictly necessary (e.g. Editing/Resuming)
-        // Normal navigation shouldn't wipe the cart because Context handles persistence.
+        const fetchCustomers = async () => {
+            try {
+                const fetchedCustomers = await api.userService.getCustomers();
+                // Map backend to frontend shape if needed
+                // Backend: { customerId, name, phoneNumber, type }
+                // Frontend Overlay expects: { id, name, phone, ... }
+                const mapped = fetchedCustomers.map(c => ({
+                    id: c.customerId,
+                    name: c.name,
+                    phone: c.phoneNumber,
+                    type: c.type
+                }));
+                setCustomers(mapped);
+            } catch (err) {
+                console.error("Failed to load customers", err);
+            }
+        };
 
+        fetchCustomers();
+    }, []);
+
+    useEffect(() => {
+        // 1. EDIT MODE: Load historical order
         if ((location.state?.mode === 'edit' || location.state?.mode === 'resume') && location.state?.orderData) {
-            // Load historical order
             loadOrder(location.state.orderData);
-
-            // Tax Logic for historical
             const cust = location.state.orderData.customer;
             setEnableTax(!cust || cust.type === 'corporate');
 
+            // 2. LINK MODE: New Order for specific customer
         } else if (location.state?.mode === 'link' && location.state?.customer) {
-            // Linking (New Order for specific customer)
-            // Ideally clear cart? 
-            // clearCart(); // Dependent on UX requirements. Assume yes for new link.
             setSelectedCustomer(location.state.customer);
             setEnableTax(!location.state.customer || location.state.customer.type === 'corporate');
+
+            // 3. FRESH START: If no mode & cart is empty, FORCE RESET customer to show overlay
+        } else if (cart.length === 0) {
+            setSelectedCustomer(null);
         }
-        // Note: We removed the generic `location.state.cartItems` check because Context persistence > passing state.
-    }, [location.state, loadOrder, setSelectedCustomer, setEnableTax]);
+    }, [location.state, loadOrder, setSelectedCustomer, setEnableTax, cart.length]); // Added cart.length back to ensure overlay check works on reset
 
 
     // --- OPTIMIZED HANDLERS (useCallback) ---
@@ -122,9 +158,13 @@ export default function SalesDashboard() {
 
     const handleCustomerSelect = useCallback((customer) => {
         setSelectedCustomer(customer);
-        // Auto-set tax defaults when changing customer
-        setEnableTax(!customer || customer.type === 'corporate');
-    }, []);
+        // Default to enabled for all customers unless 'individual'
+        if (customer && customer.type === 'individual') {
+            setEnableTax(false);
+        } else {
+            setEnableTax(true);
+        }
+    }, [setSelectedCustomer, setEnableTax]);
 
     return (
         <div className="flex h-full w-full overflow-hidden text-gray-800 font-sans relative">
@@ -253,6 +293,7 @@ export default function SalesDashboard() {
                                 key={product.id}
                                 product={product}
                                 onClick={handleProductClick}
+                                selectedColor={profileColor}
                             />
                         ))}
                     </div>
@@ -289,6 +330,7 @@ export default function SalesDashboard() {
                             onRemoveItem={handleRemoveItem}
                             onEditItem={handleEditCartItem}
                             customer={selectedCustomer}
+                            onChangeCustomer={() => setSelectedCustomer(null)}
                             enableTax={enableTax}
                             onToggleTax={setEnableTax}
                             mode={location.state?.mode === 'edit' ? 'edit' : undefined}
@@ -333,12 +375,13 @@ export default function SalesDashboard() {
                 onAddToOrder={handleAddToOrder}
                 color={initialModalDetails?.color || profileColor}
                 initialDetails={initialModalDetails}
+                source="sales"
             />
 
             {/* --- OPTIMIZED CUSTOMER SELECTION OVERLAY --- */}
             {!selectedCustomer && (
                 <CustomerSelectionOverlay
-                    customers={CUSTOMERS}
+                    customers={customers}
                     onSelectCustomer={handleCustomerSelect}
                 />
             )}

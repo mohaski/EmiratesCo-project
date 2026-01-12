@@ -7,17 +7,15 @@
  * - decimal >= 0.1 -> Math.ceil(value * 2) / 2
  * - decimal < 0.1 -> Math.floor(value * 2) / 2
  */
-function roundToHalfWithRule(value) {
-    const decimalPart = value - Math.floor(value);
+export function roundToHalfWithRule(value) {
+    const decimalPart = +(value - Math.floor(value)).toFixed(2);
 
-    if (decimalPart >= 0.1) {
-        // Roof (ceil) to nearest 0.5
-        return Math.ceil(value * 2) / 2;
-    } else {
-        // Floor to nearest 0.5
+    if (decimalPart < 0.1 || (decimalPart > 0.5 && decimalPart < 0.6)) {
         return Math.floor(value * 2) / 2;
     }
+    return Math.ceil(value * 2) / 2;
 }
+
 
 /**
  * Converts Millimeters to Square Feet using custom conversion factor and rounding rules.
@@ -39,6 +37,7 @@ export function mmToSquareFeet(lengthMm, widthMm) {
     // Square feet
     return roundedLength * roundedWidth;
 }
+
 
 /**
  * Converts Inches to Square Feet using standard conversion (12 in = 1 ft) and custom rounding rules.

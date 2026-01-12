@@ -28,7 +28,7 @@ export default function Login() {
         try {
             const success = await login(username, password);
             if (success) {
-                navigate('/select-role');
+                navigate('/');
             } else {
                 setError('Invalid credentials');
             }

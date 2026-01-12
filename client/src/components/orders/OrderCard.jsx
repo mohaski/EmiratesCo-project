@@ -10,7 +10,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit }) => (
                 <span className="text-gray-400 text-xs font-medium">{new Date(order.date).toLocaleString()}</span>
             </div>
             <h3 className="text-xl font-bold text-slate-800 truncate">{order.customer.name}</h3>
-            <p className="text-slate-500 text-sm mb-2">{order.items.length} items • {order.paymentMethod.toUpperCase()}</p>
+            <p className="text-slate-500 text-sm mb-2">{order.items.length} items • {order.paymentMethod}</p>
 
             {/* Mini Items Preview */}
             <div className="flex gap-2 overflow-hidden py-1">

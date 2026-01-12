@@ -41,12 +41,22 @@ export const CartProvider = ({ children }) => {
         }
     });
 
+    // Session Type Persistence ('sales' or 'invoice')
+    const [sessionType, setSessionType] = useState(() => {
+        try {
+            return localStorage.getItem('emirates_pos_session_type') || 'sales';
+        } catch (e) {
+            return 'sales';
+        }
+    });
+
     // 2. Auto-save to LocalStorage whenever state changes
     useEffect(() => {
         localStorage.setItem('emirates_pos_cart', JSON.stringify(cartItems));
         localStorage.setItem('emirates_pos_customer', JSON.stringify(customer));
         localStorage.setItem('emirates_pos_tax_enabled', JSON.stringify(taxEnabled));
-    }, [cartItems, customer, taxEnabled]);
+        localStorage.setItem('emirates_pos_session_type', sessionType);
+    }, [cartItems, customer, taxEnabled, sessionType]);
 
     // --- Actions ---
 
@@ -84,6 +94,8 @@ export const CartProvider = ({ children }) => {
         setCustomer,
         taxEnabled,
         setTaxEnabled,
+        sessionType,
+        setSessionType,
         addToCart,
         updateCartItem,
         removeFromCart,

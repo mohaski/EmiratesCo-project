@@ -8,28 +8,6 @@ export const PROFILE_COLORS = [
     { name: 'Grey', hex: '#808080' }
 ];
 
-export const PROFILE_SUB_CATEGORIES = [
-    { id: 'window', label: 'Window Profile' },
-    { id: 'door', label: 'Door Profile' },
-    { id: 'general', label: 'General Purpose' },
-];
-
-export const GLASS_SUB_CATEGORIES = [
-    { id: 'clear', label: 'Clear' },
-    { id: 'oneway', label: 'One/Way' },
-    { id: 'mirror', label: 'Mirror' },
-    { id: 'tint', label: 'Tint' },
-    { id: 'obscure', label: 'Obscure' },
-    { id: 'alucoboard', label: 'Alucoboard' },
-    { id: 'frost', label: 'Frost' },
-];
-
-export const ACCESSORIES_SUB_CATEGORIES = [
-    { id: 'window', label: 'Windows' },
-    { id: 'door', label: 'Doors' },
-    { id: 'general', label: 'General' },
-];
-
 export function useProductFiltering() {
     const { products: PRODUCTS, categories: CATEGORIES } = useProducts();
 
@@ -56,34 +34,28 @@ export function useProductFiltering() {
         [activeCategory]);
 
     const currentSubCategories = useMemo(() => {
-        if (isProfileCategory) return PROFILE_SUB_CATEGORIES;
-        if (isGlassCategory) return GLASS_SUB_CATEGORIES;
-        if (isAccessoriesCategory) return ACCESSORIES_SUB_CATEGORIES;
-        return [];
-    }, [isProfileCategory, isGlassCategory, isAccessoriesCategory]);
+        const cat = CATEGORIES.find(c => c.id === activeCategory);
+        return cat?.subCategories || [];
+    }, [activeCategory, CATEGORIES]);
 
     // --- EFFECT: Sub-category Reset ---
     useEffect(() => {
-        if (isProfileCategory) {
-            setActiveSubCategory('window');
-        } else if (isGlassCategory) {
-            setActiveSubCategory('clear');
-        } else if (isAccessoriesCategory) {
-            setActiveSubCategory('window');
+        if (currentSubCategories.length > 0) {
+            setActiveSubCategory(currentSubCategories[0].id);
         } else {
-            setActiveSubCategory('all');
+            setActiveSubCategory('general');
         }
-    }, [activeCategory, isProfileCategory, isGlassCategory, isAccessoriesCategory]);
+    }, [activeCategory, currentSubCategories]);
 
     // --- MEMOIZED FILTERING ---
     const filteredProducts = useMemo(() => {
         const lowerQuery = deferredQuery.toLowerCase();
 
         return PRODUCTS.filter(p => {
-            const matchesCategory = activeCategory === 'all' || p.category === activeCategory;
+            const matchesCategory = p.category === activeCategory;
             if (!matchesCategory) return false;
 
-            const matchesSubCategory = activeSubCategory === 'all' || p.usage === activeSubCategory;
+            const matchesSubCategory = p.subCategory === activeSubCategory;
             const matchesSearch = !lowerQuery || p.name.toLowerCase().includes(lowerQuery);
 
             let matchesColor = true;

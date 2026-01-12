@@ -2,7 +2,7 @@ import { useOrders } from '../context/OrderContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useMemo } from 'react';
 import logo from '../assets/logo.png';
-import { PRODUCTS } from '../data/mockProducts';
+import { useProducts } from '../context/ProductContext';
 import InvoiceItemRow from '../components/invoices/InvoiceItemRow';
 import { useCart } from '../context/CartContext';
 import { useCartTotals } from '../hooks/useCartTotals';
@@ -11,6 +11,7 @@ import { useCartTotals } from '../hooks/useCartTotals';
 // ... inside component ...
 export default function InvoiceReviewPage() {
     const { addInvoice } = useOrders();
+    const { products: PRODUCTS } = useProducts();
     const location = useLocation();
     const navigate = useNavigate();
 
@@ -34,7 +35,8 @@ export default function InvoiceReviewPage() {
             cartItems: ctxCart, // Use Context
             customer: ctxCustomer,
             savedInvoice: null,
-            enableTax: ctxTax
+            // Prefer passed state (from Generator), fallback to Context
+            enableTax: location.state?.enableTax !== undefined ? location.state.enableTax : ctxTax
         };
     }, [location.state, ctxCart, ctxCustomer, ctxTax]);
 
@@ -45,7 +47,7 @@ export default function InvoiceReviewPage() {
             acc[p.id] = p;
             return acc;
         }, {});
-    }, []);
+    }, [PRODUCTS]);
 
     // --- OPTIMIZATION: Stable Invoice Metadata ---
     const invoiceMeta = useMemo(() => ({
@@ -112,7 +114,7 @@ export default function InvoiceReviewPage() {
             {/* Action Bar (Hidden when printing) */}
             <div className="w-full md:max-w-[210mm] mx-auto mb-6 flex flex-col md:flex-row justify-between items-center gap-4 md:gap-0 print:hidden">
                 <button
-                    onClick={() => navigate('/invoice')}
+                    onClick={() => navigate('/invoice', { state: { mode: 'edit', enableTax } })}
                     className="flex items-center text-slate-300 hover:text-white transition-colors font-medium self-start md:self-auto"
                 >
                     ← Back to Edit
@@ -203,10 +205,12 @@ export default function InvoiceReviewPage() {
                                     <span className="font-medium">Subtotal</span>
                                     <span className="font-mono">${totals.grandTotal.toFixed(2)}</span>
                                 </div>
-                                <div className="flex justify-between text-slate-500 text-sm">
-                                    <span className="font-medium">VAT (16%)</span>
-                                    <span className="font-mono">${totals.vat.toFixed(2)}</span>
-                                </div>
+                                {enableTax && (
+                                    <div className="flex justify-between text-slate-500 text-sm">
+                                        <span className="font-medium">VAT (16%)</span>
+                                        <span className="font-mono">${totals.vat.toFixed(2)}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between text-slate-900 pt-4 border-t border-slate-200 text-xl font-bold">
                                     <span>Total</span>
                                     <span className="font-mono">${totals.total.toFixed(2)}</span>

@@ -55,8 +55,24 @@ const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const hasStock = activeVariant ? (activeVariant.stock !== undefined ? activeVariant.stock : true) : true;
     const stockCount = activeVariant?.stock;
 
+    const [error, setError] = useState(null);
+
     // 6. Update Parent
     useEffect(() => {
+        // Validation
+        let isValid = true;
+        if (activeVariant && stockCount !== undefined) {
+            if (qty > stockCount) {
+                setError(`Only ${stockCount} items available in stock`);
+                isValid = false;
+            } else {
+                setError(null);
+            }
+        } else if (!activeVariant) {
+            // Optional: If no variant found, maybe blocking? But for now stick to stock check.
+            setError(null);
+        }
+
         const total = qty * currentPrice;
 
         // Construct description
@@ -65,11 +81,12 @@ const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
         onUpdate(total, {
             selections,
             qty,
-            variantId: activeVariant?.id,
+            variantId: activeVariant?.variantId || activeVariant?.id,
             description: variantName,
-            isDynamic: true
+            isDynamic: true,
+            isValid // Pass validation status
         });
-    }, [qty, currentPrice, selections, activeVariant, onUpdate, attributeKeys]);
+    }, [qty, currentPrice, selections, activeVariant, onUpdate, attributeKeys, stockCount]);
 
     return (
         <div className="space-y-6">
@@ -116,19 +133,27 @@ const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
             </div>
 
             {/* Quantity Selector */}
-            <div className="flex items-center justify-center gap-6">
-                <button
-                    onClick={() => setQty(Math.max(1, qty - 1))}
-                    className="w-14 h-14 rounded-xl bg-white border border-gray-200 text-2xl font-bold text-gray-500 hover:bg-gray-50 shadow-sm"
-                >-</button>
-                <div className="text-center">
-                    <div className="text-4xl font-black text-gray-800 font-mono">{qty}</div>
-                    <div className="text-xs font-bold text-gray-400 uppercase mt-1">Quantity</div>
+            <div className="flex flex-col items-center gap-2">
+                <div className="flex items-center justify-center gap-6">
+                    <button
+                        onClick={() => setQty(Math.max(1, qty - 1))}
+                        className="w-14 h-14 rounded-xl bg-white border border-gray-200 text-2xl font-bold text-gray-500 hover:bg-gray-50 shadow-sm"
+                    >-</button>
+                    <div className="text-center">
+                        <div className={`text-4xl font-black font-mono ${error ? 'text-red-500' : 'text-gray-800'}`}>{qty}</div>
+                        <div className="text-xs font-bold text-gray-400 uppercase mt-1">Quantity</div>
+                    </div>
+                    <button
+                        onClick={() => setQty(qty + 1)}
+                        className="w-14 h-14 rounded-xl bg-blue-50 border border-blue-100 text-2xl font-bold text-blue-600 hover:bg-blue-100 shadow-sm"
+                    >+</button>
                 </div>
-                <button
-                    onClick={() => setQty(qty + 1)}
-                    className="w-14 h-14 rounded-xl bg-blue-50 border border-blue-100 text-2xl font-bold text-blue-600 hover:bg-blue-100 shadow-sm"
-                >+</button>
+                {error && (
+                    <div className="text-red-500 text-xs font-bold uppercase tracking-wide animate-pulse flex items-center gap-1 mt-2">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                        {error}
+                    </div>
+                )}
             </div>
         </div>
     );

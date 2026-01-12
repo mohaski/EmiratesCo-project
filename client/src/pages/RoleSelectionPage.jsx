@@ -26,6 +26,14 @@ const roles = [
         icon: '👋',
         color: 'from-emerald-400 to-teal-500',
         shadow: 'shadow-emerald-500/30'
+    },
+    {
+        id: 'store_manager',
+        title: 'Store Manager',
+        description: 'View active orders and manage preparation.',
+        icon: '🏭',
+        color: 'from-purple-500 to-pink-500',
+        shadow: 'shadow-purple-500/30'
     }
 ];
 

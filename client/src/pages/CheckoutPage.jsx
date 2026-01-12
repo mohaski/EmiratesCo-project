@@ -1,13 +1,15 @@
 import React, { useState, useMemo, useCallback, memo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { PRODUCTS } from '../data/mockProducts';
 import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
+import { useOrders } from '../context/OrderContext';
 import { useCartTotals } from '../hooks/useCartTotals';
 
 // --- SUB-COMPONENT: Memoized Item Card ---
 // Extracts complex rendering logic so the list doesn't re-render when payment inputs change
 // --- SUB-COMPONENT: Memoized Item Card ---
 const ReviewItemCard = memo(({ item }) => {
+    console.log(item)
     // Helper to find product def safely
     return (
         <div className="grid grid-cols-12 gap-6 p-6 hover:bg-gray-50/50 transition-colors group border-b border-gray-100 last:border-0">
@@ -80,10 +82,15 @@ export default function CheckoutPage() {
     const navigate = useNavigate();
 
     // --- GLOBAL STATE (Context) ---
-    const { cartItems, customer, taxEnabled: enableTax, clearCart } = useCart();
+    const { user } = useAuth();
+    const { cartItems, customer, taxEnabled: ctxTaxEnabled, clearCart } = useCart();
+    const { addOrder } = useOrders();
 
     // Mode specific state still comes from location (e.g. are we editing?)
     const { mode, originalTotal = 0 } = location.state || {};
+
+    // Prefer passed state from Sales Dashboard, fallback to Context
+    const enableTax = location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled;
 
     const [loading, setLoading] = useState(false);
     const [paymentMethod, setPaymentMethod] = useState(null);
@@ -128,12 +135,38 @@ export default function CheckoutPage() {
     const handlePayment = useCallback(() => {
         setLoading(true);
         setTimeout(() => {
+            // 1. Construct Order Data
+            const orderData = {
+                customer,
+                items: cartItems,
+                servedBy: user?.userId,
+                totals: {
+                    subtotal,
+                    tax,
+                    total,
+                    discount: discountValue,
+                    paid: currentPayable,
+                    balance
+                },
+                payment: {
+                    method: paymentMethod,
+                    isPartial,
+                    details: paymentMethod === 'split'
+                        ? { cash: parseFloat(cashAmount), mpesa: mpesaAutoAmount }
+                        : null
+                },
+                mode: mode || 'new'
+            };
+
+            // 2. Save to Context (Persistence)
+            addOrder(orderData);
+
             setLoading(false);
             alert('Payment Successful! Order Placed.');
             clearCart(); // Clear context state
             navigate('/');
-        }, 2000);
-    }, [navigate, clearCart]);
+        }, 1500);
+    }, [navigate, clearCart, addOrder, customer, cartItems, subtotal, tax, total, discountValue, currentPayable, balance, paymentMethod, isPartial, cashAmount, mpesaAutoAmount, mode]);
 
     if (cartItems.length === 0) {
         return (
@@ -153,7 +186,7 @@ export default function CheckoutPage() {
                     {/* Header Nav */}
                     {/* Header Nav */}
                     <button
-                        onClick={() => navigate('/sales')}
+                        onClick={() => navigate('/sales', { state: { enableTax } })}
                         className="text-gray-400 hover:text-gray-600 text-sm font-bold mb-6 flex items-center gap-2 transition-colors uppercase tracking-wide"
                     >
                         <span>←</span> Back to Dashboard
@@ -354,10 +387,12 @@ export default function CheckoutPage() {
                             <span>Subtotal</span>
                             <span className="font-mono">Ksh{subtotal.toFixed(2)}</span>
                         </div>
-                        <div className="flex justify-between text-gray-500">
-                            <span>VAT (16%)</span>
-                            <span className="font-mono">Ksh{tax.toFixed(2)}</span>
-                        </div>
+                        {enableTax && (
+                            <div className="flex justify-between text-gray-500">
+                                <span>VAT (16%)</span>
+                                <span className="font-mono">Ksh{tax.toFixed(2)}</span>
+                            </div>
+                        )}
                         {discountValue > 0 && (
                             <div className="flex justify-between text-green-600 font-bold">
                                 <span>Discount</span>
@@ -402,7 +437,7 @@ export default function CheckoutPage() {
                         )}
                     </button>
                 </div>
-            </div>
+            </div >
         </div >
     );
 }

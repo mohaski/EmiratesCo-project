@@ -1,10 +1,10 @@
 from fastapi import HTTPException, Depends
-from ...entities.payments import Payment
-from ...db.database import get_session
-from ...entities.orders import Order
+from entities.payments import Payment
+from db.database import get_session
+from entities.orders import Order
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import Session, select
-from ...app_logging import logger
+from loggiing import logger
 from sqlalchemy import func
 from datetime import datetime
 
@@ -85,7 +85,7 @@ def calculate_cash_payments_for_certain_date(date: str, db: Session = Depends(ge
         raise HTTPException(status_code=500, detail="Failed to calculate cash payments for the specified date")
 
 
-def process_payment(payment_data: model.PaymentCreate, db: Session = Depends(get_session)) -> model.PaymentResponse:
+def process_payment(payment_data: model.PaymentCreateRequest, db: Session = Depends(get_session)) -> model.PaymentResponse:
     """
     Process a payment for an order.
 

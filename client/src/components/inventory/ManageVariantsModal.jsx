@@ -4,12 +4,12 @@ import { useProducts } from '../../context/ProductContext';
 import ConfirmationModal from '../common/ConfirmationModal';
 
 export default function ManageVariantsModal({ isOpen, onClose, product }) {
-    const { updateProduct } = useProducts();
+    const { updateProduct, updateProductVariant } = useProducts();
     const [confirmDelete, setConfirmDelete] = useState({ open: false, variant: null });
 
     // Editing State
     const [editingVariantId, setEditingVariantId] = useState(null);
-    const [editForm, setEditForm] = useState({ price: '' });
+    const [editForm, setEditForm] = useState({ price: '', stockChange: 0 });
 
     if (!product) return null;
 
@@ -26,31 +26,31 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const handleEditClick = (variant) => {
         const id = getVariantId(variant);
         setEditingVariantId(id);
-        // Pre-fill form - Price Only
+        // Pre-fill
         setEditForm({
-            price: variant.price || variant.priceFull || 0
+            price: variant.price || variant.priceFull || 0,
+            stockChange: 0
         });
     };
 
     const handleCancelEdit = () => {
         setEditingVariantId(null);
-        setEditForm({ price: '' });
+        setEditForm({ price: '', stockChange: 0 });
     };
 
-    const handleSaveEdit = (originalVariant) => {
-        const updatedVariants = variants.map(v => {
-            if (getVariantId(v) === getVariantId(originalVariant)) {
-                return {
-                    ...v,
-                    price: parseFloat(editForm.price),
-                    priceFull: parseFloat(editForm.price), // Sync for legacy compat
-                };
-            }
-            return v;
-        });
-
-        updateProduct({ ...product, variants: updatedVariants });
-        setEditingVariantId(null);
+    const handleSaveEdit = async (originalVariant) => {
+        try {
+            await updateProductVariant(originalVariant.id, {
+                price: parseFloat(editForm.price),
+                price_half: parseFloat(editForm.priceHalf),
+                price_unit: parseFloat(editForm.priceUnit),
+                stock_change: parseInt(editForm.stockChange) || 0
+            });
+            setEditingVariantId(null);
+        } catch (err) {
+            console.error(err);
+            alert("Update failed");
+        }
     };
 
     const confirmDeletion = () => {
@@ -127,21 +127,46 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                                     <h4 className="font-bold text-gray-800 text-sm sm:text-base">{name}</h4>
 
                                                                     {isEditing ? (
-                                                                        <div className="flex items-center gap-4 mt-2 animate-fade-in w-full">
+                                                                        <div className="flex items-center gap-2 mt-2 animate-fade-in w-full">
                                                                             <div className="flex flex-col">
-                                                                                <label className="text-[10px] uppercase font-bold text-gray-400">Price</label>
+                                                                                <label className="text-[10px] uppercase font-bold text-gray-400">Full</label>
                                                                                 <input
                                                                                     type="number"
-                                                                                    className="w-24 px-2 py-1 bg-white border border-gray-300 rounded text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                                                                    className="w-20 px-2 py-1 bg-white border border-gray-300 rounded text-sm focus:border-blue-500 outline-none"
                                                                                     value={editForm.price}
                                                                                     onChange={(e) => setEditForm({ ...editForm, price: e.target.value })}
                                                                                 />
                                                                             </div>
+                                                                            {product.trackOffcuts && (
+                                                                                <>
+                                                                                    <div className="flex flex-col">
+                                                                                        <label className="text-[10px] uppercase font-bold text-gray-400">Half</label>
+                                                                                        <input
+                                                                                            type="number"
+                                                                                            className="w-20 px-2 py-1 bg-white border border-gray-300 rounded text-sm focus:border-blue-500 outline-none"
+                                                                                            value={editForm.priceHalf}
+                                                                                            onChange={(e) => setEditForm({ ...editForm, priceHalf: e.target.value })}
+                                                                                        />
+                                                                                    </div>
+                                                                                    <div className="flex flex-col">
+                                                                                        <label className="text-[10px] uppercase font-bold text-gray-400">Unit</label>
+                                                                                        <input
+                                                                                            type="number"
+                                                                                            className="w-20 px-2 py-1 bg-white border border-gray-300 rounded text-sm focus:border-blue-500 outline-none"
+                                                                                            value={editForm.priceUnit}
+                                                                                            onChange={(e) => setEditForm({ ...editForm, priceUnit: e.target.value })}
+                                                                                        />
+                                                                                    </div>
+                                                                                </>
+                                                                            )}
                                                                         </div>
                                                                     ) : (
                                                                         <div className="flex gap-3 text-xs text-gray-500 mt-1">
                                                                             <span className="bg-white px-2 py-0.5 rounded border border-gray-200 font-mono">
                                                                                 Price: <span className="text-gray-900 font-bold">{variant.price || variant.priceFull || '-'}</span>
+                                                                            </span>
+                                                                            <span className="bg-white px-2 py-0.5 rounded border border-gray-200 font-mono">
+                                                                                Stock: <span className="text-gray-900 font-bold">{variant.stock || 0}</span>
                                                                             </span>
                                                                         </div>
                                                                     )}
@@ -156,7 +181,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                                             onClick={() => handleSaveEdit(variant)}
                                                                             className="px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white text-xs font-bold transition-colors shadow-sm"
                                                                         >
-                                                                            Save
+                                                                            Confirm
                                                                         </button>
                                                                         <button
                                                                             onClick={handleCancelEdit}
@@ -170,7 +195,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                                         <button
                                                                             onClick={() => handleEditClick(variant)}
                                                                             className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors group-hover:opacity-100 sm:opacity-60"
-                                                                            title="Edit Price"
+                                                                            title="Edit Price & Stock"
                                                                         >
                                                                             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                                                         </button>

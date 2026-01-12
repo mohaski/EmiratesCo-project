@@ -1,14 +1,14 @@
 from fastapi import Depends, HTTPException
 from sqlmodel import Session, select
-from ...entities.messages import Message, MessageRecipient
-from . import models
-from ...db.database import get_session
-from ..userManagement.authService import get_current_user
-from ...entities.users import User
-from ...app_logging import logger
+from entities.messages import Message, MessageRecipient
+from . import model
+from db.database import get_session
+from core.userManagement.authService import get_current_user
+from entities.users import User
+from loggiing import logger
 from sqlalchemy import func
 
-def send_message(message_data: models.messageCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> dict:
+def send_message(message_data: model.messageCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> dict:
     try:
         new_message = Message(senderId=current_user.userId, content=message_data.content)
         db.add(new_message)
@@ -46,7 +46,7 @@ def send_message(message_data: models.messageCreate, current_user: User = Depend
         
         
         
-def update_message_read_status(message_id: int, status_data: models.messageReadStatusUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> dict:
+def update_message_read_status(message_id: int, status_data: model.messageReadStatusUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> dict:
     try:
         message_recipient = db.exec(
             select(MessageRecipient)
@@ -74,7 +74,7 @@ def update_message_read_status(message_id: int, status_data: models.messageReadS
         raise HTTPException(status_code=500, detail="Internal server error")
     
         
-def read_inbox(current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> list[models.messageResponse]:
+def read_inbox(current_user: User = Depends(get_current_user), db: Session = Depends(get_session)) -> list[model.messageResponse]:
     try:
         messages = db.exec(
             select(Message)

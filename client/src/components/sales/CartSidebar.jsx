@@ -52,7 +52,25 @@ const CartItem = memo(({ item, index, onEdit, onRemove }) => {
                         </span>
                     )}
 
-                    {item.details.extras ? (
+                    {/* Universal Attributes (New) */}
+                    {item.details.attributes && item.details.attributes.length > 0 && (
+                        item.details.attributes.map((attr, idx) => (
+                            <span key={idx} className={attr.label === 'Thickness' ? 'text-blue-500' : ''}>
+                                {/* Hide Label for specific obvious attributes if desired, or show generic */}
+                                {attr.label === 'Color' ? (
+                                    <span className="flex items-center gap-1">
+                                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: attr.value === 'White' ? '#eee' : attr.value }}></span>
+                                        {attr.value}
+                                    </span>
+                                ) : (
+                                    <span>{attr.value}{attr.label === 'Length' && typeof attr.value === 'number' ? 'ft' : ''}</span>
+                                )}
+                            </span>
+                        ))
+                    )}
+
+                    {/* Legacy Extras (Old) */}
+                    {!item.details.attributes && item.details.extras ? (
                         Object.entries(item.details.extras).map(([key, val]) => {
                             if (key === 'Color' || key === 'Category') return null;
                             return (
@@ -60,131 +78,51 @@ const CartItem = memo(({ item, index, onEdit, onRemove }) => {
                                     {val}{key === 'Length' && typeof val === 'number' ? 'ft' : ''}
                                 </span>
                             );
-                        })
+                        }
+                        )
                     ) : (
-                        <>
-                            {item.details.length && <span>{item.details.length}FT</span>}
-                            {item.details.thickness && <span className="text-blue-500">{item.details.thickness}</span>}
-                        </>
+                        /* Legacy Simple Fields fallback */
+                        !item.details.attributes && (
+                            <>
+                                {item.details.length && <span>{item.details.length}FT</span>}
+                                {item.details.thickness && <span className="text-blue-500">{item.details.thickness}</span>}
+                            </>
+                        )
                     )}
                 </div>
 
-                {/* Breakdown Logic */}
-                {item.details?.full > 0 && (
-                    <div className="flex items-baseline justify-between">
-                        <span>Full Lengths</span>
-                        <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                        <span className="font-mono text-gray-900 font-medium">x{item.details.full}</span>
-                    </div>
-                )}
-                {item.details?.half > 0 && (
-                    <div className="flex items-baseline justify-between">
-                        <span>Half Lengths</span>
-                        <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                        <span className="font-mono text-gray-900 font-medium">x{item.details.half}</span>
-                    </div>
-                )}
-                {item.details?.feet > 0 && (
-                    <div className="flex items-baseline justify-between">
-                        <span>Custom Feet</span>
-                        <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                        <span className="font-mono text-gray-900 font-medium">{item.details.feet} ft</span>
-                    </div>
-                )}
-
-                {/* Glass Items List */}
-                {item.details?.glassItems && item.details.glassItems.length > 0 ? (
-                    <div className="pt-2">
-                        <div className="mt-1 space-y-2">
-                            {item.details.glassItems.map((glassItem, gIdx) => (
-                                <div key={gIdx} className="flex justify-between items-start font-mono text-[11px]">
-                                    <div className="flex flex-col">
-                                        <span className="text-gray-700">
-                                            {glassItem.type === 'cut' && glassItem.l && glassItem.w && glassItem.u
-                                                ? `Cut: ${glassItem.l}x${glassItem.w} ${glassItem.u}`
-                                                : glassItem.label}
-                                        </span>
+                {/* Universal Line Items Rendering */}
+                {item.details?.lineItems && item.details.lineItems.length > 0 ? (
+                    <div className="pt-2 space-y-1">
+                        {item.details.lineItems.map((li, idx) => (
+                            <div key={idx} className="flex justify-between items-start font-mono text-[11px] leading-tight group/line">
+                                <div className="flex flex-col">
+                                    <span className="text-gray-700 font-medium">{li.label}</span>
+                                    {li.meta && Object.keys(li.meta).length > 0 && (
                                         <span className="text-[10px] text-gray-400">
-                                            x{glassItem.qty}
-                                            {glassItem.unitListPrice ? ` • Ksh${glassItem.unitListPrice}/${glassItem.unit}` : ''}
+                                            {Object.entries(li.meta).map(([k, v]) => {
+                                                if (k === 'unit' || k === 'length') return `${v}${k === 'length' ? 'ft' : ''}`;
+                                                return `${k}:${v}`;
+                                            }).join(' ')}
                                         </span>
-                                    </div>
-                                    <span className="text-gray-900 font-bold">Ksh{(glassItem.totalPrice || 0).toFixed(0)}</span>
+                                    )}
                                 </div>
-                            ))}
-                        </div>
+                                <div className="flex items-baseline gap-3">
+                                    <span className="text-gray-400 text-[10px]">x{li.qty}</span>
+                                    <span className="text-gray-900 font-bold">Ksh{(li.total || 0).toFixed(0)}</span>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 ) : (
-                    <>
-                        {/* Legacy Glass/Cut */}
-                        {item.details?.fullSheet > 0 && (
-                            <div className="flex items-baseline justify-between">
-                                <span>Full Sheets</span>
-                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                                <span className="font-mono text-gray-900 font-medium">x{item.details.fullSheet}</span>
-                            </div>
-                        )}
-                        {item.details?.halfSheet > 0 && (
-                            <div className="flex items-baseline justify-between">
-                                <span>Half Sheets</span>
-                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                                <span className="font-mono text-gray-900 font-medium">x{item.details.halfSheet}</span>
-                            </div>
-                        )}
-                        {item.details?.cutPieces && item.details.cutPieces.length > 0 && (
-                            <div className="pt-2">
-                                <span className="text-[10px] uppercase font-bold text-gray-300 tracking-wider">Cuts</span>
-                                <div className="mt-1 space-y-1">
-                                    {item.details.cutPieces.map((cut, cIdx) => (
-                                        <div key={cIdx} className="flex justify-between font-mono text-[11px]">
-                                            <span>{cut.l} x {cut.w} {cut.u}</span>
-                                            <span className="text-gray-900">x{cut.q}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Accessories Details */}
-                        {item.details?.thickness && (
-                            <div className="flex items-baseline justify-between">
-                                <span>Thickness</span>
-                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                                <span className="font-mono text-gray-900 font-medium">{item.details.thickness}</span>
-                            </div>
-                        )}
-                        {item.details?.unit === 'meter' && !item.details?.salesMode && item.details?.length > 0 && (
-                            <div className="flex items-baseline justify-between">
-                                <span>Length</span>
-                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                                <span className="font-mono text-gray-900 font-medium">{item.details.length}m</span>
-                            </div>
-                        )}
-                        {/* Meter Mode */}
-                        {item.details?.salesMode === 'meter' && (
-                            <div className="flex items-baseline justify-between">
-                                <span>Length</span>
-                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                                <span className="font-mono text-gray-900 font-medium">{item.details.length}m</span>
-                            </div>
-                        )}
-                        {/* Roll Mode */}
-                        {item.details?.salesMode === 'roll' && (
-                            <div className="flex items-baseline justify-between">
-                                <span>{item.details.rollLabel || 'Rolls'} ({item.details.rollLength}m each)</span>
-                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                                <span className="font-mono text-gray-900 font-medium">x{item.details.qty}</span>
-                            </div>
-                        )}
-                        {/* Standard Qty (Accessories/Profiles) */}
-                        {item.details?.qty > 0 && item.details?.unit !== 'meter' && !item.details?.full && !item.details?.salesMode && !item.details?.glassItems && (
-                            <div className="flex items-baseline justify-between">
-                                <span>Quantity</span>
-                                <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                                <span className="font-mono text-gray-900 font-medium">x{item.details.qty}</span>
-                            </div>
-                        )}
-                    </>
+                    /* Legacy Fallback for older items or direct qty items */
+                    item.details?.qty > 0 && (
+                        <div className="flex items-baseline justify-between mt-2">
+                            <span>Quantity</span>
+                            <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
+                            <span className="font-mono text-gray-900 font-medium">x{item.details.qty}</span>
+                        </div>
+                    )
                 )}
 
 
@@ -194,10 +132,8 @@ const CartItem = memo(({ item, index, onEdit, onRemove }) => {
 });
 
 // --- MAIN COMPONENT ---
-export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, customer, actionLabel, onAction, mode, originalTotal = 0, enableTax, onToggleTax }) {
+export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, customer, onChangeCustomer, actionLabel, onAction, mode, originalTotal = 0, enableTax, onToggleTax }) {
     const navigate = useNavigate();
-
-
 
     // --- OPTIMIZATION 2: Memoize Financial Math ---
     // Only recalculate when cartItems or originalTotal changes
@@ -233,16 +169,24 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                 <div className="flex items-center justify-between mb-8">
                     <div className="flex flex-col">
                         <h2 className="text-2xl font-bold text-gray-900">{mode === 'edit' ? 'Editing Order' : 'Order'}</h2>
-                        <span className="text-gray-400 text-sm font-medium">
-                            {customer ? (
-                                <span className="text-blue-600 font-bold">{customer.name}</span>
-                            ) : (
-                                "#1024 • Table 5"
-                            )}
-                        </span>
+                        <button
+                            onClick={onChangeCustomer}
+                            className="text-left group flex items-center gap-2 hover:bg-gray-50 -ml-2 px-2 py-1 rounded-lg transition-colors"
+                        >
+                            <span className="text-gray-400 text-sm font-medium">
+                                {customer ? (
+                                    <span className="text-blue-600 font-bold group-hover:underline">{customer.name}</span>
+                                ) : (
+                                    "Select Customer"
+                                )}
+                            </span>
+                            <span className="text-xs text-gray-300 group-hover:text-blue-500">
+                                {customer ? '(Change)' : '▼'}
+                            </span>
+                        </button>
                     </div>
                     <div className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center text-gray-400">
-                        👤
+                        {customer ? (customer.type === 'corporate' ? '🏢' : '👤') : '👤'}
                     </div>
                 </div>
 
