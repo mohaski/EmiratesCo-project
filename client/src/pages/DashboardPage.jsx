@@ -1,107 +1,99 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import CeoDashboard from '../components/dashboards/CeoDashboard';
 import CashierDashboard from '../components/dashboards/CashierDashboard';
 import StockManagerDashboard from '../components/dashboards/StockManagerDashboard';
 
+const GREETING = () => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+};
+
+const ROLE_META = {
+    ceo:          { label: 'Executive Dashboard',  sub: 'Strategic overview of operations and revenue.' },
+    admin:        { label: 'Admin Dashboard',       sub: 'Full system control and configuration.' },
+    seniorCashier:{ label: 'Sales Dashboard',       sub: 'POS terminal and transaction management.' },
+    juniorCashier:{ label: 'Sales Dashboard',       sub: 'Process sales and view your orders.' },
+    storeManager: { label: 'Inventory Dashboard',   sub: 'Stock levels, alerts, and order fulfillment.' },
+    stockmanager: { label: 'Inventory Dashboard',   sub: 'Stock levels, alerts, and order fulfillment.' },
+};
 
 export default function DashboardPage() {
-    const { user, logout } = useAuth();
+    const { user } = useAuth();
     const navigate = useNavigate();
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const role = user?.role?.toLowerCase();
 
-    // Determine which dashboard to show
+    const meta = ROLE_META[role] || { label: 'Dashboard', sub: 'Welcome back.' };
+    const firstName = user?.firstName || user?.name?.split(' ')[0] || 'there';
+
     const renderDashboard = () => {
-        const role = user?.role?.toLowerCase();
-
-        // Normalize role or handle specific strings
         if (role === 'ceo' || role === 'admin') return <CeoDashboard />;
         if (role === 'storemanager' || role === 'stockmanager') return <StockManagerDashboard />;
-        // Default for cashiers or undefined
         return <CashierDashboard />;
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 flex flex-col font-sans text-gray-900">
-            {/* Top Navigation */}
-            <header className="bg-white/80 backdrop-blur-md border-b border-gray-200 sticky top-0 z-40 transition-all">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 md:h-20 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-blue-500/20 transform hover:scale-105 transition-transform duration-300">
-                            EC
-                        </div>
-                        <div>
-                            <h1 className="text-xl font-bold text-gray-800 tracking-tight">EmiratesCo</h1>
-                            <p className="text-[10px] sm:text-xs text-gray-500 font-bold tracking-widest uppercase">
-                                {user?.role === 'ceo' || user?.role === 'admin' ? 'Executive Dashboard' : user?.role === 'storeManager' ? 'Inventory Dashboard' : 'Sales Dashboard'}
-                            </p>
-                        </div>
-                    </div>
+        <div style={{ minHeight: '100%', background: 'var(--color-bg)', color: 'var(--color-text)', position: 'relative' }}>
 
-                    {/* Desktop Actions & Profile */}
-                    <div className="hidden md:flex items-center gap-6">
-                        <div className="text-right">
-                            <div className="text-sm font-bold text-gray-900">{user?.name || 'User'}</div>
-                            <div className="text-xs text-gray-500">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</div>
-                        </div>
-                        <div className="w-10 h-10 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-400">
-                            <span className="text-lg">👤</span>
-                        </div>
-                    </div>
-
-
-                    {/* Mobile Menu Button */}
-                    <button
-                        onClick={() => setIsMenuOpen(!isMenuOpen)}
-                        className="md:hidden p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-                    >
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
-                    </button>
-                </div>
-
-                {/* Mobile Menu Dropdown */}
-                {isMenuOpen && (
-                    <div className="md:hidden border-t border-gray-100 bg-white px-4 py-4 space-y-3 shadow-lg absolute w-full left-0 animate-slide-down">
-                        <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
-                            <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center text-gray-400">👤</div>
-                            <div>
-                                <div className="font-bold text-gray-900">{user?.name || 'User'}</div>
-                                <div className="text-xs text-gray-500">{new Date().toLocaleDateString()}</div>
+            {/* Page Header */}
+            <div className="dashboard-header" style={{
+                padding: 'clamp(1rem, 3vw, 2rem) clamp(1rem, 3vw, 2.5rem) 1rem',
+                borderBottom: '1px solid rgba(255,255,255,0.06)',
+                background: 'rgba(255,255,255,0.02)',
+                backdropFilter: 'blur(8px)',
+                position: 'sticky', top: 0, zIndex: 20,
+            }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', maxWidth: '1400px', margin: '0 auto' }}>
+                    <div className="animate-fade-in-up">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.375rem', flexWrap: 'wrap' }}>
+                            <div style={{
+                                fontSize: '0.7rem', fontWeight: 600, letterSpacing: '0.1em',
+                                textTransform: 'uppercase', color: '#3b82f6',
+                                padding: '0.2rem 0.6rem',
+                                background: 'rgba(59,130,246,0.12)',
+                                border: '1px solid rgba(59,130,246,0.2)',
+                                borderRadius: '100px',
+                            }}>
+                                {meta.label}
                             </div>
                         </div>
-                        <button onClick={() => { navigate('/sales'); setIsMenuOpen(false) }} className="w-full text-left px-4 py-3 bg-blue-50 text-blue-700 font-bold rounded-xl">New Sale</button>
-                        <button className="w-full text-left px-4 py-3 hover:bg-gray-50 text-gray-700 font-medium rounded-xl">Orders</button>
-                        <button className="w-full text-left px-4 py-3 hover:bg-gray-50 text-gray-700 font-medium rounded-xl">Settings</button>
+                        <h1 style={{ fontSize: 'clamp(1.2rem, 3vw, 1.5rem)', fontWeight: 700, color: '#f1f5f9', letterSpacing: '-0.02em' }}>
+                            {GREETING()}, <span className="gradient-text">{firstName}</span>
+                        </h1>
+                        <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '0.25rem' }}>{meta.sub}</p>
                     </div>
-                )}
-            </header>
 
-            <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 py-6 md:py-10 w-full">
-
-                {/* Welcome Section */}
-                <div className="mb-8 md:mb-12 flex flex-col md:flex-row gap-6 md:items-center justify-between animate-fade-in-up">
-                    <div>
-                        <h2 className="text-2xl md:text-3xl font-bold text-gray-900">Good Afternoon, {user?.firstName || user?.name?.split(' ')[0] || 'User'}! 👋</h2>
-                        <p className="text-gray-500 mt-2 text-base md:text-lg">
-                            {user?.role === 'ceo' || user?.role === 'admin' ? 'Here is the high-level overview of the business.' :
-                                user?.role === 'storeManager' ? 'Check inventory levels and alerts.' :
-                                    'Ready to process some new orders?'}
-                        </p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-gray-500">System Status:</span>
-                        <span className="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold animate-pulse">
-                            <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                            Online
-                        </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap' }} className="animate-fade-in">
+                        <div style={{
+                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                            padding: '0.4rem 0.75rem',
+                            background: 'rgba(34,197,94,0.08)',
+                            border: '1px solid rgba(34,197,94,0.18)',
+                            borderRadius: '100px',
+                        }}>
+                            <span className="status-dot online" style={{ animation: 'pulse 2s ease-in-out infinite' }} />
+                            <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#4ade80' }}>Online</span>
+                        </div>
+                        <div style={{
+                            padding: '0.4rem 0.75rem',
+                            background: 'rgba(255,255,255,0.04)',
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            borderRadius: '0.625rem',
+                            fontSize: '0.72rem', fontWeight: 500, color: '#64748b',
+                        }}>
+                            {new Date().toLocaleDateString('en-AE', { weekday: 'short', day: 'numeric', month: 'short' })}
+                        </div>
                     </div>
                 </div>
+            </div>
 
-                {/* Dashboard Content Based on Role */}
+            {/* Dashboard Body */}
+            <div style={{ padding: '2rem 2.5rem', maxWidth: '1400px', margin: '0 auto' }}>
                 {renderDashboard()}
-
-            </main>
+            </div>
         </div>
     );
 }

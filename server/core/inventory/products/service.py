@@ -140,8 +140,10 @@ def update_product(
             raise HTTPException(status_code=404, detail="Product not found")
 
         update_dict = update_data.dict(exclude_unset=True)
+        # Map camelCase field names to entity column names
+        field_map = {'trackOffcuts': 'track_offcuts'}
         for key, value in update_dict.items():
-            setattr(product, key, value)
+            setattr(product, field_map.get(key, key), value)
             
         db.add(product)
         db.commit()
@@ -271,6 +273,50 @@ def getAllCategories(db: Session = Depends(get_session)):
     return db.exec(select(Category)).all()
 
 # --- STOCK ---
+
+def update_simple_product_stock(product_id: int, stock_change: int, db: Session) -> dict:
+    """
+    Add or remove stock from a simple (non-variant) product.
+    stock_change can be positive (add) or negative (remove).
+    """
+    try:
+        product = db.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if product.has_variants:
+            raise HTTPException(status_code=400, detail="Use variant endpoints to update stock for variable products")
+        new_qty = (product.stock_quantity or 0) + stock_change
+        if new_qty < 0:
+            raise HTTPException(status_code=400, detail=f"Insufficient stock. Current: {product.stock_quantity}")
+        product.stock_quantity = new_qty
+        db.add(product)
+        db.commit()
+        db.refresh(product)
+        logger.info(f"Stock updated for product {product_id}: {product.stock_quantity}")
+        return {"message": "Stock updated", "id": product_id, "stock_quantity": product.stock_quantity}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Update Stock Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+def get_offcuts_for_product(
+    product_id: int,
+    db: Session,
+    variant_id: Optional[int] = None,
+):
+    """Return all available offcut pieces for a product, sorted longest first."""
+    from entities.offcuts import Offcut
+    stmt = (
+        select(Offcut)
+        .where(Offcut.product_id == product_id, Offcut.quantity > 0)
+        .order_by(Offcut.length.desc())
+    )
+    if variant_id is not None:
+        stmt = stmt.where(Offcut.variant_id == variant_id)
+    return db.exec(stmt).all()
+
 
 def check_stock_availability(product_id: int, qty: int, db: Session = Depends(get_session), variant_id: Optional[int] = None):
     product = db.get(Product, product_id)

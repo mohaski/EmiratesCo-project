@@ -1,99 +1,117 @@
-import React from 'react';
-
-const AddStockModal = ({
-    isOpen,
-    onClose,
-    product,
-    selectedVariant,
-    onVariantSelect,
-    stockToAdd,
-    onStockChange,
-    onConfirm
-}) => {
+const AddStockModal = ({ isOpen, onClose, product, selectedVariant, onVariantSelect, stockToAdd, onStockChange, onConfirm }) => {
     if (!isOpen || !product) return null;
 
+    const darkInput = {
+        background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: '0.75rem', color: '#f1f5f9', outline: 'none', transition: 'border-color 0.2s',
+        fontFamily: 'var(--font-mono)',
+    };
+
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm animate-fade-in">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-pop-in">
-                <div className="p-8 border-b border-gray-100 bg-gray-50/50 text-center">
-                    <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4 shadow-sm">
-                        📦
-                    </div>
-                    <h3 className="text-2xl font-bold text-gray-900">Restock Product</h3>
-                    <p className="text-gray-500 mt-1">{product.name}</p>
+        <div style={{
+            position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+            background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(10px)',
+        }}>
+            <div style={{
+                width: '100%', maxWidth: '480px',
+                background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '1.5rem', overflow: 'hidden',
+                boxShadow: '0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(59,130,246,0.1)',
+                animation: 'fadeInScale 0.2s ease',
+            }}>
+                {/* Header */}
+                <div style={{
+                    padding: '1.5rem 2rem', textAlign: 'center',
+                    borderBottom: '1px solid rgba(255,255,255,0.07)',
+                    background: 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(6,182,212,0.04))',
+                }}>
+                    <div style={{
+                        width: '56px', height: '56px', borderRadius: '14px', margin: '0 auto 0.875rem',
+                        background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(6,182,212,0.15))',
+                        border: '1px solid rgba(59,130,246,0.3)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem',
+                    }}>📦</div>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#f1f5f9', margin: '0 0 4px' }}>Restock Product</h3>
+                    <p style={{ fontSize: '0.78rem', color: '#64748b', margin: 0 }}>{product.name}</p>
                 </div>
 
-                <div className="p-8 space-y-6">
-
-                    {/* Variant Selector */}
-                    <div>
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wide block mb-3">Select Variant</label>
-                        <div className="grid grid-cols-3 gap-3">
+                <div style={{ padding: '1.5rem 2rem' }}>
+                    {/* Variant selector */}
+                    <div style={{ marginBottom: '1.5rem' }}>
+                        <label style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.625rem' }}>
+                            Select Variant
+                        </label>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
                             {Object.keys(product.stockVariants).map(variant => (
-                                <button
-                                    key={variant}
-                                    onClick={() => onVariantSelect(variant)}
-                                    className={`px-3 py-3 rounded-xl border text-sm font-bold transition-all ${selectedVariant === variant
-                                        ? 'bg-blue-600 text-white border-blue-600 shadow-md transform scale-105'
-                                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                                        }`}
-                                >
-                                    {variant}
-                                    <div className={`text-xs mt-1 font-mono ${selectedVariant === variant ? 'text-blue-200' : 'text-gray-400'}`}>
-                                        Qty: {product.stockVariants[variant]}
+                                <button key={variant} onClick={() => onVariantSelect(variant)} style={{
+                                    padding: '0.625rem', borderRadius: '0.625rem', cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center',
+                                    background: selectedVariant === variant ? 'linear-gradient(135deg, #3b82f6, #06b6d4)' : 'rgba(255,255,255,0.05)',
+                                    border: `1px solid ${selectedVariant === variant ? 'rgba(59,130,246,0.5)' : 'rgba(255,255,255,0.08)'}`,
+                                    color: selectedVariant === variant ? '#fff' : '#64748b',
+                                    transform: selectedVariant === variant ? 'scale(1.03)' : 'scale(1)',
+                                    boxShadow: selectedVariant === variant ? '0 4px 16px rgba(59,130,246,0.3)' : 'none',
+                                }}>
+                                    <div style={{ fontSize: '0.78rem', fontWeight: 700 }}>{variant}</div>
+                                    <div style={{ fontSize: '0.65rem', fontFamily: 'var(--font-mono)', opacity: 0.7, marginTop: '2px' }}>
+                                        {product.stockVariants[variant]}
                                     </div>
                                 </button>
                             ))}
                         </div>
                     </div>
 
-                    {/* Quantity Input */}
-                    <div>
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wide block mb-2">Quantity to Add</label>
-                        <div className="relative">
-                            <button
-                                onClick={() => onStockChange(Math.max(0, (parseInt(stockToAdd) || 0) - 1).toString())}
-                                className="absolute left-2 top-2 p-3 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
-                            >
-                                −
-                            </button>
-                            <input
-                                type="number"
-                                autoFocus
-                                className="w-full text-center text-4xl font-bold text-gray-900 border border-gray-200 rounded-2xl py-5 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all placeholder-gray-300"
-                                placeholder="0"
-                                value={stockToAdd}
-                                onChange={(e) => onStockChange(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && onConfirm()}
+                    {/* Qty input */}
+                    <div style={{ marginBottom: '1.5rem' }}>
+                        <label style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.625rem' }}>
+                            Quantity to Add
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                            <button onClick={() => onStockChange(Math.max(0, (parseInt(stockToAdd) || 0) - 1).toString())} style={{
+                                position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)',
+                                width: '36px', height: '36px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                                background: 'rgba(255,255,255,0.07)', color: '#94a3b8', fontSize: '1.25rem', transition: 'all 0.15s',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>−</button>
+                            <input type="number" autoFocus placeholder="0" value={stockToAdd} onChange={e => onStockChange(e.target.value)} onKeyDown={e => e.key === 'Enter' && onConfirm()}
+                                style={{ ...darkInput, width: '100%', textAlign: 'center', fontSize: '2.5rem', fontWeight: 900, padding: '1rem 3.5rem', boxSizing: 'border-box' }}
+                                onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
+                                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
                             />
-                            <button
-                                onClick={() => onStockChange(((parseInt(stockToAdd) || 0) + 1).toString())}
-                                className="absolute right-2 top-2 p-3 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
-                            >
-                                +
-                            </button>
+                            <button onClick={() => onStockChange(((parseInt(stockToAdd) || 0) + 1).toString())} style={{
+                                position: 'absolute', right: '0.5rem', top: '50%', transform: 'translateY(-50%)',
+                                width: '36px', height: '36px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                                background: 'rgba(59,130,246,0.15)', color: '#60a5fa', fontSize: '1.25rem', transition: 'all 0.15s',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>+</button>
                         </div>
-                        <p className="mt-3 text-center text-xs font-bold text-gray-400">
-                            New Total: <span className="text-blue-600">{(product.stockVariants[selectedVariant] || 0) + (parseInt(stockToAdd) || 0)}</span>
-                        </p>
+                        {selectedVariant && (
+                            <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#475569', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>
+                                New total: <span style={{ color: '#60a5fa', fontWeight: 700 }}>
+                                    {(product.stockVariants[selectedVariant] || 0) + (parseInt(stockToAdd) || 0)}
+                                </span>
+                            </p>
+                        )}
                     </div>
                 </div>
 
-                <div className="p-8 pt-0 flex gap-4">
-                    <button
-                        onClick={onClose}
-                        className="flex-1 py-4 text-gray-500 font-bold hover:bg-gray-50 rounded-2xl transition-colors"
-                    >
-                        Cancel
-                    </button>
-                    <button
-                        onClick={onConfirm}
-                        disabled={!stockToAdd || parseInt(stockToAdd) <= 0}
-                        className="flex-1 py-4 bg-gray-900 text-white font-bold rounded-2xl hover:bg-black transition-colors shadow-lg shadow-gray-900/20 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-2"
-                    >
-                        <span>Confirm Restock</span>
-                        <span>✓</span>
-                    </button>
+                {/* Footer */}
+                <div style={{ padding: '0 2rem 1.5rem', display: 'flex', gap: '0.75rem' }}>
+                    <button onClick={onClose} style={{
+                        flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.08)',
+                        background: 'transparent', color: '#64748b', fontWeight: 700, cursor: 'pointer', transition: 'all 0.15s', fontSize: '0.875rem',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                    >Cancel</button>
+                    <button onClick={onConfirm} disabled={!stockToAdd || parseInt(stockToAdd) <= 0} style={{
+                        flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: 'none', cursor: 'pointer',
+                        background: !stockToAdd || parseInt(stockToAdd) <= 0 ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                        color: !stockToAdd || parseInt(stockToAdd) <= 0 ? '#334155' : '#fff',
+                        fontWeight: 800, fontSize: '0.875rem',
+                        boxShadow: !stockToAdd || parseInt(stockToAdd) <= 0 ? 'none' : '0 4px 16px rgba(59,130,246,0.3)',
+                        transition: 'all 0.2s',
+                    }}>Confirm Restock ✓</button>
                 </div>
             </div>
         </div>

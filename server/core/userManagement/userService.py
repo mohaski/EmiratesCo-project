@@ -8,10 +8,9 @@ from . import model
 from loggiing import logger
 
 def get_users(db: Session = Depends(get_session)) -> list[User]:
-    """Fetch all users with limited columns."""
+    """Fetch all users without exposing password hashes."""
     try:
-        query = select(User.firstName, User.lastName, User.email, User.role, User.phoneNumber)
-        users = db.exec(query).all()
+        users = db.exec(select(User)).all()
         if not users:
             logger.warning("No users found in database.")
         else:

@@ -29,11 +29,16 @@ class TokenData(BaseModel):
 ######### users models #########
 
 class userDetailsResponse(BaseModel):
+    userId: Optional[UUID] = None
     firstName: str
-    secondName: str
+    secondName: Optional[str] = None
+    username: str
     role: str
     email: EmailStr
     phoneNumber: str
+
+    class Config:
+        from_attributes = True
 
 
 class passwordResetRequest(BaseModel):
@@ -50,17 +55,19 @@ class passwordChangeRequest(BaseModel):
 
 class CustomerCreateRequest(BaseModel):
     name: str
-    #phoneNumber: Annotated[str, Field(pattern=r'^07|01|+2547|+2541|+')]
     phoneNumber: str
     type: str = "individual"
-    
+
     @field_validator('phoneNumber')
     def validate_phoneNumber(cls, v: str):
-        pattern = r'^(254|0)(7|1)\d{8}'
-        
-        if not re.search(pattern, v):
-            raise  ValueError('Invalid phone number formart. Make sure they start with either 0 or 254 followed by 1 or 7 '
-                              'Must not exceed 12 digits')
+        # Accept UAE (+971), international (+XXX), or local formats
+        # Minimum 7 digits after stripping symbols; max 15 (E.164)
+        digits = re.sub(r'[\s\-\(\)\+]', '', v)
+        if not digits.isdigit() or not (7 <= len(digits) <= 15):
+            raise ValueError(
+                'Invalid phone number. Use UAE format (+971 5X XXX XXXX) '
+                'or any valid international number.'
+            )
         return v
             
 class CustomerCreateResponse(BaseModel):

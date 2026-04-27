@@ -1,15 +1,9 @@
-import React, { useState } from 'react';
-import { X, UserPlus, Shield, Mail, Phone, User, CheckCircle, Loader } from 'lucide-react';
+import { useState } from 'react';
 import api from '../../services/api';
 
 const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
     const [formData, setFormData] = useState({
-        firstName: '',
-        secondName: '',
-        username: '',
-        role: 'juniorCashier',
-        email: '',
-        phoneNumber: ''
+        firstName: '', secondName: '', username: '', role: 'juniorCashier', email: '', phoneNumber: ''
     });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -17,222 +11,120 @@ const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
 
     if (!isOpen) return null;
 
-    const handleChange = (e) => {
-        setFormData({ ...formData, [e.target.name]: e.target.value });
-    };
+    const handleChange = e => setFormData({ ...formData, [e.target.name]: e.target.value });
 
-    const handleSubmit = async (e) => {
+    const handleSubmit = async e => {
         e.preventDefault();
-        setLoading(true);
-        setError('');
-        setSuccess('');
-
+        setLoading(true); setError(''); setSuccess('');
         try {
-
-            // Prepare payload according to backend UserRegistrationRequest
-            const payload = {
-                ...formData,
-                // password
-                password: '1234',
-                firstLogin: false
-            };
-            console.log('Registration Payload (v3):', payload);
-
-            await api.userService.register(payload);
-            setSuccess('User registered successfully! Default password is "1234".');
+            await api.userService.register({ ...formData, password: '1234', firstLogin: false });
+            setSuccess('User registered! Default password is "1234".');
             if (onSuccess) onSuccess();
-
-            // Reset form
-            setFormData({
-                firstName: '',
-                secondName: '',
-                username: '',
-                role: 'juniorCashier',
-                email: '',
-                phoneNumber: ''
-            });
-
-            // Auto close after 2 seconds
-            setTimeout(() => {
-                onClose();
-                setSuccess('');
-            }, 2000);
+            setFormData({ firstName: '', secondName: '', username: '', role: 'juniorCashier', email: '', phoneNumber: '' });
+            setTimeout(() => { onClose(); setSuccess(''); }, 2000);
         } catch (err) {
-            console.error(err);
             setError(err.response?.data?.detail || 'Registration failed. Please try again.');
-        } finally {
-            setLoading(false);
-        }
+        } finally { setLoading(false); }
     };
+
+    const inputStyle = {
+        width: '100%', boxSizing: 'border-box', padding: '0.625rem 0.875rem',
+        background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: '0.75rem', color: '#f1f5f9', fontSize: '0.875rem', outline: 'none',
+        transition: 'border-color 0.2s',
+    };
+    const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.375rem' };
+    const onFocus = e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; };
+    const onBlur = e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <div className="relative w-full max-w-lg overflow-hidden bg-white/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/50 animate-in fade-in zoom-in duration-300">
-
+        <div style={{
+            position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+            background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(12px)',
+        }} onClick={onClose}>
+            <div onClick={e => e.stopPropagation()} style={{
+                width: '100%', maxWidth: '480px',
+                background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
+                border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1.5rem', overflow: 'hidden',
+                boxShadow: '0 32px 80px rgba(0,0,0,0.7)', animation: 'fadeInScale 0.2s ease',
+            }}>
                 {/* Header */}
-                <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gradient-to-r from-blue-600/10 to-indigo-600/10">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-blue-600 rounded-lg shadow-blue-200 shadow-lg">
-                            <UserPlus className="w-6 h-6 text-white" />
-                        </div>
+                <div style={{ padding: '1.5rem 2rem', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>👤</div>
                         <div>
-                            <h2 className="text-xl font-bold text-gray-800 tracking-tight">Register New User</h2>
-                            <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">Access Management</p>
+                            <h2 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Register New User</h2>
+                            <p style={{ fontSize: '0.68rem', color: '#475569', margin: 0, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Access Management</p>
                         </div>
                     </div>
-                    <button
-                        onClick={onClose}
-                        className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100/50 rounded-full transition-colors"
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
+                    <button onClick={onClose} style={{ width: '30px', height: '30px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
                 </div>
 
                 {/* Body */}
-                <div className="p-6">
+                <div style={{ padding: '1.5rem 2rem' }}>
                     {error && (
-                        <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm font-medium rounded-lg border border-red-100 flex items-center gap-2">
-                            <Shield className="w-4 h-4" />
-                            {error}
+                        <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: '0.75rem', color: '#f87171', fontSize: '0.82rem', fontWeight: 600 }}>
+                            ⚠️ {error}
                         </div>
                     )}
-
                     {success && (
-                        <div className="mb-4 p-3 bg-green-50 text-green-700 text-sm font-medium rounded-lg border border-green-100 flex items-center gap-2">
-                            <CheckCircle className="w-4 h-4" />
-                            {success}
+                        <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: '0.75rem', color: '#4ade80', fontSize: '0.82rem', fontWeight: 600 }}>
+                            ✓ {success}
                         </div>
                     )}
 
-                    <form onSubmit={handleSubmit} className="space-y-4">
-
-                        {/* Name Fields */}
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-1">
-                                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block pl-1">First Name</label>
-                                <div className="relative">
-                                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                    <input
-                                        type="text"
-                                        name="firstName"
-                                        required
-                                        value={formData.firstName}
-                                        onChange={handleChange}
-                                        className="w-full pl-9 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
-                                        placeholder="John"
-                                    />
-                                </div>
+                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                            <div>
+                                <label style={labelStyle}>First Name</label>
+                                <input type="text" name="firstName" required value={formData.firstName} onChange={handleChange} placeholder="John" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
                             </div>
-
-                            <div className="space-y-1">
-                                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block pl-1">Second Name</label>
-                                <div className="relative">
-                                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                    <input
-                                        type="text"
-                                        name="secondName"
-                                        required
-                                        value={formData.secondName}
-                                        onChange={handleChange}
-                                        className="w-full pl-9 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
-                                        placeholder="Doe"
-                                    />
-                                </div>
+                            <div>
+                                <label style={labelStyle}>Last Name</label>
+                                <input type="text" name="secondName" required value={formData.secondName} onChange={handleChange} placeholder="Doe" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
                             </div>
                         </div>
 
-                        {/* Username Field */}
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block pl-1">Username</label>
-                            <div className="relative">
-                                <Shield className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                <input
-                                    type="text"
-                                    name="username"
-                                    required
-                                    value={formData.username}
-                                    onChange={handleChange}
-                                    className="w-full pl-9 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
-                                    placeholder="johndoe123"
-                                />
-                            </div>
+                        <div>
+                            <label style={labelStyle}>Username</label>
+                            <input type="text" name="username" required value={formData.username} onChange={handleChange} placeholder="johndoe123" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
                         </div>
 
-                        {/* Contact Fields */}
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block pl-1">Email Address</label>
-                            <div className="relative">
-                                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                <input
-                                    type="email"
-                                    name="email"
-                                    required
-                                    value={formData.email}
-                                    onChange={handleChange}
-                                    className="w-full pl-9 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
-                                    placeholder="john.doe@emirates.co"
-                                />
-                            </div>
+                        <div>
+                            <label style={labelStyle}>Email Address</label>
+                            <input type="email" name="email" required value={formData.email} onChange={handleChange} placeholder="john.doe@emirates.co" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
                         </div>
 
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block pl-1">Phone Number</label>
-                            <div className="relative">
-                                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                <input
-                                    type="tel"
-                                    name="phoneNumber"
-                                    required
-                                    value={formData.phoneNumber}
-                                    onChange={handleChange}
-                                    className="w-full pl-9 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400"
-                                    placeholder="0712345678"
-                                />
-                            </div>
+                        <div>
+                            <label style={labelStyle}>Phone Number</label>
+                            <input type="tel" name="phoneNumber" required value={formData.phoneNumber} onChange={handleChange} placeholder="+971 50 000 0000" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
                         </div>
 
-                        {/* Role Selection */}
-                        <div className="space-y-1">
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block pl-1">Assign Role</label>
-                            <div className="relative">
-                                <Shield className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                <select
-                                    name="role"
-                                    value={formData.role}
-                                    onChange={handleChange}
-                                    className="w-full pl-9 pr-4 py-2.5 bg-gray-50/50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer"
-                                >
-                                    <option value="juniorCashier">Junior Cashier</option>
-                                    <option value="seniorCashier">Senior Cashier</option>
-                                    <option value="storeManager">Store Manager</option>
-                                    <option value="admin">Admin</option>
-                                    <option value="ceo">CEO</option>
-                                </select>
-                                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-                                </div>
-                            </div>
+                        <div>
+                            <label style={labelStyle}>Assign Role</label>
+                            <select name="role" value={formData.role} onChange={handleChange}
+                                style={{ ...inputStyle, cursor: 'pointer', appearance: 'none', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpath d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 0.875rem center' }}>
+                                <option value="juniorCashier">Junior Cashier</option>
+                                <option value="seniorCashier">Senior Cashier</option>
+                                <option value="storeManager">Store Manager</option>
+                                <option value="admin">Admin</option>
+                                <option value="ceo">CEO</option>
+                            </select>
                         </div>
 
-                        {/* Submit Button */}
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="w-full mt-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 transform hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                        >
+                        <button type="submit" disabled={loading} style={{
+                            marginTop: '0.5rem', padding: '0.875rem', borderRadius: '0.875rem', border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
+                            background: loading ? 'rgba(59,130,246,0.3)' : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                            color: '#fff', fontWeight: 700, fontSize: '0.875rem',
+                            boxShadow: loading ? 'none' : '0 4px 16px rgba(59,130,246,0.3)', transition: 'all 0.2s',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+                        }}>
                             {loading ? (
-                                <>
-                                    <Loader className="w-5 h-5 animate-spin" />
-                                    <span>Registering...</span>
-                                </>
+                                <><span style={{ display: 'inline-block', width: '16px', height: '16px', border: '2px solid rgba(255,255,255,0.3)', borderTop: '2px solid #fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} /><span>Registering...</span></>
                             ) : (
-                                <>
-                                    <UserPlus className="w-5 h-5" />
-                                    <span>Register User</span>
-                                </>
+                                <><span>👤</span><span>Register User</span></>
                             )}
                         </button>
-
                     </form>
                 </div>
             </div>

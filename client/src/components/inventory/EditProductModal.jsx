@@ -1,90 +1,110 @@
-import React, { Fragment, useState, useEffect } from 'react';
-import { Dialog, Transition } from '@headlessui/react';
+import { useState, useEffect } from 'react';
 import { useProducts } from '../../context/ProductContext';
 
 export default function EditProductModal({ isOpen, onClose, product }) {
     const { updateProduct } = useProducts();
-    const [name, setName] = useState('');
+    const [form, setForm] = useState({ name: '', length: '', trackOffcuts: false });
 
     useEffect(() => {
-        if (product) {
-            setName(product.name || '');
-        }
+        if (product) setForm({
+            name: product.name || '',
+            length: product.length ?? '',
+            trackOffcuts: product.trackOffcuts || false,
+        });
     }, [product]);
 
+    const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+
     const handleSave = () => {
-        if (product) {
-            updateProduct({ ...product, name });
-            onClose();
-        }
+        if (!product) return;
+        const payload = { ...product, name: form.name, trackOffcuts: form.trackOffcuts };
+        if (form.length !== '') payload.length = parseFloat(form.length);
+        updateProduct(payload);
+        onClose();
     };
 
-    if (!product) return null;
+    if (!isOpen || !product) return null;
+
+    const inputStyle = {
+        width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: '0.75rem', padding: '0.75rem 1rem', color: '#f1f5f9',
+        fontSize: '0.875rem', outline: 'none', transition: 'border-color 0.2s', boxSizing: 'border-box',
+    };
+    const labelStyle = { fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' };
 
     return (
-        <Transition appear show={isOpen} as={Fragment}>
-            <Dialog as="div" className="relative z-40" onClose={onClose}>
-                <Transition.Child
-                    as={Fragment}
-                    enter="ease-out duration-300"
-                    enterFrom="opacity-0"
-                    enterTo="opacity-100"
-                    leave="ease-in duration-200"
-                    leaveFrom="opacity-100"
-                    leaveTo="opacity-0"
-                >
-                    <div className="fixed inset-0 bg-black/25 backdrop-blur-sm" />
-                </Transition.Child>
+        <div style={{
+            position: 'fixed', inset: 0, zIndex: 40,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+            background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(12px)',
+        }} onClick={onClose}>
+            <div onClick={e => e.stopPropagation()} style={{
+                width: '100%', maxWidth: '420px',
+                background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '1.25rem', overflow: 'hidden',
+                boxShadow: '0 32px 80px rgba(0,0,0,0.6)',
+                animation: 'fadeInScale 0.2s ease',
+            }}>
+                <div style={{ padding: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+                    <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Edit Product</h3>
+                </div>
+                <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div>
+                        <label style={labelStyle}>Product Name</label>
+                        <input type="text" autoFocus value={form.name} onChange={e => set('name', e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleSave()}
+                            placeholder="Enter product name..."
+                            style={inputStyle}
+                            onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
+                            onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                        />
+                    </div>
 
-                <div className="fixed inset-0 overflow-y-auto">
-                    <div className="flex min-h-full items-center justify-center p-4 text-center">
-                        <Transition.Child
-                            as={Fragment}
-                            enter="ease-out duration-300"
-                            enterFrom="opacity-0 scale-95"
-                            enterTo="opacity-100 scale-100"
-                            leave="ease-in duration-200"
-                            leaveFrom="opacity-100 scale-100"
-                            leaveTo="opacity-0 scale-95"
-                        >
-                            <Dialog.Panel className="w-full max-w-md transform overflow-hidden rounded-2xl bg-white p-6 text-left align-middle shadow-xl transition-all">
-                                <Dialog.Title as="h3" className="text-lg font-bold leading-6 text-gray-900 mb-4">
-                                    Edit Product Name
-                                </Dialog.Title>
+                    <div>
+                        <label style={labelStyle}>Full Bar Length (ft) — for offcut tracking</label>
+                        <input type="number" min="0" step="0.1" value={form.length}
+                            onChange={e => set('length', e.target.value)}
+                            placeholder="e.g. 21"
+                            style={inputStyle}
+                            onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
+                            onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                        />
+                    </div>
 
-                                <div className="mt-2">
-                                    <label className="block text-sm font-medium text-gray-700 mb-1">Product Name</label>
-                                    <input
-                                        type="text"
-                                        className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                                        value={name}
-                                        onChange={(e) => setName(e.target.value)}
-                                        placeholder="Enter product name..."
-                                        autoFocus
-                                    />
-                                </div>
-
-                                <div className="mt-6 flex justify-end gap-3">
-                                    <button
-                                        type="button"
-                                        className="inline-flex justify-center rounded-lg px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors"
-                                        onClick={onClose}
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type="button"
-                                        className="inline-flex justify-center rounded-lg px-4 py-2 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 shadow-md shadow-blue-500/20 transition-all"
-                                        onClick={handleSave}
-                                    >
-                                        Save Changes
-                                    </button>
-                                </div>
-                            </Dialog.Panel>
-                        </Transition.Child>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1rem', borderRadius: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer' }}
+                        onClick={() => set('trackOffcuts', !form.trackOffcuts)}>
+                        <div style={{
+                            width: '36px', height: '20px', borderRadius: '10px', position: 'relative',
+                            background: form.trackOffcuts ? 'rgba(59,130,246,0.8)' : 'rgba(255,255,255,0.12)',
+                            transition: 'background 0.2s', flexShrink: 0,
+                        }}>
+                            <div style={{
+                                position: 'absolute', top: '2px', left: form.trackOffcuts ? '18px' : '2px',
+                                width: '16px', height: '16px', borderRadius: '50%', background: '#fff',
+                                transition: 'left 0.2s', boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                            }} />
+                        </div>
+                        <div>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0' }}>Track Offcuts</div>
+                            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Enable best-fit cut & offcut remainder logic</div>
+                        </div>
                     </div>
                 </div>
-            </Dialog>
-        </Transition>
+                <div style={{ padding: '0 1.5rem 1.5rem', display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                    <button onClick={onClose} style={{
+                        padding: '0.625rem 1.25rem', borderRadius: '0.75rem', cursor: 'pointer',
+                        background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)',
+                        color: '#64748b', fontWeight: 600, fontSize: '0.82rem', transition: 'all 0.15s',
+                    }}>Cancel</button>
+                    <button onClick={handleSave} style={{
+                        padding: '0.625rem 1.25rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
+                        background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                        color: '#fff', fontWeight: 700, fontSize: '0.82rem',
+                        boxShadow: '0 4px 16px rgba(59,130,246,0.3)', transition: 'all 0.15s',
+                    }}>Save Changes</button>
+                </div>
+            </div>
+        </div>
     );
 }

@@ -1,7 +1,5 @@
-import React, { useState, useMemo, memo } from 'react';
+import { useState, useMemo, memo } from 'react';
 
-// --- EXTRACTED OVERLAY COMPONENT ---
-// Keeps input state isolated from the main grid to prevent render thrashing
 const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
     const [customerSearch, setCustomerSearch] = useState('');
     const [newCustomerName, setNewCustomerName] = useState('');
@@ -10,99 +8,121 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
     const filteredCustomers = useMemo(() => {
         if (!customerSearch) return [];
         const lower = customerSearch.toLowerCase();
-        return customers.filter(c => c.name.toLowerCase().includes(lower) || c.phone.includes(lower));
+        return customers.filter(c => c.name.toLowerCase().includes(lower) || c.phone?.includes(lower));
     }, [customers, customerSearch]);
 
-    return (
-        <div className="absolute inset-0 z-[60] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full overflow-hidden animate-pop-in border border-amber-500/20">
-                <div className="p-8 bg-gradient-to-br from-slate-50 to-white">
-                    <h2 className="text-3xl font-bold text-slate-800 mb-2">Invoice Details</h2>
-                    <p className="text-slate-500 mb-8">Who is this quotation for?</p>
+    const inputStyle = {
+        background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: '0.75rem', padding: '0.75rem 1rem', color: '#f1f5f9',
+        fontSize: '0.875rem', outline: 'none', width: '100%', boxSizing: 'border-box',
+        transition: 'border-color 0.2s',
+    };
+    const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' };
 
-                    <div className="mb-8">
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2 block">Search Client</label>
-                        <div className="relative group">
-                            <span className="absolute left-4 top-3.5 text-slate-400">🔍</span>
-                            <input
-                                type="text"
-                                placeholder="Search by name or phone..."
-                                className="w-full bg-white border border-slate-200 rounded-xl py-3 pl-10 pr-4 text-lg focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none transition-all"
-                                value={customerSearch}
-                                onChange={(e) => setCustomerSearch(e.target.value)}
+    return (
+        <div style={{
+            position: 'absolute', inset: 0, zIndex: 60,
+            background: 'rgba(9,14,26,0.92)', backdropFilter: 'blur(16px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem',
+        }}>
+            <div style={{
+                width: '100%', maxWidth: '580px',
+                background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
+                border: '1px solid rgba(245,158,11,0.15)', borderRadius: '1.5rem', overflow: 'hidden',
+                boxShadow: '0 32px 80px rgba(0,0,0,0.7)', animation: 'fadeInScale 0.2s ease',
+            }}>
+                {/* Header */}
+                <div style={{ padding: '1.75rem 2rem 1.25rem', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.375rem' }}>
+                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>📄</div>
+                        <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Invoice Details</h2>
+                    </div>
+                    <p style={{ fontSize: '0.78rem', color: '#475569', margin: 0 }}>Who is this quotation for?</p>
+                </div>
+
+                <div style={{ padding: '1.5rem 2rem' }}>
+                    {/* Search existing */}
+                    <div style={{ marginBottom: '1.25rem' }}>
+                        <label style={labelStyle}>Search Client</label>
+                        <div style={{ position: 'relative' }}>
+                            <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: '#475569', fontSize: '0.875rem' }}>🔍</span>
+                            <input type="text" placeholder="Search by name or phone..." value={customerSearch} onChange={e => setCustomerSearch(e.target.value)}
+                                style={{ ...inputStyle, paddingLeft: '2.5rem' }}
+                                onFocus={e => { e.target.style.borderColor = 'rgba(245,158,11,0.4)'; }}
+                                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
                             />
                         </div>
                         {customerSearch && (
-                            <div className="mt-2 space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
+                            <div style={{ marginTop: '0.5rem', maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.375rem' }} className="custom-scrollbar">
                                 {filteredCustomers.map(c => (
-                                    <button
-                                        key={c.id}
-                                        onClick={() => onSelectCustomer(c)}
-                                        className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-amber-50 border border-transparent hover:border-amber-200 transition-all text-left group"
-                                    >
+                                    <button key={c.id} onClick={() => onSelectCustomer(c)} style={{
+                                        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                        padding: '0.75rem 1rem', borderRadius: '0.75rem', border: '1px solid rgba(255,255,255,0.07)',
+                                        background: 'rgba(255,255,255,0.04)', cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
+                                    }}
+                                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(245,158,11,0.3)'; e.currentTarget.style.background = 'rgba(245,158,11,0.06)'; }}
+                                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.07)'; e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}>
                                         <div>
-                                            <div className="font-bold text-slate-800">{c.name}</div>
-                                            <div className="text-xs text-slate-500 font-mono">{c.phone}</div>
+                                            <p style={{ fontWeight: 700, color: '#f1f5f9', margin: '0 0 2px', fontSize: '0.875rem' }}>{c.name}</p>
+                                            <p style={{ fontSize: '0.72rem', color: '#64748b', fontFamily: 'var(--font-mono)', margin: 0 }}>{c.phone}</p>
                                         </div>
-                                        <span className="text-amber-500 opacity-0 group-hover:opacity-100 font-medium text-sm">Select</span>
+                                        <span style={{ fontSize: '0.72rem', color: '#f59e0b', fontWeight: 700 }}>Select →</span>
                                     </button>
                                 ))}
                                 {filteredCustomers.length === 0 && (
-                                    <p className="text-sm text-gray-400 p-2 italic">No clients found.</p>
+                                    <p style={{ fontSize: '0.78rem', color: '#334155', padding: '0.5rem', fontStyle: 'italic' }}>No clients found.</p>
                                 )}
                             </div>
                         )}
                     </div>
 
-                    <div className="flex items-center gap-4 py-4">
-                        <span className="h-px bg-slate-200 flex-1"></span>
-                        <span className="text-xs text-slate-400 font-bold uppercase">OR</span>
-                        <span className="h-px bg-slate-200 flex-1"></span>
+                    {/* Divider */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', margin: '1.25rem 0' }}>
+                        <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.07)' }} />
+                        <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em' }}>OR</span>
+                        <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.07)' }} />
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+                    {/* New client */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                         <div>
-                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2 block">New Client</label>
-                            <div className="space-y-3">
-                                <input
-                                    type="text"
-                                    placeholder="Client Name"
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-800 outline-none focus:border-amber-500 transition-all font-medium"
-                                    value={newCustomerName}
-                                    onChange={(e) => setNewCustomerName(e.target.value)}
+                            <label style={labelStyle}>New Client</label>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                <input type="text" placeholder="Client Name" value={newCustomerName} onChange={e => setNewCustomerName(e.target.value)}
+                                    style={inputStyle}
+                                    onFocus={e => { e.target.style.borderColor = 'rgba(245,158,11,0.4)'; }}
+                                    onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
                                 />
-                                <input
-                                    type="tel"
-                                    placeholder="Phone Number"
-                                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-800 outline-none focus:border-amber-500 transition-all font-medium"
-                                    value={newCustomerPhone}
-                                    onChange={(e) => setNewCustomerPhone(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && newCustomerName.trim()) {
+                                <input type="tel" placeholder="Phone Number" value={newCustomerPhone} onChange={e => setNewCustomerPhone(e.target.value)}
+                                    style={inputStyle}
+                                    onFocus={e => { e.target.style.borderColor = 'rgba(245,158,11,0.4)'; }}
+                                    onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter' && newCustomerName.trim())
                                             onSelectCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
-                                        }
                                     }}
                                 />
-                                <button
-                                    onClick={() => {
-                                        if (newCustomerName.trim()) {
-                                            onSelectCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' });
-                                        }
-                                    }}
-                                    disabled={!newCustomerName.trim()}
-                                    className="w-full bg-slate-900 text-amber-500 py-3 rounded-xl font-bold disabled:opacity-50 hover:bg-black transition-colors shadow-lg flex items-center justify-center gap-2"
-                                >
-                                    <span>Create Profile</span>
-                                    <span>→</span>
+                                <button onClick={() => { if (newCustomerName.trim()) onSelectCustomer({ id: 'new-' + Date.now(), name: newCustomerName, phone: newCustomerPhone, type: 'new' }); }}
+                                    disabled={!newCustomerName.trim()} style={{
+                                        padding: '0.75rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
+                                        background: newCustomerName.trim() ? 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(234,88,12,0.15))' : 'rgba(255,255,255,0.04)',
+                                        color: newCustomerName.trim() ? '#fbbf24' : '#334155',
+                                        fontWeight: 700, fontSize: '0.82rem', transition: 'all 0.2s',
+                                        border: `1px solid ${newCustomerName.trim() ? 'rgba(245,158,11,0.35)' : 'rgba(255,255,255,0.07)'}`,
+                                    }}>
+                                    Create Profile →
                                 </button>
                             </div>
                         </div>
-                        <div className="flex flex-col justify-end">
-                            <button
-                                onClick={() => onSelectCustomer({ id: 'guest', name: 'Guest Client', type: 'walk-in' })}
-                                className="w-full bg-slate-100 text-slate-600 hover:bg-slate-200 font-bold py-3 rounded-xl border border-slate-300 transition-colors"
-                            >
-                                Guest Client
+                        <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }}>
+                            <button onClick={() => onSelectCustomer({ id: 'guest', name: 'Guest Client', type: 'walk-in' })} style={{
+                                padding: '0.875rem', borderRadius: '0.75rem', border: '1px solid rgba(255,255,255,0.09)',
+                                background: 'rgba(255,255,255,0.05)', color: '#94a3b8', fontWeight: 700, fontSize: '0.82rem',
+                                cursor: 'pointer', transition: 'all 0.15s',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; e.currentTarget.style.color = '#cbd5e1'; }}
+                            onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)'; e.currentTarget.style.color = '#94a3b8'; }}>
+                                👤 Guest Client
                             </button>
                         </div>
                     </div>

@@ -1,160 +1,118 @@
-import React, { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 
 const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
-    // 1. Identify Attributes
-    // Check if attributes are explicit in product (new schema) or need inference
-    // For now, we rely on product.attributes being present for this component to be chosen.
     const attributeKeys = Object.keys(product.attributes || {});
 
-    // 2. State for selections
-    // { "Color": "Silver", "Length": "21ft" }
     const [selections, setSelections] = useState(() => {
         const initial = initialDetails?.selections ? { ...initialDetails.selections } : {};
         attributeKeys.forEach(key => {
-            if (!initial[key]) { // Only set if not already in initialDetails
-                if (product.defaultAttributes && product.defaultAttributes[key]) {
-                    initial[key] = product.defaultAttributes[key];
-                } else if (product.attributes[key] && product.attributes[key].length > 0) {
-                    initial[key] = product.attributes[key][0];
-                }
+            if (!initial[key]) {
+                if (product.defaultAttributes?.[key]) initial[key] = product.defaultAttributes[key];
+                else if (product.attributes[key]?.length > 0) initial[key] = product.attributes[key][0];
             }
         });
         return initial;
     });
 
     const [qty, setQty] = useState(initialDetails?.qty || 1);
+    const [error, setError] = useState(null);
 
-    // 3. Effect: Auto-select first options if not set (This useEffect is now largely redundant due to useState initialization,
-    // but kept for any edge cases where initialDetails might override defaults and then some attributes are still missing)
     useEffect(() => {
         const next = { ...selections };
         let changed = false;
         attributeKeys.forEach(key => {
             if (!next[key]) {
                 const options = product.attributes[key] || [];
-                if (options.length > 0) {
-                    next[key] = options[0];
-                    changed = true;
-                }
+                if (options.length > 0) { next[key] = options[0]; changed = true; }
             }
         });
         if (changed) setSelections(next);
     }, [product.attributes, selections, attributeKeys]);
 
-    // 4. Find Matching Variant
     const activeVariant = useMemo(() => {
         if (!product.variants) return null;
-        return product.variants.find(v => {
-            return attributeKeys.every(k => v.attributes[k] === selections[k]);
-        });
+        return product.variants.find(v => attributeKeys.every(k => v.attributes[k] === selections[k]));
     }, [product.variants, selections, attributeKeys]);
 
-    // 5. Pricing
-    // If variant found, use its price. Else fallback to product default or 0
     const currentPrice = activeVariant ? activeVariant.price : (product.priceFull || product.price || 0);
-    const hasStock = activeVariant ? (activeVariant.stock !== undefined ? activeVariant.stock : true) : true;
     const stockCount = activeVariant?.stock;
 
-    const [error, setError] = useState(null);
-
-    // 6. Update Parent
     useEffect(() => {
-        // Validation
         let isValid = true;
         if (activeVariant && stockCount !== undefined) {
-            if (qty > stockCount) {
-                setError(`Only ${stockCount} items available in stock`);
-                isValid = false;
-            } else {
-                setError(null);
-            }
-        } else if (!activeVariant) {
-            // Optional: If no variant found, maybe blocking? But for now stick to stock check.
-            setError(null);
-        }
+            if (qty > stockCount) { setError(`Only ${stockCount} items available in stock`); isValid = false; }
+            else setError(null);
+        } else setError(null);
 
         const total = qty * currentPrice;
-
-        // Construct description
         const variantName = attributeKeys.map(k => selections[k]).join(' - ');
-
-        onUpdate(total, {
-            selections,
-            qty,
-            variantId: activeVariant?.variantId || activeVariant?.id,
-            description: variantName,
-            isDynamic: true,
-            isValid // Pass validation status
-        });
+        onUpdate(total, { selections, qty, variantId: activeVariant?.variantId || activeVariant?.id, description: variantName, isDynamic: true, isValid });
     }, [qty, currentPrice, selections, activeVariant, onUpdate, attributeKeys, stockCount]);
 
+    const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' };
+    const sectionStyle = { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem', padding: '1rem', marginBottom: '0.75rem' };
+    const chipBtn = (active) => ({
+        padding: '0.3rem 0.875rem', borderRadius: '100px', fontSize: '0.72rem', fontWeight: 700,
+        cursor: 'pointer', border: '1px solid', transition: 'all 0.15s',
+        background: active ? 'rgba(59,130,246,0.15)' : 'transparent',
+        borderColor: active ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)',
+        color: active ? '#60a5fa' : '#64748b',
+    });
+
     return (
-        <div className="space-y-6">
-            <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm space-y-6">
-                {/* Attribute Selectors */}
-                {attributeKeys.map(key => (
-                    <div key={key}>
-                        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">{key}</h3>
-                        <div className="flex flex-wrap gap-2">
-                            {product.attributes[key].map(opt => {
-                                const isSelected = selections[key] === opt;
-                                return (
-                                    <button
-                                        key={opt}
-                                        onClick={() => setSelections(prev => ({ ...prev, [key]: opt }))}
-                                        className={`px-4 py-2 rounded-lg text-sm font-bold border transition-all ${isSelected
-                                            ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-2 ring-blue-200'
-                                            : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-white hover:border-gray-300'
-                                            }`}
-                                    >
-                                        {opt}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-                ))}
-            </div>
-
-            {/* Price & Stock Display */}
-            <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 text-center">
-                {activeVariant ? (
-                    <div className="space-y-1">
-                        <div className="text-3xl font-bold text-gray-900">Ksh{currentPrice.toLocaleString()}</div>
-                        {stockCount !== undefined && (
-                            <div className={`text-sm font-bold ${stockCount > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                                {stockCount > 0 ? `${stockCount} in Stock` : 'Out of Stock'}
+        <div>
+            {/* Attribute Selectors */}
+            {attributeKeys.length > 0 && (
+                <div style={sectionStyle}>
+                    {attributeKeys.map(key => (
+                        <div key={key} style={{ marginBottom: '0.625rem' }}>
+                            <span style={{ ...labelStyle, display: 'block', marginBottom: '0.375rem' }}>{key}</span>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+                                {product.attributes[key].map(opt => (
+                                    <button key={opt} onClick={() => setSelections(prev => ({ ...prev, [key]: opt }))} style={chipBtn(selections[key] === opt)}>{opt}</button>
+                                ))}
                             </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Price / Stock Display */}
+            <div style={{ ...sectionStyle, textAlign: 'center', padding: '0.875rem' }}>
+                {activeVariant ? (
+                    <>
+                        <p style={{ fontSize: '1.75rem', fontWeight: 900, fontFamily: 'var(--font-mono)', color: '#f1f5f9', margin: 0 }}>
+                            KSH{currentPrice.toLocaleString()}
+                        </p>
+                        {stockCount !== undefined && (
+                            <p style={{ fontSize: '0.72rem', fontWeight: 700, color: stockCount > 0 ? '#4ade80' : '#f87171', margin: '4px 0 0' }}>
+                                {stockCount > 0 ? `${stockCount} in Stock` : 'Out of Stock'}
+                            </p>
                         )}
-                    </div>
+                    </>
                 ) : (
-                    <div className="text-gray-400 italic">Variant unavailable</div>
+                    <p style={{ fontSize: '0.82rem', color: '#334155', fontStyle: 'italic', margin: 0 }}>Select options above</p>
                 )}
             </div>
 
-            {/* Quantity Selector */}
-            <div className="flex flex-col items-center gap-2">
-                <div className="flex items-center justify-center gap-6">
-                    <button
-                        onClick={() => setQty(Math.max(1, qty - 1))}
-                        className="w-14 h-14 rounded-xl bg-white border border-gray-200 text-2xl font-bold text-gray-500 hover:bg-gray-50 shadow-sm"
-                    >-</button>
-                    <div className="text-center">
-                        <div className={`text-4xl font-black font-mono ${error ? 'text-red-500' : 'text-gray-800'}`}>{qty}</div>
-                        <div className="text-xs font-bold text-gray-400 uppercase mt-1">Quantity</div>
-                    </div>
-                    <button
-                        onClick={() => setQty(qty + 1)}
-                        className="w-14 h-14 rounded-xl bg-blue-50 border border-blue-100 text-2xl font-bold text-blue-600 hover:bg-blue-100 shadow-sm"
-                    >+</button>
+            {/* Quantity */}
+            <div style={{ ...sectionStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                    <p style={{ ...labelStyle, display: 'block', marginBottom: '2px' }}>Quantity</p>
+                    <p style={{ fontSize: '0.68rem', color: '#475569', margin: 0, fontFamily: 'var(--font-mono)' }}>
+                        Total: KSH{(qty * currentPrice).toLocaleString()}
+                    </p>
                 </div>
-                {error && (
-                    <div className="text-red-500 text-xs font-bold uppercase tracking-wide animate-pulse flex items-center gap-1 mt-2">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                        {error}
-                    </div>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button onClick={() => setQty(Math.max(1, qty - 1))} style={{ width: '32px', height: '32px', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.07)', color: '#94a3b8', fontSize: '1rem', fontWeight: 700 }}>-</button>
+                    <span style={{ fontSize: '1.5rem', fontWeight: 900, fontFamily: 'var(--font-mono)', color: error ? '#f87171' : '#f1f5f9', width: '48px', textAlign: 'center' }}>{qty}</span>
+                    <button onClick={() => setQty(qty + 1)} style={{ width: '32px', height: '32px', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'rgba(59,130,246,0.15)', color: '#60a5fa', fontSize: '1rem', fontWeight: 700 }}>+</button>
+                </div>
             </div>
+
+            {error && (
+                <p style={{ fontSize: '0.7rem', color: '#f87171', fontWeight: 700, margin: '0', animation: 'pulse 1.5s ease-in-out infinite' }}>{error}</p>
+            )}
         </div>
     );
 });

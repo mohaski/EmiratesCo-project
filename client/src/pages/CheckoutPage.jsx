@@ -5,94 +5,116 @@ import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
 import { useCartTotals } from '../hooks/useCartTotals';
 
-// --- SUB-COMPONENT: Memoized Item Card ---
-// Extracts complex rendering logic so the list doesn't re-render when payment inputs change
-// --- SUB-COMPONENT: Memoized Item Card ---
-const ReviewItemCard = memo(({ item }) => {
-    console.log(item)
-    // Helper to find product def safely
-    return (
-        <div className="grid grid-cols-12 gap-6 p-6 hover:bg-gray-50/50 transition-colors group border-b border-gray-100 last:border-0">
-            {/* Product Info */}
-            <div className="col-span-6 md:col-span-7 flex gap-5">
-                <div className="w-20 h-20 rounded-xl bg-gray-100 overflow-hidden flex-shrink-0 border border-gray-100 shadow-sm">
-                    <img src={item.image} loading="lazy" className="w-full h-full object-cover mix-blend-multiply opacity-90" alt={item.name} />
-                </div>
-                <div className="flex flex-col justify-center">
-                    <h4 className="font-bold text-gray-900 text-lg leading-tight mb-1">{item.name}</h4>
-                    <div className="flex gap-2 text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                        {item.details.color && <span className="bg-gray-100 px-2 py-0.5 rounded">{item.details.color}</span>}
-                        {item.details.thickness && <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded">{item.details.thickness}</span>}
-                    </div>
-                </div>
+/* ── Review Item Card ── */
+const ReviewItemCard = memo(({ item, index }) => (
+    <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr auto auto',
+        gap: '1rem',
+        padding: '1.25rem 1.5rem',
+        borderBottom: '1px solid rgba(255,255,255,0.05)',
+        transition: 'background 0.15s ease',
+        alignItems: 'center',
+    }}
+        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+    >
+        {/* Item Info */}
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', minWidth: 0 }}>
+            <div style={{
+                width: '48px', height: '48px', borderRadius: '10px', flexShrink: 0,
+                background: 'rgba(59,130,246,0.1)',
+                border: '1px solid rgba(59,130,246,0.2)',
+                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+                {item.image
+                    ? <img src={item.image} style={{ width: '100%', height: '100%', objectFit: 'cover', mixBlendMode: 'luminosity', opacity: 0.8 }} alt={item.name} loading="lazy" />
+                    : <span style={{ fontSize: '1.25rem' }}>📦</span>
+                }
             </div>
-
-            {/* Breakdown Column (Receipt Style) */}
-            <div className="col-span-12 md:col-span-3 flex flex-col justify-center text-sm text-gray-600 font-mono">
-                {/* --- UNIVERSAL RENDERER (New Schema Only) --- */}
-                {item.details.lineItems && (
-                    <div className="space-y-2 w-full">
-                        {/* 1. Attributes (Metadata) */}
-                        {item.details.attributes && item.details.attributes.length > 0 && (
-                            <div className="pb-2 mb-2 border-b border-gray-100 border-dashed">
-                                {item.details.attributes.map((attr, idx) => (
-                                    <div key={idx} className="flex justify-between items-baseline">
-                                        <span className="text-gray-500 text-xs">{attr.label}</span>
-                                        <span className="flex-1 border-b border-gray-200 border-dotted mx-2"></span>
-                                        <span className="text-gray-800 font-semibold text-xs">{attr.value}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-
-                        {/* 2. Line Items (Receipt) */}
-                        {item.details.lineItems.map((li, idx) => (
-                            <div key={idx} className="flex justify-between items-baseline">
-                                <div className="flex flex-col">
-                                    <span className="text-xs text-gray-700">{li.label}</span>
-                                    {li.meta && (li.meta.length || (li.meta.l && `${li.meta.l}x${li.meta.w}`)) && (
-                                        <span className="text-[10px] text-gray-400">
-                                            {li.meta.length || `${li.meta.l}x${li.meta.w} ${li.meta.u || ''}`}
-                                        </span>
-                                    )}
-                                </div>
-                                <span className="flex-1 border-b border-gray-300 border-dotted mx-2 relative top-[-4px]"></span>
-                                <span className="whitespace-nowrap">
-                                    <span className="text-xs text-gray-800">
-                                        {li.qty} x <span className="font-bold">{li.rate.toFixed(0)}=</span>
-                                    </span>
-                                    <span className="font-bold ml-1 text-gray-900">Ksh{li.total.toFixed(0)}</span>
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-
-            {/* Price Column */}
-            <div className="col-span-3 md:col-span-2 flex items-center justify-end">
-                <span className="font-bold text-xl text-gray-900 tracking-tight">Ksh{item.totalPrice.toFixed(0)}</span>
+            <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.name}
+                </div>
+                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                    {item.details?.color && (
+                        <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '1px 6px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                            {item.details.color}
+                        </span>
+                    )}
+                    {item.details?.thickness && (
+                        <span style={{ fontSize: '0.65rem', fontWeight: 600, padding: '1px 6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: '4px', color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                            {item.details.thickness}
+                        </span>
+                    )}
+                </div>
             </div>
         </div>
-    );
-});
+
+        {/* Breakdown */}
+        {item.details?.lineItems && (
+            <div style={{ minWidth: '180px', fontSize: '0.72rem', fontFamily: 'var(--font-mono)', color: '#64748b' }}>
+                {item.details.lineItems.map((li, idx) => (
+                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '2px' }}>
+                        <span style={{ color: '#475569' }}>{li.label}</span>
+                        <span style={{ color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                            {li.qty}x{li.rate.toFixed(0)} = <span style={{ color: '#cbd5e1', fontWeight: 600 }}>KSH{li.total.toFixed(0)}</span>
+                        </span>
+                    </div>
+                ))}
+            </div>
+        )}
+
+        {/* Total */}
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+            <div style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.01em', fontFamily: 'var(--font-mono)' }}>
+                KSH {item.totalPrice?.toFixed(2)}
+            </div>
+        </div>
+    </div>
+));
+
+/* ── Payment Method Button ── */
+const PaymentMethodBtn = ({ method, label, icon, selected, color, onClick }) => (
+    <button
+        onClick={() => onClick(method)}
+        style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            gap: '0.5rem', padding: '1rem 0.75rem',
+            background: selected ? `${color}15` : 'rgba(255,255,255,0.03)',
+            border: selected ? `1px solid ${color}50` : '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '0.875rem',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            boxShadow: selected ? `0 0 0 1px ${color}25, 0 4px 12px ${color}15` : 'none',
+            flex: 1,
+        }}
+        onMouseEnter={e => { if (!selected) { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.15)'; } }}
+        onMouseLeave={e => { if (!selected) { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; } }}
+    >
+        <span style={{ fontSize: '1.5rem' }}>{icon}</span>
+        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: selected ? color : '#64748b', letterSpacing: '0.04em', textTransform: 'uppercase' }}>{label}</span>
+    </button>
+);
 
 export default function CheckoutPage() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    // --- GLOBAL STATE (Context) ---
     const { user } = useAuth();
-    const { cartItems, customer, taxEnabled: ctxTaxEnabled, clearCart } = useCart();
-    const { addOrder } = useOrders();
-
-    // Mode specific state still comes from location (e.g. are we editing?)
+    const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart } = useCart();
+    const { addOrder, updateOrder } = useOrders();
     const { mode, originalTotal = 0 } = location.state || {};
-
-    // Prefer passed state from Sales Dashboard, fallback to Context
+    const editOrderId = mode === 'edit' ? (location.state?.orderData?.id ?? location.state?.orderData?.orderId ?? null) : null;
+    // When arriving from invoice-convert or link mode, items & customer come via navigation state
+    const fromInvoice = Boolean(location.state?.cartItems);
+    const cartItems = fromInvoice ? location.state.cartItems : ctxCartItems;
+    const customer = fromInvoice ? location.state.customer : ctxCustomer;
     const enableTax = location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled;
+    const parentOrderId = location.state?.parentOrderId ?? null;
 
     const [loading, setLoading] = useState(false);
+    const [paymentError, setPaymentError] = useState(null);
     const [paymentMethod, setPaymentMethod] = useState(null);
     const [discount, setDiscount] = useState('');
     const [isPartial, setIsPartial] = useState(false);
@@ -101,343 +123,524 @@ export default function CheckoutPage() {
 
     const isRegistered = useMemo(() => {
         if (!customer) return false;
-        // Strict check: Only allow credit for specific account types
-        const CREDIT_TYPES = ['registered', 'corporate', 'frequent'];
-        return CREDIT_TYPES.includes(customer.type);
+        return ['registered', 'corporate', 'frequent'].includes(customer.type);
     }, [customer]);
 
-    // --- OPTIMIZATION: Memoize Financials ---
-    // --- OPTIMIZATION: Memoize Financials via Hook ---
-    const { subtotal, tax, total: baseTotal } = useCartTotals(cartItems, enableTax);
+    const { subtotal: rawSubtotal } = useCartTotals(cartItems, enableTax);
 
     const financials = useMemo(() => {
+        const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
         const discountValue = isPartial ? 0 : (parseFloat(discount) || 0);
-        const total = Math.max(0, baseTotal - discountValue);
-
-        // Edit Mode Logic
+        const netTaxable = Math.max(0, rawSubtotal - discountValue);
+        const effectiveTax = enableTax ? round2(netTaxable * 0.16) : 0;
+        const total = round2(netTaxable + effectiveTax);
         const effectiveTotal = mode === 'edit' ? (total - originalTotal) : total;
-        // If effectiveTotal is negative, it's a refund. If positive, it's balance due.
-
-        // Payment Logic
-        // For edit mode, we default to paying the difference
         const currentPayable = isPartial ? (parseFloat(amountPaid) || 0) : Math.max(0, effectiveTotal);
+        const balance = Math.max(0, round2(total - ((mode === 'edit' ? originalTotal : 0) + currentPayable)));
+        const mpesaAutoAmount = Math.max(0, round2(currentPayable - (parseFloat(cashAmount) || 0)));
+        return { subtotal: rawSubtotal, tax: effectiveTax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, originalTotal };
+    }, [rawSubtotal, enableTax, discount, isPartial, amountPaid, cashAmount, mode, originalTotal]);
 
-        const balance = Math.max(0, total - ((mode === 'edit' ? originalTotal : 0) + currentPayable));
-        const mpesaAutoAmount = Math.max(0, currentPayable - (parseFloat(cashAmount) || 0));
+    const { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal } = financials;
 
-        return { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, originalTotal };
-    }, [baseTotal, subtotal, tax, discount, isPartial, amountPaid, cashAmount, mode, originalTotal]);
+    // In edit mode: detect whether anything actually changed vs the original order
+    const hasOrderChanged = useMemo(() => {
+        if (!editOrderId) return true;
+        const originalItems = location.state?.orderData?.items || [];
+        if (originalItems.length !== cartItems.length) return true;
+        const sig = (items) =>
+            [...items]
+                .map(i => `${i.productId ?? i.id}:${i.variantId ?? ''}:${Number(i.totalPrice ?? 0).toFixed(2)}`)
+                .sort()
+                .join('|');
+        return sig(originalItems) !== sig(cartItems);
+    }, [editOrderId, cartItems, location.state?.orderData?.items]);
 
-    const { discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal } = financials;
-
-    // --- OPTIMIZATION: Stable Handler ---
-    // --- OPTIMIZATION: Stable Handler ---
-    const handlePayment = useCallback(() => {
+    const handlePayment = useCallback(async () => {
         setLoading(true);
-        setTimeout(() => {
-            // 1. Construct Order Data
+        setPaymentError(null);
+        try {
             const orderData = {
-                customer,
-                items: cartItems,
-                servedBy: user?.userId,
-                totals: {
-                    subtotal,
-                    tax,
-                    total,
-                    discount: discountValue,
-                    paid: currentPayable,
-                    balance
-                },
+                customer, items: cartItems, servedBy: user?.userId, VAT_status: enableTax,
+                parentOrderId,
+                totals: { subtotal, tax, total, discount: discountValue, paid: currentPayable, balance },
                 payment: {
-                    method: paymentMethod,
-                    isPartial,
-                    details: paymentMethod === 'split'
-                        ? { cash: parseFloat(cashAmount), mpesa: mpesaAutoAmount }
-                        : null
+                    method: paymentMethod, isPartial,
+                    details: paymentMethod === 'split' ? { cash: parseFloat(cashAmount), mpesa: mpesaAutoAmount } : null
                 },
                 mode: mode || 'new'
             };
 
-            // 2. Save to Context (Persistence)
-            addOrder(orderData);
-
+            if (editOrderId) {
+                await updateOrder(editOrderId, orderData);
+            } else {
+                await addOrder(orderData);
+            }
+            if (!fromInvoice) clearCart();
+            navigate('/orders');
+        } catch (err) {
+            console.error('Payment failed', err);
+            setPaymentError('Failed to process payment. Please try again.');
+        } finally {
             setLoading(false);
-            alert('Payment Successful! Order Placed.');
-            clearCart(); // Clear context state
-            navigate('/');
-        }, 1500);
-    }, [navigate, clearCart, addOrder, customer, cartItems, subtotal, tax, total, discountValue, currentPayable, balance, paymentMethod, isPartial, cashAmount, mpesaAutoAmount, mode]);
+        }
+    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, currentPayable, balance, paymentMethod, isPartial, cashAmount, mpesaAutoAmount, mode, enableTax, user, fromInvoice, parentOrderId]);
 
     if (cartItems.length === 0) {
         return (
-            <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center">
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">Your Cart is Empty</h2>
-                <button onClick={() => navigate('/sales')} className="text-blue-600 hover:underline">Return to Sales</button>
+            <div style={{ minHeight: '100vh', background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
+                <span style={{ fontSize: '3rem' }}>🛒</span>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f1f5f9' }}>Cart is Empty</h2>
+                <button onClick={() => navigate('/sales')} style={{ color: '#3b82f6', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '0.875rem' }}>
+                    ← Return to Sales
+                </button>
             </div>
         );
     }
 
-    return (
-        <div className="min-h-screen bg-[#F8F9FA] font-sans text-gray-900 flex flex-col md:flex-row">
+    const canConfirm = !loading
+        && hasOrderChanged
+        && (currentPayable === 0 || !!paymentMethod)
+        && !(paymentMethod === 'split' && (parseFloat(cashAmount) || 0) > currentPayable);
 
-            {/* --- LEFT: ORDER SUMMARY (Memoized List) --- */}
-            <div className="flex-1 p-8 md:p-12 overflow-y-auto">
-                <div className="max-w-4xl mx-auto">
-                    {/* Header Nav */}
-                    {/* Header Nav */}
+    return (
+        <div style={{
+            minHeight: '100vh',
+            background: 'var(--color-bg)',
+            display: 'flex',
+            fontFamily: 'var(--font-sans)',
+            color: 'var(--color-text)',
+        }}>
+
+            {/* ── LEFT: Order Review ── */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '2rem' }} className="scrollbar-hide">
+                <div style={{ maxWidth: '780px', margin: '0 auto' }}>
+
+                    {/* Back nav */}
                     <button
                         onClick={() => navigate('/sales', { state: { enableTax } })}
-                        className="text-gray-400 hover:text-gray-600 text-sm font-bold mb-6 flex items-center gap-2 transition-colors uppercase tracking-wide"
+                        style={{
+                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                            background: 'none', border: 'none', cursor: 'pointer',
+                            color: '#475569', fontSize: '0.8rem', fontWeight: 600,
+                            letterSpacing: '0.06em', textTransform: 'uppercase',
+                            marginBottom: '2rem',
+                            transition: 'color 0.2s ease',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.color = '#94a3b8'; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = '#475569'; }}
                     >
-                        <span>←</span> Back to Dashboard
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+                        Back to Sales
                     </button>
 
-                    <div className="mb-10">
-                        <h1 className="text-4xl font-bold tracking-tight text-gray-900">Order Details</h1>
-                        <p className="text-gray-500 mt-2 text-lg">Review items and finalize payment.</p>
+                    {/* Page header */}
+                    <div style={{ marginBottom: '2rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                            <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.025em' }}>
+                                {mode === 'edit' ? 'Update Order' : 'Order Review'}
+                            </h1>
+                            {mode === 'edit' && (
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.625rem', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: '100px', color: '#fbbf24', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                                    Edit Mode
+                                </span>
+                            )}
+                        </div>
+                        <p style={{ color: '#475569', fontSize: '0.875rem' }}>
+                            {cartItems.length} item{cartItems.length !== 1 ? 's' : ''} · Review before confirming payment
+                        </p>
                     </div>
 
-                    {/* Order Items List */}
-                    <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden">
-                        <div className="grid grid-cols-12 gap-4 p-6 bg-gray-50 border-b border-gray-100 text-xs font-bold text-gray-400 uppercase tracking-wider">
-                            <div className="col-span-6 md:col-span-7">Item Description</div>
-                            <div className="col-span-3 md:col-span-3 text-right">Breakdown</div>
-                            <div className="col-span-3 md:col-span-2 text-right">Total</div>
+                    {/* Items table */}
+                    <div style={{
+                        background: 'rgba(255,255,255,0.03)',
+                        border: '1px solid rgba(255,255,255,0.07)',
+                        borderRadius: '1.25rem',
+                        overflow: 'hidden',
+                    }}>
+                        {/* Table header */}
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr auto auto',
+                            gap: '1rem',
+                            padding: '0.875rem 1.5rem',
+                            background: 'rgba(255,255,255,0.02)',
+                            borderBottom: '1px solid rgba(255,255,255,0.06)',
+                        }}>
+                            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Item Description</span>
+                            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em', textTransform: 'uppercase', minWidth: '180px' }}>Breakdown</span>
+                            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'right' }}>Total</span>
                         </div>
 
-                        {/* List rendering is lightweight now */}
-                        <div className="divide-y divide-gray-100">
-                            {cartItems.map((item, idx) => (
-                                <ReviewItemCard key={`${item.id}-${idx}`} item={item} />
-                            ))}
+                        {cartItems.map((item, idx) => (
+                            <ReviewItemCard key={`${item.id}-${idx}`} item={item} index={idx} />
+                        ))}
+
+                        {/* Summary row */}
+                        <div style={{
+                            padding: '1rem 1.5rem',
+                            background: 'rgba(255,255,255,0.02)',
+                            borderTop: '1px solid rgba(255,255,255,0.06)',
+                            display: 'flex',
+                            justifyContent: 'flex-end',
+                        }}>
+                            <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                                <span style={{ fontSize: '0.8rem', color: '#475569', fontWeight: 500 }}>{cartItems.length} items</span>
+                                <div style={{ height: '16px', width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+                                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#f1f5f9', fontFamily: 'var(--font-mono)' }}>
+                                    KSH {subtotal.toFixed(2)}
+                                </span>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            {/* --- RIGHT: PAYMENT SIDEBAR --- */}
-            {/* Input changes here no longer re-render the left column items */}
-            <div className="w-full md:w-[600px] bg-white border-l border-gray-200 h-auto md:h-screen sticky top-0 flex flex-col shadow-[-10px_0_40px_rgba(0,0,0,0.02)] z-20">
-                <div className="p-8 border-b border-gray-100 bg-gray-50/50">
-                    <h2 className="text-xl font-bold text-gray-900">Payment</h2>
-                    <p className="text-sm text-gray-500 mt-1">Select method to complete order.</p>
+            {/* ── RIGHT: Payment Panel ── */}
+            <div style={{
+                width: '440px',
+                flexShrink: 0,
+                background: 'rgba(9,14,26,0.97)',
+                borderLeft: '1px solid rgba(255,255,255,0.07)',
+                display: 'flex',
+                flexDirection: 'column',
+                position: 'sticky',
+                top: 0,
+                height: '100vh',
+                backdropFilter: 'blur(20px)',
+            }}>
+                {/* Panel header */}
+                <div style={{
+                    padding: '1.75rem 1.75rem 1.25rem',
+                    borderBottom: '1px solid rgba(255,255,255,0.06)',
+                    flexShrink: 0,
+                    position: 'relative',
+                    overflow: 'hidden',
+                }}>
+                    <div style={{
+                        position: 'absolute', top: 0, left: '10%', right: '10%', height: '1px',
+                        background: 'linear-gradient(90deg, transparent, rgba(59,130,246,0.5), rgba(6,182,212,0.5), transparent)',
+                    }} />
+                    <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#f1f5f9', marginBottom: '4px' }}>Payment</h2>
+                    <p style={{ fontSize: '0.78rem', color: '#475569' }}>Complete the transaction</p>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-8 space-y-8">
-                    {/* Customer Badge */}
-                    <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-lg">👤</div>
-                        <div>
-                            <div className="text-xs font-bold text-blue-400 uppercase tracking-wider">Customer</div>
-                            <div className="font-bold text-gray-900">{customer?.name || 'Walk-in Customer'}</div>
-                            <div className="text-xs text-gray-500">{customer?.phone || ''}</div>
+                {/* Panel body */}
+                <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }} className="scrollbar-hide">
+
+                    {/* Customer badge */}
+                    <div style={{
+                        display: 'flex', alignItems: 'center', gap: '0.875rem',
+                        padding: '0.875rem 1rem',
+                        background: 'rgba(59,130,246,0.08)',
+                        border: '1px solid rgba(59,130,246,0.18)',
+                        borderRadius: '0.875rem',
+                    }}>
+                        <div style={{
+                            width: '36px', height: '36px', borderRadius: '50%', flexShrink: 0,
+                            background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: '0.875rem', fontWeight: 700, color: '#fff',
+                        }}>
+                            {(customer?.name || 'W').charAt(0).toUpperCase()}
                         </div>
+                        <div>
+                            <div style={{ fontSize: '0.65rem', fontWeight: 600, color: '#3b82f6', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Customer</div>
+                            <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#e2e8f0' }}>{customer?.name || 'Walk-in Customer'}</div>
+                            {customer?.phone && <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{customer.phone}</div>}
+                        </div>
+                        {isRegistered && (
+                            <div style={{ marginLeft: 'auto', fontSize: '0.65rem', fontWeight: 700, padding: '0.2rem 0.5rem', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: '100px', color: '#4ade80', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                                Registered
+                            </div>
+                        )}
                     </div>
 
-                    {/* Discount Input */}
+                    {/* Discount */}
                     {!isPartial && (
-                        <div className="space-y-3">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide flex justify-between">
-                                <span>Discount</span>
-                                <span className="text-gray-300">Optional</span>
+                        <div>
+                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                                Discount (KSH)
+                            </label>
+                            <div style={{ position: 'relative' }}>
+                                <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', fontSize: '0.8rem', color: '#22c55e', fontWeight: 700 }}>−</span>
+                                <input
+                                    type="number"
+                                    value={discount}
+                                    onChange={e => setDiscount(e.target.value)}
+                                    placeholder="0.00"
+                                    min="0"
+                                    style={{
+                                        width: '100%', background: 'rgba(255,255,255,0.04)',
+                                        border: '1px solid rgba(255,255,255,0.08)',
+                                        borderRadius: '0.75rem', padding: '0.75rem 0.875rem 0.75rem 2rem',
+                                        color: '#22c55e', fontSize: '0.9rem', fontFamily: 'var(--font-mono)',
+                                        fontWeight: 700, outline: 'none', transition: 'all 0.2s ease', boxSizing: 'border-box',
+                                    }}
+                                    onFocus={e => { e.target.style.borderColor = 'rgba(34,197,94,0.4)'; e.target.style.boxShadow = '0 0 0 3px rgba(34,197,94,0.08)'; }}
+                                    onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.08)'; e.target.style.boxShadow = ''; }}
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Partial payment toggle */}
+                    {isRegistered && effectiveTotal > 0 && (
+                        <div style={{
+                            display: 'flex', gap: '4px',
+                            background: 'rgba(255,255,255,0.03)',
+                            border: '1px solid rgba(255,255,255,0.07)',
+                            borderRadius: '0.75rem', padding: '4px',
+                        }}>
+                            {[{ label: 'Pay in Full', val: false }, { label: 'Pay Partial / Later', val: true }].map(opt => (
+                                <button
+                                    key={opt.label}
+                                    onClick={() => setIsPartial(opt.val)}
+                                    style={{
+                                        flex: 1, padding: '0.5rem',
+                                        borderRadius: '0.5rem', border: 'none',
+                                        background: isPartial === opt.val ? (opt.val ? 'rgba(245,158,11,0.15)' : 'rgba(59,130,246,0.15)') : 'transparent',
+                                        color: isPartial === opt.val ? (opt.val ? '#fbbf24' : '#60a5fa') : '#475569',
+                                        fontSize: '0.78rem', fontWeight: 700,
+                                        cursor: 'pointer', transition: 'all 0.2s ease',
+                                    }}
+                                >
+                                    {opt.label}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* Partial amount input */}
+                    {isRegistered && isPartial && effectiveTotal > 0 && (
+                        <div>
+                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                                Amount Paying Now (KSH)
                             </label>
                             <input
                                 type="number"
-                                value={discount}
-                                onChange={(e) => setDiscount(e.target.value)}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-4 pr-4 font-bold text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder-gray-300"
-                                placeholder="0.00"
+                                value={amountPaid}
+                                onChange={e => setAmountPaid(e.target.value)}
+                                placeholder="Enter amount..."
+                                style={{
+                                    width: '100%', background: 'rgba(245,158,11,0.06)',
+                                    border: '1px solid rgba(245,158,11,0.25)',
+                                    borderRadius: '0.75rem', padding: '0.75rem 0.875rem',
+                                    color: '#fbbf24', fontSize: '0.9rem', fontFamily: 'var(--font-mono)',
+                                    fontWeight: 700, outline: 'none', transition: 'all 0.2s ease', boxSizing: 'border-box',
+                                }}
                             />
+                            {balance > 0 && (
+                                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b', textAlign: 'right', marginTop: '0.375rem' }}>
+                                    Remaining balance: KSH {balance.toFixed(2)}
+                                </div>
+                            )}
                         </div>
                     )}
 
-                    {/* Partial Toggle */}
-                    {isRegistered && effectiveTotal > 0 && (
-                        <div className="p-1 bg-gray-100 rounded-xl flex">
-                            <button onClick={() => setIsPartial(false)} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${!isPartial ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Pay Full</button>
-                            <button onClick={() => setIsPartial(true)} className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${isPartial ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Pay Later / Partial</button>
-                        </div>
-                    )}
-
-                    {/* Amount Paying Input */}
-                    {isRegistered && isPartial && effectiveTotal > 0 && (
-                        <div className="space-y-3">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Amount Paying Now</label>
-                            <div className="relative">
-                                <span className="absolute left-4 top-3.5 text-green-600 font-bold">Ksh</span>
-                                <input
-                                    type="number"
-                                    value={amountPaid}
-                                    onChange={(e) => setAmountPaid(e.target.value)}
-                                    className="w-full bg-green-50/50 border border-green-200 rounded-xl py-3 pl-12 pr-4 font-bold text-green-900 focus:border-green-500 outline-none transition-all"
-                                    placeholder="Enter amount..."
-                                />
-                            </div>
-                            <div className="text-xs font-bold text-amber-600 text-right">New Balance: Ksh{balance.toFixed(2)}</div>
-                        </div>
-                    )}
-
-                    {/* Payment / Refund Method Selector */}
+                    {/* Refund mode */}
                     {effectiveTotal < 0 ? (
-                        /* --- REFUND OPTIONS --- */
-                        <div className="space-y-4">
-                            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
-                                <span className="text-2xl mt-1">⚠️</span>
+                        <div>
+                            <div style={{
+                                padding: '0.875rem 1rem',
+                                background: 'rgba(245,158,11,0.08)',
+                                border: '1px solid rgba(245,158,11,0.25)',
+                                borderRadius: '0.875rem',
+                                display: 'flex', gap: '0.75rem',
+                                marginBottom: '1rem',
+                            }}>
+                                <span style={{ fontSize: '1.25rem' }}>⚠️</span>
                                 <div>
-                                    <h3 className="font-bold text-amber-900">Refund Required</h3>
-                                    <p className="text-sm text-amber-700 mt-1">
-                                        This order update results in a negative balance. Please select how to refund the customer.
-                                    </p>
+                                    <div style={{ fontSize: '0.825rem', fontWeight: 700, color: '#fbbf24', marginBottom: '2px' }}>Refund Required</div>
+                                    <div style={{ fontSize: '0.78rem', color: '#92400e' }}>This update results in a credit balance. Select refund method.</div>
                                 </div>
                             </div>
-
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Select Refund Method</label>
-                            <div className="grid grid-cols-2 gap-2">
-                                <button
-                                    onClick={() => setPaymentMethod('cash-refund')}
-                                    className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all h-24
-                                        ${paymentMethod === 'cash-refund'
-                                            ? 'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
-                                            : 'border-gray-200 hover:bg-gray-50 text-gray-600'
-                                        }`}
-                                >
-                                    <span className="text-2xl mb-1">💸</span>
-                                    <span className="font-bold text-sm">Cash Refund</span>
-                                </button>
-                                {isRegistered && (
-                                    <button
-                                        onClick={() => setPaymentMethod('store-credit')}
-                                        className={`flex flex-col items-center justify-center p-4 rounded-xl border transition-all h-24
-                                            ${paymentMethod === 'store-credit'
-                                                ? 'border-purple-500 bg-purple-50 text-purple-700 ring-1 ring-purple-500'
-                                                : 'border-gray-200 hover:bg-gray-50 text-gray-600'
-                                            }`}
-                                    >
-                                        <span className="text-2xl mb-1">💳</span>
-                                        <span className="font-bold text-sm">Store Credit</span>
-                                    </button>
-                                )}
+                            <div style={{ display: 'flex', gap: '0.75rem' }}>
+                                <PaymentMethodBtn method="cash-refund" label="Cash Refund" icon="💸" selected={paymentMethod === 'cash-refund'} color="#3b82f6" onClick={setPaymentMethod} />
+                                {isRegistered && <PaymentMethodBtn method="store-credit" label="Store Credit" icon="💳" selected={paymentMethod === 'store-credit'} color="#a855f7" onClick={setPaymentMethod} />}
                             </div>
                         </div>
-                    ) : (
-                        /* --- STANDARD PAYMENT OPTIONS --- */
-                        currentPayable > 0 && (
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Select Payment Method</label>
-                                <div className="grid grid-cols-3 gap-2">
-                                    {['cash', 'mpesa', 'split'].map(method => (
-                                        <button
-                                            key={method}
-                                            onClick={() => setPaymentMethod(method)}
-                                            className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all h-24 capitalize
-                                                ${paymentMethod === method
-                                                    ? method === 'split' ? 'border-purple-500 bg-purple-50 text-purple-700 ring-1 ring-purple-500' :
-                                                        method === 'mpesa' ? 'border-green-500 bg-green-50 text-green-700 ring-1 ring-green-500' :
-                                                            'border-blue-500 bg-blue-50 text-blue-700 ring-1 ring-blue-500'
-                                                    : 'border-gray-200 hover:bg-gray-50 text-gray-600'
-                                                }`}
-                                        >
-                                            <span className="text-2xl mb-1">{method === 'cash' ? '💵' : method === 'mpesa' ? '📱' : '⚖️'}</span>
-                                            <span className="font-bold text-sm">{method}</span>
-                                        </button>
-                                    ))}
-                                </div>
+                    ) : currentPayable > 0 && (
+                        <div>
+                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.625rem' }}>
+                                Payment Method
+                            </label>
+                            <div style={{ display: 'flex', gap: '0.75rem' }}>
+                                <PaymentMethodBtn method="cash" label="Cash" icon="💵" selected={paymentMethod === 'cash'} color="#22c55e" onClick={setPaymentMethod} />
+                                <PaymentMethodBtn method="mpesa" label="M-Pesa" icon="📱" selected={paymentMethod === 'mpesa'} color="#22c55e" onClick={setPaymentMethod} />
+                                <PaymentMethodBtn method="split" label="Split" icon="⚖️" selected={paymentMethod === 'split'} color="#a855f7" onClick={setPaymentMethod} />
                             </div>
-                        )
+                        </div>
                     )}
 
-                    {/* Split Form */}
+                    {/* Split payment inputs */}
                     {currentPayable > 0 && paymentMethod === 'split' && (
-                        <div className="p-4 bg-gray-50 rounded-2xl border border-gray-200 space-y-3 relative overflow-hidden">
-                            <div className="absolute top-0 left-0 w-1 h-full bg-purple-500"></div>
-                            <div className="space-y-2">
-                                <span className="text-xs font-bold text-gray-500 uppercase">Cash</span>
+                        <div style={{
+                            padding: '1rem',
+                            background: 'rgba(168,85,247,0.06)',
+                            border: '1px solid rgba(168,85,247,0.2)',
+                            borderRadius: '0.875rem',
+                            display: 'flex', flexDirection: 'column', gap: '0.75rem',
+                        }}>
+                            <div>
+                                <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#a855f7', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Cash Amount</label>
                                 <input
                                     type="number"
-                                    className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 font-mono font-bold outline-none focus:border-purple-500"
                                     value={cashAmount}
-                                    onChange={(e) => setCashAmount(e.target.value)}
+                                    onChange={e => setCashAmount(e.target.value)}
                                     placeholder="0"
+                                    style={{
+                                        width: '100%', background: 'rgba(255,255,255,0.05)',
+                                        border: '1px solid rgba(255,255,255,0.1)',
+                                        borderRadius: '0.625rem', padding: '0.625rem 0.875rem',
+                                        color: '#f1f5f9', fontSize: '0.875rem', fontFamily: 'var(--font-mono)',
+                                        fontWeight: 600, outline: 'none', boxSizing: 'border-box',
+                                    }}
                                 />
                             </div>
-                            <div className="space-y-2">
-                                <span className="text-xs font-bold text-gray-500 uppercase">M-Pesa</span>
+                            <div>
+                                <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>M-Pesa (auto)</label>
                                 <input
                                     type="number"
-                                    className="w-full bg-gray-100 border border-gray-200 rounded-lg px-3 py-2 font-mono font-bold outline-none text-gray-500 cursor-not-allowed"
                                     value={mpesaAutoAmount.toFixed(2)}
                                     readOnly
+                                    style={{
+                                        width: '100%', background: 'rgba(255,255,255,0.02)',
+                                        border: '1px solid rgba(255,255,255,0.06)',
+                                        borderRadius: '0.625rem', padding: '0.625rem 0.875rem',
+                                        color: '#475569', fontSize: '0.875rem', fontFamily: 'var(--font-mono)',
+                                        fontWeight: 600, outline: 'none', cursor: 'not-allowed', boxSizing: 'border-box',
+                                    }}
                                 />
                             </div>
                             {(parseFloat(cashAmount) || 0) > currentPayable && (
-                                <div className="text-red-500 text-xs font-bold pt-1">
-                                    Cash violates total (Max: {currentPayable.toFixed(2)})
+                                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f87171' }}>
+                                    ⚠ Cash exceeds total (max KSH {currentPayable.toFixed(2)})
                                 </div>
                             )}
                         </div>
                     )}
                 </div>
 
-
-
-                {/* Footer Totals & Pay */}
-                <div className="p-8 bg-white border-t border-gray-200 space-y-4 shadow-[0_-10px_40px_rgba(0,0,0,0.05)]">
-                    <div className="space-y-2 text-sm">
-                        <div className="flex justify-between text-gray-500">
-                            <span>Subtotal</span>
-                            <span className="font-mono">Ksh{subtotal.toFixed(2)}</span>
+                {/* ── Footer: Totals + Confirm ── */}
+                <div style={{
+                    padding: '1.25rem 1.75rem',
+                    borderTop: '1px solid rgba(255,255,255,0.06)',
+                    flexShrink: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '1rem',
+                    background: 'rgba(9,14,26,0.98)',
+                }}>
+                    {/* Totals */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ fontSize: '0.825rem', color: '#475569' }}>Subtotal</span>
+                            <span style={{ fontSize: '0.825rem', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>KSH {subtotal.toFixed(2)}</span>
                         </div>
                         {enableTax && (
-                            <div className="flex justify-between text-gray-500">
-                                <span>VAT (16%)</span>
-                                <span className="font-mono">Ksh{tax.toFixed(2)}</span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ fontSize: '0.825rem', color: '#475569' }}>VAT (16%)</span>
+                                <span style={{ fontSize: '0.825rem', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>KSH {tax.toFixed(2)}</span>
                             </div>
                         )}
                         {discountValue > 0 && (
-                            <div className="flex justify-between text-green-600 font-bold">
-                                <span>Discount</span>
-                                <span className="font-mono">-${discountValue.toFixed(2)}</span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ fontSize: '0.825rem', color: '#22c55e' }}>Discount</span>
+                                <span style={{ fontSize: '0.825rem', color: '#22c55e', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>−KSH {discountValue.toFixed(2)}</span>
                             </div>
                         )}
                         {mode === 'edit' && (
-                            <div className="flex justify-between text-blue-600 font-medium bg-blue-50 px-2 py-1 rounded">
-                                <span>Original Paid</span>
-                                <span className="font-mono">- Ksh{originalTotal.toFixed(2)}</span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', background: 'rgba(59,130,246,0.08)', padding: '0.375rem 0.625rem', borderRadius: '0.375rem' }}>
+                                <span style={{ fontSize: '0.8rem', color: '#60a5fa' }}>Previously Paid</span>
+                                <span style={{ fontSize: '0.8rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>−KSH {originalTotal.toFixed(2)}</span>
                             </div>
                         )}
-                        <div className="flex justify-between text-gray-900 pt-2 border-t border-gray-100 font-bold text-lg items-baseline">
-                            <span>
-                                {mode === 'edit'
-                                    ? (effectiveTotal >= 0 ? 'Balance Due' : 'Refund Due')
-                                    : 'Total'}
+                        <div style={{ height: '1px', background: 'rgba(255,255,255,0.07)', margin: '0.25rem 0' }} />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#cbd5e1' }}>
+                                {mode === 'edit' ? (effectiveTotal >= 0 ? 'Balance Due' : 'Refund Due') : 'Total'}
                             </span>
-                            <span className={`text-2xl tracking-tight ${mode === 'edit' ? (effectiveTotal >= 0 ? 'text-amber-600' : 'text-blue-600') : ''}`}>
-                                Ksh{Math.abs(mode === 'edit' ? effectiveTotal : total).toFixed(2)}
+                            <span style={{
+                                fontSize: '1.5rem', fontWeight: 900, letterSpacing: '-0.03em',
+                                fontFamily: 'var(--font-mono)',
+                                color: mode === 'edit'
+                                    ? (effectiveTotal >= 0 ? '#fbbf24' : '#60a5fa')
+                                    : '#f1f5f9',
+                            }}>
+                                KSH {Math.abs(mode === 'edit' ? effectiveTotal : total).toFixed(2)}
                             </span>
                         </div>
                     </div>
 
+                    {/* No-change notice (edit mode) */}
+                    {editOrderId && !hasOrderChanged && (
+                        <div style={{
+                            padding: '0.75rem 1rem',
+                            background: 'rgba(100,116,139,0.1)',
+                            border: '1px solid rgba(100,116,139,0.25)',
+                            borderRadius: '0.75rem',
+                            fontSize: '0.8rem',
+                            color: '#94a3b8',
+                            fontWeight: 600,
+                            textAlign: 'center',
+                        }}>
+                            No changes detected — edit items in the sales screen first.
+                        </div>
+                    )}
+
+                    {/* Payment Error */}
+                    {paymentError && (
+                        <div style={{
+                            padding: '0.75rem 1rem',
+                            background: 'rgba(239,68,68,0.1)',
+                            border: '1px solid rgba(239,68,68,0.3)',
+                            borderRadius: '0.75rem',
+                            fontSize: '0.8rem',
+                            color: '#f87171',
+                            fontWeight: 600,
+                        }}>
+                            {paymentError}
+                        </div>
+                    )}
+
+                    {/* Confirm Button */}
                     <button
                         onClick={handlePayment}
-                        disabled={loading || (currentPayable > 0 && !paymentMethod) || (paymentMethod === 'split' && (parseFloat(cashAmount) || 0) > currentPayable)}
-                        className={`w-full py-4 rounded-xl font-bold shadow-xl transform active:scale-[0.99] transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed group
-                            ${balance > 0 ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-orange-500/20' : 'bg-gray-900 hover:bg-black text-white shadow-gray-900/10'}
-                        `}
+                        disabled={!canConfirm || loading}
+                        style={{
+                            width: '100%', padding: '1rem',
+                            borderRadius: '0.875rem', border: 'none',
+                            background: !canConfirm ? 'rgba(255,255,255,0.05)' :
+                                balance > 0 ? 'linear-gradient(135deg, #f59e0b, #d97706)' :
+                                    'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                            color: !canConfirm ? '#334155' : '#ffffff',
+                            fontSize: '0.9rem', fontWeight: 700, fontFamily: 'inherit',
+                            cursor: !canConfirm ? 'not-allowed' : 'pointer',
+                            transition: 'all 0.2s ease',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.625rem',
+                            boxShadow: !canConfirm ? 'none' : balance > 0 ? '0 4px 20px rgba(245,158,11,0.3)' : '0 4px 20px rgba(59,130,246,0.35)',
+                            letterSpacing: '0.02em',
+                        }}
+                        onMouseEnter={e => { if (canConfirm) { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = balance > 0 ? '0 6px 28px rgba(245,158,11,0.45)' : '0 6px 28px rgba(59,130,246,0.5)'; } }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = !canConfirm ? 'none' : balance > 0 ? '0 4px 20px rgba(245,158,11,0.3)' : '0 4px 20px rgba(59,130,246,0.35)'; }}
                     >
                         {loading ? (
                             <>
-                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                <span>Processing...</span>
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ animation: 'spin 0.8s linear infinite' }}>
+                                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                                </svg>
+                                Processing…
                             </>
-                        ) : (
-                            <>
-                                <span>{currentPayable === 0 ? 'Confirm On Credit' : (balance > 0 ? `Pay Ksh${currentPayable.toFixed(2)} & Credit Bal` : `Pay Ksh${total.toFixed(2)}`)}</span>
-                                <span className="group-hover:translate-x-1 transition-transform">→</span>
-                            </>
-                        )}
+                        ) : currentPayable === 0
+                            ? 'Confirm On Credit →'
+                            : balance > 0
+                                ? `Pay KSH ${currentPayable.toFixed(2)} & Credit Bal →`
+                                : editOrderId ? `Update Order · KSH ${total.toFixed(2)} →` : `Confirm Payment · KSH ${total.toFixed(2)} →`
+                        }
                     </button>
                 </div>
-            </div >
-        </div >
+            </div>
+        </div>
     );
 }

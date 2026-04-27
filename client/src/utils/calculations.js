@@ -10,9 +10,11 @@
 export function roundToHalfWithRule(value) {
     const decimalPart = +(value - Math.floor(value)).toFixed(2);
 
+    // Round DOWN to nearest 0.5 when decimal is barely above a half-step
     if (decimalPart < 0.1 || (decimalPart > 0.5 && decimalPart < 0.6)) {
         return Math.floor(value * 2) / 2;
     }
+
     return Math.ceil(value * 2) / 2;
 }
 

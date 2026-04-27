@@ -39,8 +39,6 @@ def create_customerAccount(customer_info: model.CustomerCreateRequest, db: Sessi
         logger.warning(f"Database error creating credit: {sae}", exc_info=True)
         raise HTTPException(status_code=500, detail="Database error occurred while creating credit")
 
-        raise HTTPException(status_code=500, detail="Database error occurred while creating credit")
-
 def get_all_customers(db: Session = Depends(get_session)):
     try:
         from sqlmodel import select

@@ -1,246 +1,159 @@
-import React, { Fragment, useState } from 'react';
-import { Dialog, Transition } from '@headlessui/react';
+import { useState } from 'react';
 import { useProducts } from '../../context/ProductContext';
 import ConfirmationModal from '../common/ConfirmationModal';
 
 export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const { updateProduct, updateProductVariant } = useProducts();
     const [confirmDelete, setConfirmDelete] = useState({ open: false, variant: null });
-
-    // Editing State
     const [editingVariantId, setEditingVariantId] = useState(null);
-    const [editForm, setEditForm] = useState({ price: '', stockChange: 0 });
+    const [editForm, setEditForm] = useState({ price: '', priceHalf: '', priceUnit: '', stockChange: 0 });
 
-    if (!product) return null;
+    if (!isOpen || !product) return null;
 
     const variants = product.variants || [];
-    const hasVariants = variants.length > 0;
+    const getVariantId = v => v.name || Object.values(v.attributes).join(' - ');
 
-    // Helper to get unique ID for variant
-    const getVariantId = (v) => v.name || Object.values(v.attributes).join(' - ');
-
-    const handleDeleteClick = (variant) => {
-        setConfirmDelete({ open: true, variant });
+    const handleEditClick = v => {
+        setEditingVariantId(getVariantId(v));
+        setEditForm({ price: v.price || v.priceFull || 0, priceHalf: v.priceHalf || 0, priceUnit: v.priceUnit || 0, length: v.length || '', stockChange: 0 });
     };
 
-    const handleEditClick = (variant) => {
-        const id = getVariantId(variant);
-        setEditingVariantId(id);
-        // Pre-fill
-        setEditForm({
-            price: variant.price || variant.priceFull || 0,
-            stockChange: 0
-        });
-    };
-
-    const handleCancelEdit = () => {
-        setEditingVariantId(null);
-        setEditForm({ price: '', stockChange: 0 });
-    };
-
-    const handleSaveEdit = async (originalVariant) => {
+    const handleSaveEdit = async originalVariant => {
         try {
-            await updateProductVariant(originalVariant.id, {
-                price: parseFloat(editForm.price),
-                price_half: parseFloat(editForm.priceHalf),
-                price_unit: parseFloat(editForm.priceUnit),
-                stock_change: parseInt(editForm.stockChange) || 0
-            });
+            const payload = {
+                price: parseFloat(editForm.price), price_half: parseFloat(editForm.priceHalf),
+                price_unit: parseFloat(editForm.priceUnit), stock_change: parseInt(editForm.stockChange) || 0,
+            };
+            if (editForm.length !== '') payload.length = parseFloat(editForm.length);
+            await updateProductVariant(originalVariant.id, payload);
             setEditingVariantId(null);
-        } catch (err) {
-            console.error(err);
-            alert("Update failed");
-        }
+        } catch { alert("Update failed"); }
     };
 
     const confirmDeletion = () => {
-        const variantToDelete = confirmDelete.variant;
-        if (!variantToDelete) return;
-
-        const updatedVariants = variants.filter(v => getVariantId(v) !== getVariantId(variantToDelete));
-
-        updateProduct({ ...product, variants: updatedVariants });
+        const vToDel = confirmDelete.variant;
+        if (!vToDel) return;
+        updateProduct({ ...product, variants: variants.filter(v => getVariantId(v) !== getVariantId(vToDel)) });
         setConfirmDelete({ open: false, variant: null });
     };
 
+    const inputStyle = { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', padding: '0.375rem 0.625rem', color: '#f1f5f9', fontSize: '0.78rem', outline: 'none', width: '70px', fontFamily: 'var(--font-mono)', transition: 'border-color 0.2s' };
+
     return (
         <>
-            <Transition appear show={isOpen} as={Fragment}>
-                <Dialog as="div" className="relative z-40" onClose={onClose}>
-                    <Transition.Child
-                        as={Fragment}
-                        enter="ease-out duration-300"
-                        enterFrom="opacity-0"
-                        enterTo="opacity-100"
-                        leave="ease-in duration-200"
-                        leaveFrom="opacity-100"
-                        leaveTo="opacity-0"
-                    >
-                        <div className="fixed inset-0 bg-black/25 backdrop-blur-sm" />
-                    </Transition.Child>
-
-                    <div className="fixed inset-0 overflow-y-auto">
-                        <div className="flex min-h-full items-center justify-center p-4 text-center">
-                            <Transition.Child
-                                as={Fragment}
-                                enter="ease-out duration-300"
-                                enterFrom="opacity-0 scale-95"
-                                enterTo="opacity-100 scale-100"
-                                leave="ease-in duration-200"
-                                leaveFrom="opacity-100 scale-100"
-                                leaveTo="opacity-0 scale-95"
-                            >
-                                <Dialog.Panel className="w-full max-w-3xl transform overflow-hidden rounded-2xl bg-white p-8 text-left align-middle shadow-2xl transition-all">
-                                    <div className="flex justify-between items-start mb-6">
-                                        <div>
-                                            <Dialog.Title as="h3" className="text-2xl font-bold leading-6 text-gray-900 border-b pb-2 mb-1 border-gray-100">
-                                                Manage Variants
-                                            </Dialog.Title>
-                                            <p className="text-sm text-gray-500 font-medium">{product.name} ({variants.length})</p>
-                                        </div>
-                                        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 rounded-full p-1 hover:bg-gray-100 transition-colors">
-                                            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                                        </button>
-                                    </div>
-
-                                    <div className="min-h-[300px] max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                                        {!hasVariants ? (
-                                            <div className="flex flex-col items-center justify-center h-40 text-gray-400 border-2 border-dashed border-gray-100 rounded-xl bg-gray-50/50">
-                                                <span className="text-3xl mb-2">📦</span>
-                                                <p>No variants found for this product.</p>
-                                            </div>
-                                        ) : (
-                                            <div className="space-y-3">
-                                                {variants.map((variant, idx) => {
-                                                    const name = getVariantId(variant);
-                                                    const isEditing = editingVariantId === name;
-
-                                                    return (
-                                                        <div key={idx} className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-gray-50 rounded-xl border transition-all group ${isEditing ? 'border-blue-400 ring-1 ring-blue-100 shadow-md bg-white' : 'border-gray-100 hover:border-blue-200 hover:shadow-sm'}`}>
-
-                                                            {/* INFO SECTION */}
-                                                            <div className="flex items-center gap-4 flex-1">
-                                                                <div className="w-10 h-10 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold text-gray-400 shrink-0">
-                                                                    {idx + 1}
-                                                                </div>
-                                                                <div className="flex-1">
-                                                                    <h4 className="font-bold text-gray-800 text-sm sm:text-base">{name}</h4>
-
-                                                                    {isEditing ? (
-                                                                        <div className="flex items-center gap-2 mt-2 animate-fade-in w-full">
-                                                                            <div className="flex flex-col">
-                                                                                <label className="text-[10px] uppercase font-bold text-gray-400">Full</label>
-                                                                                <input
-                                                                                    type="number"
-                                                                                    className="w-20 px-2 py-1 bg-white border border-gray-300 rounded text-sm focus:border-blue-500 outline-none"
-                                                                                    value={editForm.price}
-                                                                                    onChange={(e) => setEditForm({ ...editForm, price: e.target.value })}
-                                                                                />
-                                                                            </div>
-                                                                            {product.trackOffcuts && (
-                                                                                <>
-                                                                                    <div className="flex flex-col">
-                                                                                        <label className="text-[10px] uppercase font-bold text-gray-400">Half</label>
-                                                                                        <input
-                                                                                            type="number"
-                                                                                            className="w-20 px-2 py-1 bg-white border border-gray-300 rounded text-sm focus:border-blue-500 outline-none"
-                                                                                            value={editForm.priceHalf}
-                                                                                            onChange={(e) => setEditForm({ ...editForm, priceHalf: e.target.value })}
-                                                                                        />
-                                                                                    </div>
-                                                                                    <div className="flex flex-col">
-                                                                                        <label className="text-[10px] uppercase font-bold text-gray-400">Unit</label>
-                                                                                        <input
-                                                                                            type="number"
-                                                                                            className="w-20 px-2 py-1 bg-white border border-gray-300 rounded text-sm focus:border-blue-500 outline-none"
-                                                                                            value={editForm.priceUnit}
-                                                                                            onChange={(e) => setEditForm({ ...editForm, priceUnit: e.target.value })}
-                                                                                        />
-                                                                                    </div>
-                                                                                </>
-                                                                            )}
-                                                                        </div>
-                                                                    ) : (
-                                                                        <div className="flex gap-3 text-xs text-gray-500 mt-1">
-                                                                            <span className="bg-white px-2 py-0.5 rounded border border-gray-200 font-mono">
-                                                                                Price: <span className="text-gray-900 font-bold">{variant.price || variant.priceFull || '-'}</span>
-                                                                            </span>
-                                                                            <span className="bg-white px-2 py-0.5 rounded border border-gray-200 font-mono">
-                                                                                Stock: <span className="text-gray-900 font-bold">{variant.stock || 0}</span>
-                                                                            </span>
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            </div>
-
-                                                            {/* ACTIONS SECTION */}
-                                                            <div className="flex items-center gap-2 mt-4 sm:mt-0 justify-end">
-                                                                {isEditing ? (
-                                                                    <>
-                                                                        <button
-                                                                            onClick={() => handleSaveEdit(variant)}
-                                                                            className="px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white text-xs font-bold transition-colors shadow-sm"
-                                                                        >
-                                                                            Confirm
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={handleCancelEdit}
-                                                                            className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs font-bold transition-colors"
-                                                                        >
-                                                                            Cancel
-                                                                        </button>
-                                                                    </>
-                                                                ) : (
-                                                                    <>
-                                                                        <button
-                                                                            onClick={() => handleEditClick(variant)}
-                                                                            className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors group-hover:opacity-100 sm:opacity-60"
-                                                                            title="Edit Price & Stock"
-                                                                        >
-                                                                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={() => handleDeleteClick(variant)}
-                                                                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors group-hover:opacity-100 sm:opacity-60"
-                                                                            title="Delete Variant"
-                                                                        >
-                                                                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                                                                        </button>
-                                                                    </>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="mt-8 flex justify-end">
-                                        <button
-                                            type="button"
-                                            className="inline-flex justify-center rounded-xl border border-transparent bg-gray-900 px-6 py-3 text-sm font-bold text-white hover:bg-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 transition-all shadow-lg shadow-gray-900/10"
-                                            onClick={onClose}
-                                        >
-                                            Done
-                                        </button>
-                                    </div>
-                                </Dialog.Panel>
-                            </Transition.Child>
+            <div style={{
+                position: 'fixed', inset: 0, zIndex: 40,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+                background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(12px)',
+            }} onClick={onClose}>
+                <div onClick={e => e.stopPropagation()} style={{
+                    width: '100%', maxWidth: '800px',
+                    background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
+                    border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1.5rem', overflow: 'hidden',
+                    boxShadow: '0 32px 80px rgba(0,0,0,0.7)', display: 'flex', flexDirection: 'column', maxHeight: '85vh',
+                    animation: 'fadeInScale 0.2s ease',
+                }}>
+                    {/* Header */}
+                    <div style={{ padding: '1.5rem 2rem', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexShrink: 0 }}>
+                        <div>
+                            <h3 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#f1f5f9', margin: '0 0 4px' }}>Manage Variants</h3>
+                            <p style={{ fontSize: '0.78rem', color: '#64748b', margin: 0 }}>{product.name} — {variants.length} variants</p>
                         </div>
+                        <button onClick={onClose} style={{
+                            width: '32px', height: '32px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)',
+                            background: 'rgba(255,255,255,0.05)', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>✕</button>
                     </div>
-                </Dialog>
-            </Transition>
 
-            <ConfirmationModal
-                isOpen={confirmDelete.open}
-                onClose={() => setConfirmDelete({ open: false, variant: null })}
-                onConfirm={confirmDeletion}
-                title="Delete Variant"
-                message={`Are you sure you want to delete the variant "${confirmDelete.variant?.name || 'Selected Variant'}"? This action cannot be undone.`}
-                confirmText="Delete Variant"
-                confirmStyle="danger"
-            />
+                    {/* Variants list */}
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 2rem' }} className="custom-scrollbar">
+                        {variants.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '3rem', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '1rem', color: '#334155' }}>
+                                <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem', opacity: 0.3 }}>📦</div>
+                                <p style={{ fontWeight: 500 }}>No variants for this product</p>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {variants.map((variant, idx) => {
+                                    const name = getVariantId(variant);
+                                    const isEditing = editingVariantId === name;
+                                    return (
+                                        <div key={idx} style={{
+                                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                            padding: '0.875rem 1.25rem', borderRadius: '0.875rem',
+                                            background: isEditing ? 'rgba(59,130,246,0.08)' : 'rgba(255,255,255,0.04)',
+                                            border: `1px solid ${isEditing ? 'rgba(59,130,246,0.3)' : 'rgba(255,255,255,0.07)'}`,
+                                            transition: 'all 0.2s', gap: '1rem', flexWrap: 'wrap',
+                                        }}>
+                                            {/* Info */}
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem', flex: 1, minWidth: 0 }}>
+                                                <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.78rem', fontWeight: 700, color: '#64748b', flexShrink: 0 }}>{idx + 1}</div>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <h4 style={{ fontSize: '0.875rem', fontWeight: 700, color: '#e2e8f0', margin: '0 0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</h4>
+                                                    {isEditing ? (
+                                                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.375rem' }}>
+                                                            {[{ label: 'Full', key: 'price' }, ...(product.trackOffcuts ? [{ label: 'Half', key: 'priceHalf' }, { label: 'Unit(ft)', key: 'priceUnit' }, { label: 'Bar Len(ft)', key: 'length' }] : [])].map(f => (
+                                                                <div key={f.key}>
+                                                                    <div style={{ fontSize: '0.58rem', fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '2px' }}>{f.label}</div>
+                                                                    <input type="number" style={inputStyle} value={editForm[f.key]} onChange={e => setEditForm(p => ({ ...p, [f.key]: e.target.value }))}
+                                                                        onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    ) : (
+                                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                            <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: '4px', padding: '1px 7px', color: '#94a3b8' }}>
+                                                                KSH{variant.price || variant.priceFull || '—'}
+                                                            </span>
+                                                            <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '4px', padding: '1px 7px', color: '#4ade80' }}>
+                                                                Stock: {variant.stock || 0}
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            {/* Actions */}
+                                            <div style={{ display: 'flex', gap: '0.375rem', flexShrink: 0 }}>
+                                                {isEditing ? (
+                                                    <>
+                                                        <button onClick={() => handleSaveEdit(variant)} style={{ padding: '0.375rem 0.875rem', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'rgba(34,197,94,0.15)', color: '#4ade80', fontWeight: 700, fontSize: '0.72rem', transition: 'all 0.15s' }}>Confirm</button>
+                                                        <button onClick={() => setEditingVariantId(null)} style={{ padding: '0.375rem 0.875rem', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.07)', color: '#64748b', fontWeight: 700, fontSize: '0.72rem', transition: 'all 0.15s' }}>Cancel</button>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <button onClick={() => handleEditClick(variant)} style={{ width: '30px', height: '30px', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'transparent', color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}
+                                                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.12)'; e.currentTarget.style.color = '#60a5fa'; }}
+                                                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#475569'; }}>
+                                                            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                                        </button>
+                                                        <button onClick={() => setConfirmDelete({ open: true, variant })} style={{ width: '30px', height: '30px', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'transparent', color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s' }}
+                                                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239,68,68,0.12)'; e.currentTarget.style.color = '#f87171'; }}
+                                                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#475569'; }}>
+                                                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{ padding: '1rem 2rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+                        <button onClick={onClose} style={{
+                            padding: '0.75rem 2rem', borderRadius: '0.875rem', border: 'none', cursor: 'pointer',
+                            background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: '#fff', fontWeight: 700, fontSize: '0.875rem',
+                            boxShadow: '0 4px 16px rgba(59,130,246,0.3)', transition: 'all 0.2s',
+                        }}>Done</button>
+                    </div>
+                </div>
+            </div>
+
+            <ConfirmationModal isOpen={confirmDelete.open} onClose={() => setConfirmDelete({ open: false, variant: null })} onConfirm={confirmDeletion}
+                title="Delete Variant" message={`Delete "${confirmDelete.variant?.name || 'this variant'}"? This cannot be undone.`} confirmText="Delete Variant" confirmStyle="danger" />
         </>
     );
 }

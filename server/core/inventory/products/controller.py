@@ -112,6 +112,32 @@ def update_variant(
 # Stock Management
 # ---------------------------------------------------------------------------
 
+@router.put("/{product_id}/stock")
+def update_product_stock(
+    product_id: int,
+    stock_data: model.StockQuantityUpdateRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """
+    Add stock to a simple (non-variant) product.
+    Positive stock value adds; negative removes.
+    """
+    return service.update_simple_product_stock(product_id, stock_data.stock, db)
+
+@router.get("/{product_id}/offcuts", response_model=List[model.OffcutResponse])
+def get_product_offcuts(
+    product_id: int,
+    variant_id: Optional[int] = Query(None, description="Filter by variant ID"),
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """
+    Return all available offcut pieces for a product, sorted longest first.
+    Pass variant_id to filter to a specific variant's offcuts.
+    """
+    return service.get_offcuts_for_product(product_id, db, variant_id)
+
 @router.get("/{product_id}/availability", response_model=model.StockAvailabilityResponse)
 def check_availability(
     product_id: int,

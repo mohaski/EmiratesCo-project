@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(New-Item -ItemType Directory -Force -Path \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\server\\\\core\\\\invoices\")",
+      "Bash(Out-Null)",
+      "Bash(python migrate_add_invoices.py)",
+      "Bash(npm install *)",
+      "Bash(npm list *)"
+    ]
+  }
+}

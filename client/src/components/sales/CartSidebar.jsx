@@ -1,293 +1,257 @@
-import React, { useMemo, useCallback, memo, useState, useEffect } from 'react';
+import { useCallback, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCartTotals } from '../../hooks/useCartTotals';
 
-// --- OPTIMIZATION 1: Extract and Memoize the List Item ---
-// This prevents every single item from re-rendering when you add/remove just one.
-const CartItem = memo(({ item, index, onEdit, onRemove }) => {
-    return (
-        <div className="group relative animate-fade-in">
-            {/* Top Row: Image & Name & Price */}
-            <div className="flex gap-4 mb-3">
-                <div className="w-12 h-12 rounded-lg bg-gray-100 overflow-hidden flex-shrink-0">
-                    <img
-                        src={item.image}
-                        loading="lazy"
-                        className="w-full h-full object-cover mix-blend-multiply opacity-80 group-hover:opacity-100 transition-opacity"
-                        alt={item.name}
-                    />
-                </div>
-                <div className="flex-1 min-w-0 flex flex-col justify-center">
-                    <div className="flex justify-between items-start">
-                        <h4 className="text-gray-900 font-bold text-sm leading-tight pr-4">{item.name}</h4>
-                        <span className="text-gray-900 font-bold text-sm leading-tight">Ksh{(item.totalPrice || 0).toFixed(0)}</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                        <button
-                            onClick={() => onEdit(index)}
-                            className="text-xs text-blue-500 font-medium opacity-0 group-hover:opacity-100 transition-opacity -ml-1 px-1 hover:bg-blue-50 rounded flex items-center gap-1"
-                        >
-                            ✏️ Edit
-                        </button>
-                        <span className="text-gray-300 text-xs opacity-0 group-hover:opacity-100 transition-opacity">•</span>
-                        <button
-                            onClick={() => onRemove(index)}
-                            className="text-xs text-red-500 font-medium opacity-0 group-hover:opacity-100 transition-opacity px-1 hover:bg-red-50 rounded"
-                        >
-                            Remove
-                        </button>
-                    </div>
-                </div>
+const S = {
+    surface: { background: 'linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem' },
+    textPrimary: '#f1f5f9',
+    textSecondary: '#64748b',
+    textMuted: '#334155',
+    brand: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+};
+
+const CartItem = memo(({ item, index, onEdit, onRemove }) => (
+    <div className="group relative" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '1rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.5rem' }}>
+            <div style={{
+                width: '44px', height: '44px', flexShrink: 0, borderRadius: '10px',
+                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+                <img src={item.image} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', mixBlendMode: 'luminosity', opacity: 0.75 }} alt={item.name} onError={e => { e.currentTarget.style.display = 'none'; }} />
             </div>
-
-            {/* Item Details */}
-            <div className="pl-[64px] text-xs text-gray-500 space-y-2">
-                {/* Meta Tags */}
-                <div className="flex gap-3 mb-2 text-[11px] font-medium tracking-wide text-gray-400 uppercase flex-wrap">
-                    {item.details.description && <span className="text-gray-600 font-bold">{item.details.description}</span>}
-                    {item.details.color && (
-                        <span className="flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: item.details.color === 'White' ? '#eee' : item.details.color }}></span>
-                            {item.details.color}
-                        </span>
-                    )}
-
-                    {/* Universal Attributes (New) */}
-                    {item.details.attributes && item.details.attributes.length > 0 && (
-                        item.details.attributes.map((attr, idx) => (
-                            <span key={idx} className={attr.label === 'Thickness' ? 'text-blue-500' : ''}>
-                                {/* Hide Label for specific obvious attributes if desired, or show generic */}
-                                {attr.label === 'Color' ? (
-                                    <span className="flex items-center gap-1">
-                                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: attr.value === 'White' ? '#eee' : attr.value }}></span>
-                                        {attr.value}
-                                    </span>
-                                ) : (
-                                    <span>{attr.value}{attr.label === 'Length' && typeof attr.value === 'number' ? 'ft' : ''}</span>
-                                )}
-                            </span>
-                        ))
-                    )}
-
-                    {/* Legacy Extras (Old) */}
-                    {!item.details.attributes && item.details.extras ? (
-                        Object.entries(item.details.extras).map(([key, val]) => {
-                            if (key === 'Color' || key === 'Category') return null;
-                            return (
-                                <span key={key} className={key === 'Thickness' ? 'text-blue-500' : ''}>
-                                    {val}{key === 'Length' && typeof val === 'number' ? 'ft' : ''}
-                                </span>
-                            );
-                        }
-                        )
-                    ) : (
-                        /* Legacy Simple Fields fallback */
-                        !item.details.attributes && (
-                            <>
-                                {item.details.length && <span>{item.details.length}FT</span>}
-                                {item.details.thickness && <span className="text-blue-500">{item.details.thickness}</span>}
-                            </>
-                        )
-                    )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0', lineHeight: 1.3, flex: 1 }}>{item.name}</span>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#60a5fa', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                        KSH{(item.totalPrice || 0).toFixed(0)}
+                    </span>
                 </div>
-
-                {/* Universal Line Items Rendering */}
-                {item.details?.lineItems && item.details.lineItems.length > 0 ? (
-                    <div className="pt-2 space-y-1">
-                        {item.details.lineItems.map((li, idx) => (
-                            <div key={idx} className="flex justify-between items-start font-mono text-[11px] leading-tight group/line">
-                                <div className="flex flex-col">
-                                    <span className="text-gray-700 font-medium">{li.label}</span>
-                                    {li.meta && Object.keys(li.meta).length > 0 && (
-                                        <span className="text-[10px] text-gray-400">
-                                            {Object.entries(li.meta).map(([k, v]) => {
-                                                if (k === 'unit' || k === 'length') return `${v}${k === 'length' ? 'ft' : ''}`;
-                                                return `${k}:${v}`;
-                                            }).join(' ')}
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="flex items-baseline gap-3">
-                                    <span className="text-gray-400 text-[10px]">x{li.qty}</span>
-                                    <span className="text-gray-900 font-bold">Ksh{(li.total || 0).toFixed(0)}</span>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                ) : (
-                    /* Legacy Fallback for older items or direct qty items */
-                    item.details?.qty > 0 && (
-                        <div className="flex items-baseline justify-between mt-2">
-                            <span>Quantity</span>
-                            <span className="flex-1 mx-2 border-b border-dotted border-gray-200 translate-y-[-3px]"></span>
-                            <span className="font-mono text-gray-900 font-medium">x{item.details.qty}</span>
-                        </div>
-                    )
-                )}
-
-
+                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem' }}>
+                    <button onClick={() => onEdit(index)} style={{
+                        fontSize: '0.68rem', color: '#3b82f6', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                    }}>Edit</button>
+                    <button onClick={() => onRemove(index)} style={{
+                        fontSize: '0.68rem', color: '#ef4444', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                    }}>Remove</button>
+                </div>
             </div>
         </div>
-    );
-});
 
-// --- MAIN COMPONENT ---
+        <div style={{ paddingLeft: '52px', fontSize: '0.7rem', color: S.textSecondary }}>
+            <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', marginBottom: '0.25rem' }}>
+                {item.details?.description && <span style={{ color: '#94a3b8', fontWeight: 600 }}>{item.details.description}</span>}
+                {item.details?.color && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: item.details.color === 'White' ? '#e2e8f0' : item.details.color, border: '1px solid rgba(255,255,255,0.2)', display: 'inline-block' }} />
+                        {item.details.color}
+                    </span>
+                )}
+                {item.details?.attributes?.map((attr, i) => (
+                    <span key={i} style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: '4px', padding: '1px 5px', color: '#93c5fd', fontSize: '0.65rem', fontWeight: 600 }}>
+                        {attr.label === 'Color' ? (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: attr.value === 'White' ? '#e2e8f0' : attr.value, display: 'inline-block' }} />
+                                {attr.value}
+                            </span>
+                        ) : attr.value}
+                    </span>
+                ))}
+                {!item.details?.attributes && item.details?.extras && Object.entries(item.details.extras).map(([k, v]) => {
+                    if (k === 'Color' || k === 'Category') return null;
+                    return <span key={k} style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.15)', borderRadius: '4px', padding: '1px 5px', color: '#93c5fd', fontSize: '0.65rem' }}>{v}{k === 'Length' && typeof v === 'number' ? 'ft' : ''}</span>;
+                })}
+            </div>
+
+            {item.details?.lineItems?.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px' }}>
+                    {item.details.lineItems.map((li, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>
+                            <span style={{ color: '#475569' }}>{li.label} <span style={{ color: '#334155' }}>×{li.qty}</span></span>
+                            <span style={{ color: '#60a5fa', fontWeight: 700 }}>KSH{(li.total || 0).toFixed(0)}</span>
+                        </div>
+                    ))}
+                </div>
+            ) : item.details?.qty > 0 ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: '0.65rem', marginTop: '2px' }}>
+                    <span style={{ color: '#475569' }}>Qty</span>
+                    <span style={{ color: '#94a3b8' }}>×{item.details.qty}</span>
+                </div>
+            ) : null}
+        </div>
+    </div>
+));
+
 export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, customer, onChangeCustomer, actionLabel, onAction, mode, originalTotal = 0, enableTax, onToggleTax }) {
     const navigate = useNavigate();
-
-    // --- OPTIMIZATION 2: Memoize Financial Math ---
-    // Only recalculate when cartItems or originalTotal changes
-    // --- OPTIMIZATION 2: Centralized Financials via Hook ---
     const { subtotal: subTotal, tax: vat, total: grandTotal } = useCartTotals(cartItems, enableTax);
 
-    // Balance / Edit Mode Logic (Specific to this component's needs)
     const balance = grandTotal - originalTotal;
     const isOwing = balance > 0;
     const isRefund = balance < 0;
     const isBalanced = Math.abs(balance) < 10;
 
-    // --- OPTIMIZATION 3: Stable Handler ---
     const handleAction = useCallback(() => {
-        if (onAction) {
-            onAction();
-        } else {
-            navigate('/checkout', {
-                state: {
-                    cartItems,
-                    customer,
-                    enableTax // Pass tax state
-                }
-            });
-        }
+        if (onAction) { onAction(); return; }
+        navigate('/checkout', { state: { cartItems, customer, enableTax } });
     }, [onAction, navigate, cartItems, customer, enableTax]);
 
     return (
-        <div className="w-96 flex-shrink-0 bg-white border-l border-gray-100 flex flex-col h-full shadow-[0_0_50px_rgba(0,0,0,0.05)] z-30 font-sans tracking-tight">
-
+        <div style={{
+            width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
+            background: 'rgba(9,14,26,0.98)',
+            borderLeft: '1px solid rgba(255,255,255,0.07)',
+            fontFamily: 'var(--font-sans)',
+        }}>
             {/* Header */}
-            <div className="px-8 py-8 bg-white z-10">
-                <div className="flex items-center justify-between mb-8">
-                    <div className="flex flex-col">
-                        <h2 className="text-2xl font-bold text-gray-900">{mode === 'edit' ? 'Editing Order' : 'Order'}</h2>
-                        <button
-                            onClick={onChangeCustomer}
-                            className="text-left group flex items-center gap-2 hover:bg-gray-50 -ml-2 px-2 py-1 rounded-lg transition-colors"
-                        >
-                            <span className="text-gray-400 text-sm font-medium">
-                                {customer ? (
-                                    <span className="text-blue-600 font-bold group-hover:underline">{customer.name}</span>
-                                ) : (
-                                    "Select Customer"
-                                )}
-                            </span>
-                            <span className="text-xs text-gray-300 group-hover:text-blue-500">
-                                {customer ? '(Change)' : '▼'}
-                            </span>
+            <div style={{ padding: '1.5rem 1.25rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.875rem' }}>
+                    <div>
+                        <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#f1f5f9', margin: 0 }}>
+                            {mode === 'edit' ? 'Editing Order' : 'Current Order'}
+                        </h2>
+                        <button onClick={onChangeCustomer} style={{
+                            background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                            fontSize: '0.78rem', marginTop: '2px',
+                            color: customer ? '#60a5fa' : '#64748b',
+                            fontWeight: customer ? 600 : 400,
+                        }}>
+                            {customer ? `${customer.name} ↗` : '+ Select Customer'}
                         </button>
                     </div>
-                    <div className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center text-gray-400">
+                    <div style={{
+                        width: '36px', height: '36px', borderRadius: '50%',
+                        background: customer ? 'linear-gradient(135deg, #3b82f6, #06b6d4)' : 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '0.875rem',
+                    }}>
                         {customer ? (customer.type === 'corporate' ? '🏢' : '👤') : '👤'}
                     </div>
                 </div>
 
-                {/* Search/Customer Note */}
-                <div className="relative">
-                    <input
-                        type="text"
-                        placeholder={customer ? "Add specific note..." : "Add customer note..."}
-                        className="w-full bg-gray-50 border-none rounded-lg py-3 px-4 text-gray-900 text-sm focus:ring-2 focus:ring-blue-500/20 transition-all outline-none placeholder-gray-400 font-medium"
-                    />
+                <div style={{ position: 'relative' }}>
+                    <input type="text" placeholder="Add note..." style={{
+                        width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+                        borderRadius: '0.625rem', padding: '0.5rem 0.875rem', color: '#cbd5e1',
+                        fontSize: '0.78rem', outline: 'none', boxSizing: 'border-box',
+                    }} />
                 </div>
             </div>
 
-            {/* Cart Items List */}
-            <div className="flex-1 overflow-y-auto px-8 pb-4 space-y-8 custom-scrollbar">
+            {/* Cart count badge */}
+            {cartItems?.length > 0 && (
+                <div style={{ padding: '0.5rem 1.25rem', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                    <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                        {cartItems.length} {cartItems.length === 1 ? 'item' : 'items'}
+                    </span>
+                </div>
+            )}
+
+            {/* Cart Items */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.25rem' }} className="custom-scrollbar">
                 {(cartItems || []).length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-gray-300 space-y-4 opacity-60">
-                        <span className="text-4xl grayscale">🛒</span>
-                        <p className="font-medium">No items added</p>
+                    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', opacity: 0.4 }}>
+                        <div style={{ fontSize: '2.5rem', filter: 'grayscale(1)' }}>🛒</div>
+                        <p style={{ color: '#475569', fontWeight: 500, fontSize: '0.875rem' }}>No items added</p>
                     </div>
                 ) : (
-                    cartItems.map((item, idx) => (
-                        <CartItem
-                            key={`${item.id || 'item'}-${idx}`} // Prefer Unique ID if available, fallback to idx
-                            item={item}
-                            index={idx}
-                            onEdit={onEditItem}
-                            onRemove={onRemoveItem}
-                        />
-                    ))
+                    [...cartItems].reverse().map((item, reversedIdx) => {
+                        const idx = cartItems.length - 1 - reversedIdx;
+                        return <CartItem key={`${item.id || 'item'}-${idx}`} item={item} index={idx} onEdit={onEditItem} onRemove={onRemoveItem} />;
+                    })
                 )}
             </div>
 
-            {/* Footer / Checkout */}
-            <div className="p-8 bg-gray-50 border-t border-gray-100 z-10">
+            {/* Footer */}
+            <div style={{
+                padding: '1rem 1.25rem',
+                borderTop: '1px solid rgba(255,255,255,0.07)',
+                background: 'rgba(0,0,0,0.3)',
+                flexShrink: 0,
+            }}>
                 {originalTotal > 0 && (
-                    <div className="mb-4 pt-2 border-t border-gray-200">
-                        <div className="flex justify-between text-gray-400 text-xs mb-1">
-                            <span className="font-medium">Original Paid</span>
-                            <span className="font-mono">Ksh{originalTotal.toFixed(2)}</span>
+                    <div style={{ marginBottom: '0.875rem', paddingBottom: '0.875rem', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#475569', marginBottom: '4px' }}>
+                            <span>Original Paid</span>
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{originalTotal.toFixed(2)}</span>
                         </div>
-                        <div className="flex justify-between items-baseline">
-                            <span className={`font-bold text-sm ${isOwing ? 'text-amber-600' : isRefund ? 'text-blue-600' : 'text-green-600'}`}>
-                                {isOwing ? 'Balance Due' : isRefund ? 'Refund Due' : 'Status'}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: isOwing ? '#fbbf24' : isRefund ? '#60a5fa' : '#4ade80' }}>
+                                {isOwing ? 'Balance Due' : isRefund ? 'Refund Due' : 'Balanced'}
                             </span>
-                            <span className={`font-bold text-xl font-mono ${isOwing ? 'text-amber-600' : isRefund ? 'text-blue-600' : 'text-green-600'}`}>
-                                {isBalanced ? 'Balanced' : `Ksh${Math.abs(balance).toFixed(2)}`}
+                            <span style={{ fontSize: '1.1rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: isOwing ? '#fbbf24' : isRefund ? '#60a5fa' : '#4ade80' }}>
+                                {isBalanced ? '✓' : `KSH${Math.abs(balance).toFixed(2)}`}
                             </span>
                         </div>
                     </div>
                 )}
 
                 {originalTotal === 0 && (
-                    <div className="space-y-4 mb-8">
-                        <div className="flex justify-between text-gray-500 text-sm group relative">
-                            <div className="flex items-center gap-2">
-                                <span className="font-medium">Subtotal</span>
-                                {/* Stealth Tax Toggle */}
-                                <input
-                                    type="checkbox"
-                                    checked={enableTax}
-                                    onChange={(e) => onToggleTax && onToggleTax(e.target.checked)}
-                                    className="w-3 h-3 rounded border-gray-300 text-gray-400 focus:ring-0 opacity-0 group-hover:opacity-30 transition-opacity cursor-pointer"
-                                    title="Toggle Tax"
-                                />
+                    <div style={{ marginBottom: '1rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: '#64748b', marginBottom: '0.375rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span>Subtotal</span>
+                                <button
+                                    onClick={() => onToggleTax && onToggleTax(!enableTax)}
+                                    style={{
+                                        width: '28px', height: '15px', borderRadius: '100px', position: 'relative', cursor: 'pointer',
+                                        background: enableTax ? 'rgba(59,130,246,0.5)' : 'rgba(255,255,255,0.08)',
+                                        border: 'none', transition: 'background 0.2s',
+                                    }}
+                                    title="Toggle VAT"
+                                >
+                                    <span style={{
+                                        position: 'absolute', top: '2px', left: enableTax ? '14px' : '2px',
+                                        width: '11px', height: '11px', borderRadius: '50%', background: '#fff',
+                                        transition: 'left 0.2s', display: 'block',
+                                    }} />
+                                </button>
                             </div>
-                            <span className="font-mono tracking-tight">Ksh{subTotal.toFixed(2)}</span>
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{subTotal.toFixed(2)}</span>
                         </div>
-
                         {enableTax && (
-                            <div className="flex justify-between text-gray-500 text-sm animate-fade-in">
-                                <span className="font-medium">VAT (16%)</span>
-                                <span className="font-mono tracking-tight">Ksh{vat.toFixed(2)}</span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: '#64748b', marginBottom: '0.375rem' }}>
+                                <span>VAT (16%)</span>
+                                <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{vat.toFixed(2)}</span>
                             </div>
                         )}
-
-                        <div className="flex justify-between text-gray-900 items-baseline pt-4 border-t border-gray-200">
-                            <span className="font-bold text-xl">Total</span>
-                            <span className="font-bold text-3xl tracking-tighter">Ksh{grandTotal.toFixed(2)}</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: '0.625rem', borderTop: '1px solid rgba(255,255,255,0.07)', marginTop: '0.375rem' }}>
+                            <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>Total</span>
+                            <span style={{ fontSize: '1.5rem', fontWeight: 900, fontFamily: 'var(--font-mono)', color: '#f1f5f9', letterSpacing: '-0.02em' }}>
+                                KSH{grandTotal.toFixed(0)}
+                            </span>
                         </div>
                     </div>
                 )}
 
                 <button
                     onClick={handleAction}
-                    disabled={cartItems.length === 0}
-                    className={`w-full py-4 rounded-xl font-bold text-white shadow-xl transform active:scale-[0.99] transition-all flex items-center justify-between px-6 disabled:opacity-50 disabled:cursor-not-allowed
-                        ${mode === 'edit'
-                            ? (isRefund ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-900/10' : 'bg-amber-600 hover:bg-amber-700 shadow-amber-900/10')
-                            : 'bg-gray-900 hover:bg-black shadow-gray-900/10'
-                        }`}
+                    disabled={!cartItems?.length}
+                    style={{
+                        width: '100%', padding: '0.875rem',
+                        borderRadius: '0.875rem', border: 'none', cursor: cartItems?.length ? 'pointer' : 'not-allowed',
+                        background: !cartItems?.length ? 'rgba(255,255,255,0.06)'
+                            : mode === 'edit'
+                                ? (isRefund ? 'linear-gradient(135deg, #3b82f6, #2563eb)' : 'linear-gradient(135deg, #f59e0b, #d97706)')
+                                : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                        color: cartItems?.length ? '#fff' : '#334155',
+                        fontWeight: 800, fontSize: '0.875rem',
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        boxShadow: cartItems?.length ? '0 4px 20px rgba(59,130,246,0.3)' : 'none',
+                        transition: 'all 0.2s ease',
+                        letterSpacing: '0.01em',
+                    }}
                 >
                     <span>
                         {mode === 'edit'
                             ? (isOwing ? 'Confirm & Pay' : isRefund ? 'Confirm Refund' : 'Update Order')
                             : (actionLabel || 'Checkout')}
                     </span>
-                    <span className="font-mono opacity-80">
+                    <span style={{ fontFamily: 'var(--font-mono)', opacity: 0.85, fontSize: '0.8rem' }}>
                         {mode === 'edit'
-                            ? (isBalanced ? '✓' : `Ksh${Math.abs(balance).toFixed(0)}`)
-                            : `Ksh${grandTotal.toFixed(0)}`}
+                            ? (isBalanced ? '✓' : `KSH${Math.abs(balance).toFixed(0)}`)
+                            : `KSH${grandTotal.toFixed(0)}`}
                     </span>
                 </button>
             </div>

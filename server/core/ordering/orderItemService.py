@@ -1,8 +1,6 @@
 # services/order_item_service.py
 from __future__ import annotations
 
-from typing import Sequence
-
 from fastapi import Depends, HTTPException
 from sqlmodel import Session, select
 #from sqlalchemy.exc import IntegrityError
@@ -19,20 +17,6 @@ from . import model
 # --------------------------------------------------------------------------- #    
 
 
-def validate_item(item: model.OrderItemCreate) -> None:
-    """Raise ValueError if the item is inconsistent."""
-    expected = compute_item_total(quantity=item.quantity, price=item.price)
-    if abs(expected - item.totalAmount) > 1e-6:
-        raise ValueError(
-            f"totalAmount ({item.totalAmount}) does not match quantity*{item.price}={expected}"
-        )
-
-
-def compute_order_total(items: Sequence[model.OrderItemCreate]) -> float:
-    """Sum the *validated* totalAmount of every item."""
-    return sum(item.totalAmount for item in items)
-
-
 # --------------------------------------------------------------------------- #
 # DB layer (still synchronous – easy to make async later)
 # --------------------------------------------------------------------------- #
@@ -44,6 +28,24 @@ def create_orderItems(order_items: list[model.OrderItemCreate], db: Session = De
     """
     created_item_ids = []
     try:
+        # Pre-fetch Products and Variants for performance (N+1 query fix)
+        product_ids = [item.productId for item in order_items]
+        variant_ids = [item.variantId for item in order_items if item.variantId]
+        
+        from entities.products import Product
+        from entities.variants import Variant
+        
+        products_cache = {}
+        if product_ids:
+            products = db.exec(select(Product).where(Product.productId.in_(product_ids))).all()
+            products_cache = {p.productId: p for p in products}
+            
+        variants_cache = {}
+        if variant_ids:
+            variants = db.exec(select(Variant).where(Variant.variantId.in_(variant_ids))).all()
+            variants_cache = {v.variantId: v for v in variants}
+
+        new_items = []
         for item in order_items:
             
             new_order_item = OrderItem(
@@ -56,15 +58,17 @@ def create_orderItems(order_items: list[model.OrderItemCreate], db: Session = De
                 details=item.details
             )
 
-            total = _calculate_complex_item_total(item)
-            print(total)
+            total = _calculate_complex_item_total(item, db, products_cache, variants_cache)
             new_order_item.total_price = total
 
-            db.add(new_order_item)
-            db.commit()
-            db.refresh(new_order_item)
+            new_items.append(new_order_item)
 
-            created_item_ids.append(new_order_item.item_id)
+        db.add_all(new_items)
+        db.commit()
+
+        for item in new_items:
+            db.refresh(item)
+            created_item_ids.append(item.item_id)
 
         logger.info(f"Created {len(created_item_ids)} order items.")
         return model.OrderItemCreateResponse(

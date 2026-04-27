@@ -1,37 +1,29 @@
-
-import React, { memo, useState, useMemo, useEffect } from 'react';
+import { memo, useState, useMemo, useEffect } from 'react';
 import { mmToSquareFeet, inchesToSquareFeet, roundToHalfWithRule } from '../../../utils/calculations';
 
-// --- SUB-COMPONENT: Glass Calculator (Refactored) ---
+const inputStyle = {
+    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: '0.5rem', padding: '0.5rem 0.625rem', color: '#f1f5f9',
+    fontSize: '0.82rem', outline: 'none', width: '100%', boxSizing: 'border-box',
+    fontFamily: 'var(--font-mono)', transition: 'border-color 0.2s',
+};
+
 const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
-    // 1. EXTRACT AVAILABLE OPTIONS (Dynamic)
-    // 1. EXTRACT AVAILABLE OPTIONS (Dynamic)
     const extraAttributes = useMemo(() => {
         const extras = {};
-        console.log("GlassCalculator Product:", product);
-
-        // 1. Infer keys from variants if available (Primary Source)
         if (Array.isArray(product.variants) && product.variants.length > 0) {
             product.variants.forEach(v => {
                 const attrs = v.attributes;
                 if (attrs) {
-                    // Handle both object and potentially stringified attributes (safety)
-                    const entries = typeof attrs === 'object' ? Object.entries(attrs) : [];
-
-                    entries.forEach(([key, val]) => {
-                        // Filter out metadata or standard keys
-                        if (['Category', 'id', 'itemCode', 'sku'].includes(key)) return;
-                        if (val === null || val === undefined || val === '') return;
-
+                    Object.entries(typeof attrs === 'object' ? attrs : {}).forEach(([key, val]) => {
+                        if (['Category', 'id', 'itemCode', 'sku'].includes(key) || val === null || val === undefined || val === '') return;
                         if (!extras[key]) extras[key] = new Set();
                         extras[key].add(val);
                     });
                 }
             });
         }
-
-        // 2. Merge with schema-defined attributes (e.g. from Description)
         if (product.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)) {
             Object.entries(product.attributes).forEach(([key, vals]) => {
                 if (key !== 'Category' && Array.isArray(vals) && vals.length > 0) {
@@ -40,182 +32,83 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                 }
             });
         }
-
-        console.log("Extracted Attributes:", extras);
-
         return Object.entries(extras).reduce((acc, [key, set]) => {
             if (set.size > 0) {
                 acc[key] = Array.from(set).sort((a, b) => {
-                    const numA = parseFloat(String(a).replace(/[^\d.]/g, ''));
-                    const numB = parseFloat(String(b).replace(/[^\d.]/g, ''));
-                    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-                    return String(a).localeCompare(String(b));
+                    const nA = parseFloat(String(a).replace(/[^\d.]/g, '')), nB = parseFloat(String(b).replace(/[^\d.]/g, ''));
+                    return (!isNaN(nA) && !isNaN(nB)) ? nA - nB : String(a).localeCompare(String(b));
                 });
             }
             return acc;
         }, {});
     }, [product]);
 
-    // 2. STATE
     const [fullQty, setFullQty] = useState(initialDetails?.fullSheet || 0);
     const [halfQty, setHalfQty] = useState(initialDetails?.halfSheet || 0);
     const [cutPieces, setCutPieces] = useState(initialDetails?.cutPieces || []);
-
-    // --- State: Dynamic Attributes (e.g. Thickness) ---
     const [extraSelections, setExtraSelections] = useState(() => {
         if (initialDetails?.extras) return initialDetails.extras;
         const defaults = {};
         Object.keys(extraAttributes).forEach(key => {
-            if (product.defaultAttributes && product.defaultAttributes[key]) {
-                defaults[key] = product.defaultAttributes[key];
-            } else if (extraAttributes[key] && extraAttributes[key].length > 0) {
-                defaults[key] = extraAttributes[key][0];
-            }
+            defaults[key] = product.defaultAttributes?.[key] || (extraAttributes[key]?.[0]);
         });
         return defaults;
     });
-
-    // Inputs for adding new cuts
     const [cutL, setCutL] = useState('');
     const [cutW, setCutW] = useState('');
     const [cutQty, setCutQty] = useState('');
     const [unit, setUnit] = useState('ft');
+    const [error, setError] = useState(null);
 
-    // Sync Extras
     useEffect(() => {
         setExtraSelections(prev => {
             const next = { ...prev };
             let changed = false;
             Object.keys(extraAttributes).forEach(key => {
-                if (!next[key] || !extraAttributes[key].includes(next[key])) {
-                    next[key] = extraAttributes[key][0];
-                    changed = true;
-                }
+                if (!next[key] || !extraAttributes[key].includes(next[key])) { next[key] = extraAttributes[key][0]; changed = true; }
             });
             return changed ? next : prev;
         });
     }, [extraAttributes]);
 
-    // 3. PRICING
     const pricing = useMemo(() => {
-        // Find matching variant
-        let match = null;
-        if (product.variants?.length > 0) {
-            match = product.variants.find(v => {
-                return Object.entries(extraSelections).every(([key, val]) => v.attributes?.[key] === val);
-            });
-        }
-
-
-        if (match) {
-            return {
-                // Context maps variant price to 'price', price_half to 'priceHalf', price_unit to 'priceUnit'
-                priceFull: match.price !== undefined ? match.price : (match.priceFull || 0),
-                priceHalf: match.priceHalf !== undefined ? match.priceHalf : (match.priceHalf || 0),
-                priceSqFt: match.priceUnit !== undefined ? match.priceUnit : (match.priceSqFt || match.priceFoot || 0),
-                availableStock: match.stock !== undefined ? match.stock : (product.stock || 0),
-                variantId: match.variantId
-            };
-        }
-
+        let match = product.variants?.find(v => Object.entries(extraSelections).every(([key, val]) => v.attributes?.[key] === val));
+        if (match) return {
+            priceFull: match.price ?? match.priceFull ?? 0,
+            priceHalf: match.priceHalf ?? 0,
+            priceSqFt: match.priceUnit ?? match.priceSqFt ?? match.priceFoot ?? 0,
+            availableStock: match.stock ?? product.stock ?? 0,
+            variantId: match.variantId
+        };
         return {
-            // Context maps product price_full to 'priceFull', price_half to 'priceHalf', price_unit to 'priceFoot'
-            priceFull: product.priceFull !== undefined ? product.priceFull : (product.priceFullSheet || 0),
-            priceHalf: product.priceHalf !== undefined ? product.priceHalf : (product.priceHalfSheet || 0),
-            priceSqFt: product.priceFoot !== undefined ? product.priceFoot : (product.priceSqFt || 0),
-            availableStock: product.stock || 0
+            priceFull: product.priceFull ?? product.priceFullSheet ?? 0,
+            priceHalf: product.priceHalf ?? product.priceHalfSheet ?? 0,
+            priceSqFt: product.priceFoot ?? product.priceSqFt ?? 0,
+            availableStock: product.stock ?? 0
         };
     }, [product, extraSelections]);
 
-    const [error, setError] = useState(null);
-
-    // Update Parent
     useEffect(() => {
-        // Validation
         let isValid = true;
-        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) {
-            setError(`Only ${pricing.availableStock} Full Sheets available`);
-            isValid = false;
-        } else {
-            setError(null);
-        }
-
+        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setError(`Only ${pricing.availableStock} Full Sheets available`); isValid = false; }
+        else setError(null);
         const fullTotal = fullQty * pricing.priceFull;
         const halfTotal = halfQty * pricing.priceHalf;
         const cutsCost = cutPieces.reduce((sum, cut) => sum + (cut.area * cut.q * pricing.priceSqFt), 0);
-
-        // --- UNIVERSAL SCHEMA GENERATION ---
         const lineItems = [];
+        if (fullQty > 0) lineItems.push({ type: 'sheet-full', label: 'Full Sheet', qty: fullQty, rate: pricing.priceFull, total: fullTotal, meta: {} });
+        if (halfQty > 0) lineItems.push({ type: 'sheet-half', label: 'Half Sheet', qty: halfQty, rate: pricing.priceHalf, total: halfTotal, meta: {} });
+        cutPieces.forEach(cut => lineItems.push({ type: 'glass-cut', label: cut.label, qty: cut.q, rate: cut.area * pricing.priceSqFt, total: cut.area * cut.q * pricing.priceSqFt, meta: { l: cut.l, w: cut.w, u: cut.u, area: cut.area, rateSqFt: pricing.priceSqFt } }));
         const attributes = [];
-
-        // 1. Line Items
-        if (fullQty > 0) {
-            lineItems.push({
-                type: 'sheet-full',
-                label: 'Full Sheet',
-                qty: fullQty,
-                rate: pricing.priceFull,
-                total: fullTotal,
-                meta: {}
-            });
-        }
-        if (halfQty > 0) {
-            lineItems.push({
-                type: 'sheet-half',
-                label: 'Half Sheet',
-                qty: halfQty,
-                rate: pricing.priceHalf,
-                total: halfTotal,
-                meta: {}
-            });
-        }
-
-        // Add each cut as a line item
-        cutPieces.forEach(cut => {
-            lineItems.push({
-                type: 'glass-cut',
-                label: `${cut.label}`, // e.g. "Cut: 24x24 ft"
-                qty: cut.q,
-                rate: (cut.area * pricing.priceSqFt), // Rate per piece (Area * RateSqFt)
-                total: (cut.area * cut.q * pricing.priceSqFt),
-                meta: {
-                    l: cut.l, w: cut.w, u: cut.u, area: cut.area,
-                    rateSqFt: pricing.priceSqFt
-                }
-            });
-        });
-
-        // 2. Attributes
         if (extraSelections['Thickness']) attributes.push({ label: 'Thickness', value: extraSelections['Thickness'] });
-        Object.entries(extraSelections).forEach(([key, val]) => {
-            if (key !== 'Thickness') attributes.push({ label: key, value: val });
-        });
-
-        onUpdate(fullTotal + halfTotal + cutsCost, {
-            // Universal Schema
-            lineItems,
-            attributes,
-
-            // Legacy / Specific Fields
-            fullSheet: fullQty,
-            halfSheet: halfQty,
-            cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })),
-            extras: extraSelections,
-
-            variantId: pricing.variantId,
-            isValid // Pass validation status
-        });
+        Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Thickness') attributes.push({ label: key, value: val }); });
+        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid });
     }, [fullQty, halfQty, cutPieces, pricing, extraSelections, onUpdate]);
 
-    // Helpers
     const getArea = (l, w, u) => {
-        if (u === 'ft') {
-            const rl = roundToHalfWithRule(l);
-            const rw = roundToHalfWithRule(w);
-            return rl * rw;
-        }
+        if (u === 'ft') { const rl = roundToHalfWithRule(l), rw = roundToHalfWithRule(w); return rl * rw; }
         if (u === 'mm') return mmToSquareFeet(l, w);
-        if (u === 'inch') return inchesToSquareFeet(l, w)
+        if (u === 'inch') return inchesToSquareFeet(l, w);
         return 0;
     };
 
@@ -223,36 +116,34 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         if (!cutL || !cutW || !cutQty) return;
         const l = parseFloat(cutL), w = parseFloat(cutW), q = parseFloat(cutQty);
         const area = getArea(l, w, unit);
-        const newItem = { l, w, q, u: unit, area, label: `Cut: ${l}x${w}${unit}` };
-        setCutPieces(prev => [...prev, newItem]);
+        setCutPieces(prev => [...prev, { l, w, q, u: unit, area, label: `Cut: ${l}×${w}${unit}` }]);
         setCutL(''); setCutW(''); setCutQty('');
     };
+    const removeCut = i => setCutPieces(prev => prev.filter((_, idx) => idx !== i));
 
-    const removeCut = (index) => setCutPieces(prev => prev.filter((_, i) => i !== index));
+    const sectionStyle = { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem', padding: '1rem', marginBottom: '0.75rem' };
+    const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' };
+    const chipBtn = (active, color = '#3b82f6') => ({
+        padding: '0.3rem 0.75rem', borderRadius: '100px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', border: '1px solid', transition: 'all 0.15s',
+        background: active ? `${color}20` : 'transparent',
+        borderColor: active ? `${color}50` : 'rgba(255,255,255,0.1)',
+        color: active ? color : '#64748b',
+    });
 
     return (
-        <div className="space-y-3">
-            {/* DYNAMIC ATTRIBUTE SELECTORS */}
+        <div>
+            {/* Attribute selectors */}
             {Object.entries(extraAttributes).length > 0 && (
-                <div className="space-y-2">
+                <div style={sectionStyle}>
                     {Object.entries(extraAttributes).map(([key, options]) => (
-                        <div key={key} className="bg-blue-50/30 p-2 rounded-xl border border-blue-50">
-                            {/* Header Removed/Simplified */}
-                            <div className="flex justify-between items-center mb-1">
-                                {key === 'Thickness' && <span className="text-[10px] font-mono text-gray-400">Rate: Ksh{pricing.priceSqFt}/sqft</span>}
+                        <div key={key} style={{ marginBottom: '0.625rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
+                                <span style={labelStyle}>{key}</span>
+                                {key === 'Thickness' && <span style={{ fontSize: '0.65rem', color: '#475569', fontFamily: 'var(--font-mono)' }}>KSH{pricing.priceSqFt}/sqft</span>}
                             </div>
-                            <div className="flex gap-1.5 flex-wrap">
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
                                 {options.map(opt => (
-                                    <button
-                                        key={opt}
-                                        onClick={() => setExtraSelections(prev => ({ ...prev, [key]: opt }))}
-                                        className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all shadow-sm ${extraSelections[key] === opt
-                                            ? 'bg-blue-600 text-white border-blue-600 shadow-blue-200'
-                                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                                            }`}
-                                    >
-                                        {opt}
-                                    </button>
+                                    <button key={opt} onClick={() => setExtraSelections(prev => ({ ...prev, [key]: opt }))} style={chipBtn(extraSelections[key] === opt, '#06b6d4')}>{opt}</button>
                                 ))}
                             </div>
                         </div>
@@ -260,109 +151,93 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                 </div>
             )}
 
-            {/* Standard Sheets Adder */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200 flex flex-col gap-2 shadow-sm">
-                    <div className="flex justify-between items-center">
-                        <h4 className="font-bold text-gray-800">Full Sheet</h4>
-                        <p className="text-xs text-blue-600 font-bold">Ksh{pricing.priceFull}</p>
+            {/* Full / Half sheets */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                <div style={sectionStyle}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.625rem' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0' }}>Full Sheet</span>
+                        <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#06b6d4', fontFamily: 'var(--font-mono)' }}>KSH{pricing.priceFull}</span>
                     </div>
-                    <div className="flex flex-col gap-1">
-                        <div className="flex items-center gap-2">
-                            <div className="flex items-center bg-white rounded-lg p-1 border border-gray-200 flex-1">
-                                <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200">-</button>
-                                <input type="number" value={fullQty} onChange={e => setFullQty(Math.max(0, parseInt(e.target.value) || 0))} className="w-full text-center bg-transparent text-gray-800 font-mono focus:outline-none font-bold" />
-                                <button onClick={() => setFullQty(fullQty + 1)} className="w-8 h-8 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100">+</button>
-                            </div>
-                        </div>
-                        {error && (
-                            <div className="text-center text-red-500 text-[10px] font-bold uppercase tracking-wide animate-pulse">
-                                {error}
-                            </div>
-                        )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} style={{ width: '32px', height: '32px', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.07)', color: '#94a3b8', fontSize: '1rem', flexShrink: 0 }}>-</button>
+                        <input type="number" value={fullQty} onChange={e => setFullQty(Math.max(0, parseInt(e.target.value) || 0))} style={{ ...inputStyle, textAlign: 'center', flex: 1 }} />
+                        <button onClick={() => setFullQty(fullQty + 1)} style={{ width: '32px', height: '32px', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'rgba(6,182,212,0.15)', color: '#22d3ee', fontSize: '1rem', flexShrink: 0 }}>+</button>
                     </div>
+                    {error && <p style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700, marginTop: '4px', animation: 'pulse 1.5s ease-in-out infinite' }}>{error}</p>}
                 </div>
 
-                {/* Half Sheet Toggle */}
-                <div className="bg-gray-50 p-3 rounded-xl border border-gray-200 flex flex-col justify-center shadow-sm">
-                    <div className="flex justify-between items-center h-full">
-                        <div>
-                            <h4 className="font-bold text-gray-800 text-sm">Half Sheet</h4>
-                            <p className="text-xs text-blue-600 font-bold">Ksh{pricing.priceHalf}</p>
-                        </div>
-                        <button
-                            onClick={() => setHalfQty(halfQty > 0 ? 0 : 1)}
-                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${halfQty > 0 ? 'bg-blue-600' : 'bg-gray-200'}`}
-                        >
-                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${halfQty > 0 ? 'translate-x-6' : 'translate-x-1'}`} />
+                <div style={sectionStyle}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.625rem' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0' }}>Half Sheet</span>
+                        <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#06b6d4', fontFamily: 'var(--font-mono)' }}>KSH{pricing.priceHalf}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '0.78rem', color: '#64748b' }}>{halfQty > 0 ? 'Added' : 'Not added'}</span>
+                        <button onClick={() => setHalfQty(halfQty > 0 ? 0 : 1)} style={{
+                            width: '44px', height: '24px', borderRadius: '100px', border: 'none', cursor: 'pointer', position: 'relative',
+                            background: halfQty > 0 ? 'linear-gradient(135deg, #3b82f6, #06b6d4)' : 'rgba(255,255,255,0.1)',
+                            transition: 'background 0.2s',
+                        }}>
+                            <span style={{ position: 'absolute', top: '3px', left: halfQty > 0 ? '22px' : '3px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block' }} />
                         </button>
                     </div>
                 </div>
             </div>
 
-            {/* Cut Pieces Adder */}
-            <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2"><span>📐</span> Cut Pieces</h3>
-                    <div className="flex bg-white rounded-lg p-1 border border-gray-200 shadow-sm">
+            {/* Cut pieces */}
+            <div style={sectionStyle}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                    <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#e2e8f0' }}>📐 Cut Pieces</span>
+                    <div style={{ display: 'flex', gap: '2px', background: 'rgba(255,255,255,0.06)', borderRadius: '6px', padding: '2px' }}>
                         {['ft', 'inch', 'mm'].map(u => (
-                            <button key={u} onClick={() => setUnit(u)} className={`px-3 py-1 rounded-md text-sm font-bold transition-all ${unit === u ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>{u}</button>
+                            <button key={u} onClick={() => setUnit(u)} style={{ ...chipBtn(unit === u), borderRadius: '4px', padding: '2px 8px', fontSize: '0.65rem' }}>{u}</button>
                         ))}
                     </div>
                 </div>
-                <div className="grid grid-cols-12 gap-2 mb-4 bg-white p-2 rounded-xl border border-gray-200 items-center shadow-sm">
-                    <div className="col-span-3"><input type="number" placeholder="L" value={cutL} onChange={e => setCutL(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:ring-1 focus:ring-blue-500 outline-none" /></div>
-                    <div className="col-span-3"><input type="number" placeholder="W" value={cutW} onChange={e => setCutW(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:ring-1 focus:ring-blue-500 outline-none" /></div>
-                    <div className="col-span-2"><input type="number" placeholder="Qty" value={cutQty} onChange={e => setCutQty(e.target.value)} className="w-full bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 text-sm focus:ring-1 focus:ring-blue-500 outline-none text-center" /></div>
-                    <div className="col-span-4"><button onClick={addCut} className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-bold shadow-sm">Add</button></div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 60px auto', gap: '0.375rem', marginBottom: '0.625rem' }}>
+                    <input type="number" placeholder={`L (${unit})`} value={cutL} onChange={e => setCutL(e.target.value)} style={inputStyle} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
+                    <input type="number" placeholder={`W (${unit})`} value={cutW} onChange={e => setCutW(e.target.value)} style={inputStyle} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
+                    <input type="number" placeholder="Qty" value={cutQty} onChange={e => setCutQty(e.target.value)} style={{ ...inputStyle, textAlign: 'center' }} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
+                    <button onClick={addCut} style={{ padding: '0.5rem', borderRadius: '0.5rem', border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: '#fff', fontWeight: 800, fontSize: '0.82rem' }}>Add</button>
                 </div>
             </div>
 
-            {/* List of Added Items */}
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-                <div className="bg-gray-50 px-4 py-3 border-b border-gray-100"><h3 className="text-sm font-bold text-gray-800">📦 Order Summary</h3></div>
-                <div className="max-h-56 overflow-y-auto custom-scrollbar p-0">
-                    {/* Full Sheet Entry */}
-                    {fullQty > 0 && (
-                        <div className="flex items-center justify-between p-3 border-b border-gray-50 hover:bg-gray-50">
-                            <div>
-                                <p className="font-bold text-gray-800 text-sm">Full Sheet ({pricing.priceFull > 0 ? '' : 'Base'})</p>
-                                <p className="text-xs text-gray-500 font-mono">Qty: {fullQty} | Rate: Ksh{pricing.priceFull}</p>
+            {/* Summary */}
+            {(fullQty > 0 || halfQty > 0 || cutPieces.length > 0) && (
+                <div style={{ background: 'rgba(6,182,212,0.05)', border: '1px solid rgba(6,182,212,0.15)', borderRadius: '0.875rem', overflow: 'hidden' }}>
+                    <div style={{ padding: '0.625rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.2)' }}>
+                        <span style={labelStyle}>Order Summary</span>
+                    </div>
+                    <div style={{ maxHeight: '180px', overflowY: 'auto' }} className="custom-scrollbar">
+                        {fullQty > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.625rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.78rem' }}>
+                                <span style={{ color: '#94a3b8' }}>Full Sheet ×{fullQty}</span>
+                                <span style={{ color: '#22d3ee', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>KSH{(fullQty * pricing.priceFull).toLocaleString()}</span>
                             </div>
-                            <span className="font-bold text-blue-600">Ksh{(fullQty * pricing.priceFull).toLocaleString()}</span>
-                        </div>
-                    )}
-
-                    {/* Half Sheet Entry */}
-                    {halfQty > 0 && (
-                        <div className="flex items-center justify-between p-3 border-b border-gray-50 hover:bg-gray-50">
-                            <div>
-                                <p className="font-bold text-gray-800 text-sm">Half Sheet</p>
-                                <p className="text-xs text-gray-500 font-mono">Qty: {halfQty} | Rate: Ksh{pricing.priceHalf}</p>
+                        )}
+                        {halfQty > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.625rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.78rem' }}>
+                                <span style={{ color: '#94a3b8' }}>Half Sheet ×{halfQty}</span>
+                                <span style={{ color: '#22d3ee', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>KSH{(halfQty * pricing.priceHalf).toLocaleString()}</span>
                             </div>
-                            <span className="font-bold text-blue-600">Ksh{(halfQty * pricing.priceHalf).toLocaleString()}</span>
-                        </div>
-                    )}
-
-                    {/* Cut Pieces */}
-                    {cutPieces.map((cut, idx) => (
-                        <div key={idx} className="flex items-center justify-between p-3 border-b border-gray-50 hover:bg-gray-50 group">
-                            <div>
-                                <p className="font-bold text-gray-800 text-sm">{cut.label}</p>
-                                <p className="text-xs text-gray-500 font-mono">Qty: {cut.q} | Area: {cut.area.toFixed(2)}sqft</p>
+                        )}
+                        {cutPieces.map((cut, i) => (
+                            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.78rem' }}>
+                                <div>
+                                    <span style={{ color: '#94a3b8' }}>{cut.label} ×{cut.q}</span>
+                                    <span style={{ color: '#475569', fontSize: '0.65rem', marginLeft: '0.5rem', fontFamily: 'var(--font-mono)' }}>{(cut.area * cut.q).toFixed(2)}sqft</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <span style={{ color: '#22d3ee', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>KSH{(cut.area * cut.q * pricing.priceSqFt).toFixed(0)}</span>
+                                    <button onClick={() => removeCut(i)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: '0.875rem', padding: 0, transition: 'color 0.15s' }}
+                                    onMouseEnter={e => { e.currentTarget.style.color = '#f87171'; }} onMouseLeave={e => { e.currentTarget.style.color = '#475569'; }}>×</button>
+                                </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                                <span className="font-bold text-blue-600">Ksh{(cut.area * cut.q * pricing.priceSqFt).toFixed(0)}</span>
-                                <button onClick={() => removeCut(idx)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">×</button>
-                            </div>
-                        </div>
-                    ))}
-
-                    {fullQty === 0 && halfQty === 0 && cutPieces.length === 0 && (
-                        <div className="p-8 text-center text-gray-400 text-sm">No items added yet</div>
-                    )}
+                        ))}
+                    </div>
                 </div>
-            </div>
+            )}
         </div>
     );
 });

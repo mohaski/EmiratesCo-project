@@ -50,8 +50,6 @@ def update_credit(payedAmount: float, order_id: int, credit_data: model.CreditUp
         if not credit:
             raise HTTPException(status_code=404, detail="Credit not found for the given order ID")
         
-        unpaidAmount = credit.unpaid
-      
         if payedAmount > credit.amount_due:
             raise HTTPException(status_code=400, detail="Paid amount exceeds the amount due")
         elif payedAmount == credit.amount_due:
@@ -84,7 +82,7 @@ def update_credit(payedAmount: float, order_id: int, credit_data: model.CreditUp
 
 def check_credit_for_customer_by_customerId(customerId, db: Session = Depends(get_session)) -> list[model.CreditCreateRequest]:
     statement = (
-        select(credits).where(Credit.customerId == customerId)
+        select(Credit).where(Credit.customerId == customerId)
         )
     
     customer_name = db.exec(select(Customer.name).where(Customer.customerId == customerId)).first()

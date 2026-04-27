@@ -11,12 +11,11 @@ from db.database import get_session
 from entities.users import User
 from . import model
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
-#from ..exceptions import AuthenticationError
-#import logging
+from config import settings
 
-# You would want to store this in an environment variable or a secret manager
-SECRET_KEY = '197b2c37c391bed93fe80344fe73b806947a65e36206e05a1a23c2fa12702fe3'
-ALGORITHM = 'HS256'
+SECRET_KEY = settings.JWT_SECRET_KEY
+ALGORITHM = settings.JWT_ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 auth_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -25,15 +24,11 @@ auth_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 def hash_password(password: str) -> str:
     """Hash a password for storing."""
-    print(f"DEBUG: Hashing password: '{password}' (Type: {type(password)}, Len: {len(password)})")
     return pwd_context.hash(password)
 
 def userRegistration(register_user_request: model.UserRegistrationRequest, db: Session = Depends(get_session)) -> None:
-    
     """Register a new user"""
     # Check if user already exists
-    from sqlmodel import select
-
     existing_user = db.exec(select(User).where(User.email == register_user_request.email)).first()
     if existing_user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User with this email already exists")
@@ -76,12 +71,14 @@ def authenticate_user(identifier: str, password: str, db: Session) -> User | boo
         return user
     
 def create_access_token(username: str, email: str, userId: UUID, role: str) -> str:
-        """Create a JWT access token"""
+        """Create a JWT access token with expiry."""
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         encode = {
             "sub": email,
             "username": username,
             "id": str(userId),
             "role": role,
+            "exp": expire,
         }
         return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
     

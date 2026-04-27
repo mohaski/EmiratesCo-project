@@ -1,349 +1,191 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import ProductCard from '../components/sales/ProductCard';
 import ProductModal from '../components/sales/ProductModal';
 import CartSidebar from '../components/sales/CartSidebar';
 import { useProducts } from '../context/ProductContext';
-import { useCart } from '../context/CartContext'; // Import Context
+import { useCart } from '../context/CartContext';
 import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
-
 import CustomerSelectionOverlay from '../components/sales/CustomerSelectionOverlay';
 
 export default function InvoiceGenPage() {
-    const { products: PRODUCTS } = useProducts(); // Keep for specific helpers if needed, but hook handles filtering
+    const { products: PRODUCTS } = useProducts();
     const location = useLocation();
     const navigate = useNavigate();
     const [customers, setCustomers] = useState([]);
 
-    // --- HOOKS ---
     const {
         activeCategory, setActiveCategory,
         activeSubCategory, setActiveSubCategory,
         searchQuery, setSearchQuery,
         profileColor, setProfileColor,
-        filteredProducts,
-        currentSubCategories,
-        CATEGORIES,
-        isProfileCategory
+        filteredProducts, currentSubCategories, CATEGORIES, isProfileCategory,
     } = useProductFiltering();
 
     useEffect(() => {
-        const fetchCustomers = async () => {
-            try {
-                const fetched = await api.userService.getCustomers();
-                const mapped = fetched.map(c => ({
-                    id: c.customerId,
-                    name: c.name,
-                    phone: c.phoneNumber,
-                    type: c.type || 'registered'
-                }));
-                setCustomers(mapped);
-            } catch (err) {
-                console.error("Failed to load customers", err);
-            }
-        };
-        fetchCustomers();
+        api.userService.getCustomers().then(fetched => {
+            setCustomers(fetched.map(c => ({ id: c.customerId, name: c.name, phone: c.phoneNumber, type: c.type || 'registered' })));
+        }).catch(console.error);
     }, []);
 
-    // --- LOCAL STATE (UI Only) ---
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
     const [editingIndex, setEditingIndex] = useState(null);
     const [initialModalDetails, setInitialModalDetails] = useState(null);
-
-    // --- GLOBAL CART STATE (Context) ---
-    const {
-        cartItems: cart,
-        customer: selectedCustomer,
-        setCustomer: setSelectedCustomer,
-        // Decoupled tax state
-        addToCart,
-        updateCartItem,
-        removeFromCart,
-        clearCart,
-        sessionType,
-        setSessionType
-    } = useCart();
-
-    // Local Tax State (Independent)
-    const [enableTax, setEnableTax] = useState(() => {
-        return location.state?.enableTax !== undefined ? location.state.enableTax : true;
-    });
-
-    // Mobile Cart Drawer State
     const [isCartOpen, setIsCartOpen] = useState(false);
 
-    // --- INITIALIZATION EFFECT (Fresh Start Logic) ---
+    const { cartItems: cart, customer: selectedCustomer, setCustomer: setSelectedCustomer, addToCart, updateCartItem, removeFromCart, clearCart, sessionType, setSessionType } = useCart();
+    const [enableTax, setEnableTax] = useState(() => location.state?.enableTax !== undefined ? location.state.enableTax : true);
+
     useEffect(() => {
-        // If entering fresh (no mode), FORCE RESET session
-        if (!location.state?.mode) {
-            clearCart();
-            setSessionType('invoice');
-        } else if (sessionType !== 'invoice') {
-            // Even if editing, ensure we tag this as invoice session
-            setSessionType('invoice');
-        }
+        if (!location.state?.mode) { clearCart(); setSessionType('invoice'); }
+        else if (sessionType !== 'invoice') setSessionType('invoice');
     }, [location.state, clearCart, setSessionType, sessionType]);
 
-    // --- STABLE HANDLERS ---
-    const handleProductClick = useCallback((product) => {
-        setSelectedProduct(product);
-        setEditingIndex(null);
-        setInitialModalDetails(null);
-        setModalOpen(true);
-    }, []);
-
-    const handleEditCartItem = useCallback((index) => {
+    const handleProductClick = useCallback(product => { setSelectedProduct(product); setEditingIndex(null); setInitialModalDetails(null); setModalOpen(true); }, []);
+    const handleEditCartItem = useCallback(index => {
         const item = cart[index];
         if (!item) return;
-
-        const originalProduct = PRODUCTS.find(p => p.id === item.id);
-        if (originalProduct) {
-            // Defer UI updates slightly to avoid conflicts
-            setTimeout(() => {
-                setSelectedProduct(originalProduct);
-                setEditingIndex(index);
-                setInitialModalDetails(item.details);
-                setModalOpen(true);
-                setIsCartOpen(true); // Open drawer on edit
-            }, 0);
-        }
+        const orig = PRODUCTS.find(p => p.id === item.id);
+        if (orig) setTimeout(() => { setSelectedProduct(orig); setEditingIndex(index); setInitialModalDetails(item.details); setModalOpen(true); setIsCartOpen(true); }, 0);
     }, [cart, PRODUCTS]);
-
-    const handleAddToOrder = useCallback((orderItem) => {
-        if (editingIndex !== null) {
-            updateCartItem(editingIndex, orderItem);
-            setEditingIndex(null);
-        } else {
-            addToCart(orderItem);
-        }
+    const handleAddToOrder = useCallback(orderItem => {
+        if (editingIndex !== null) { updateCartItem(editingIndex, orderItem); setEditingIndex(null); }
+        else addToCart(orderItem);
     }, [editingIndex, addToCart, updateCartItem]);
-
-    const handleRemoveItem = useCallback((index) => {
-        removeFromCart(index);
-    }, [removeFromCart]);
-
-    const handleModalClose = useCallback(() => {
-        setModalOpen(false);
-        setEditingIndex(null);
-        setInitialModalDetails(null);
-    }, []);
-
-    const handleReviewInvoice = useCallback(() => {
-        navigate('/invoice/review', {
-            state: {
-                enableTax
-            }
-        });
-    }, [navigate, enableTax]);
-
-    const handleCustomerSelect = useCallback((customer) => {
+    const handleRemoveItem = useCallback(index => removeFromCart(index), [removeFromCart]);
+    const handleModalClose = useCallback(() => { setModalOpen(false); setEditingIndex(null); setInitialModalDetails(null); }, []);
+    const handleReviewInvoice = useCallback(() => navigate('/invoice/review', { state: { enableTax } }), [navigate, enableTax]);
+    const handleCustomerSelect = useCallback(customer => {
         setSelectedCustomer(customer);
-        // Default to enabled for all customers unless 'individual'
-        if (customer && customer.type === 'individual') {
-            setEnableTax(false);
-        } else {
-            setEnableTax(true);
-        }
-    }, [setSelectedCustomer, setEnableTax]);
+        setEnableTax(customer?.type !== 'individual');
+    }, [setSelectedCustomer]);
 
     return (
-        <div className="flex h-full w-full overflow-hidden text-gray-800 font-sans bg-slate-100 relative">
+        <div style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden', background: 'var(--color-bg)', position: 'relative' }}>
 
-            {/* --- Main Content area --- */}
-            <div className={`flex-1 flex flex-col relative min-w-0 transition-all duration-300 ${isCartOpen ? 'md:mr-0' : ''}`}>
+            {/* Main area */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
 
-                {/* Top Header - Inverted Gold/Slate Theme */}
-                <div className="h-auto md:h-20 flex flex-col md:flex-row md:items-center justify-between px-4 md:px-8 bg-slate-900 text-white shadow-md z-10 shrink-0 gap-4 md:gap-0 py-4 md:py-0 transition-all">
-                    <div className="flex items-center justify-between w-full md:w-auto">
+                {/* Header */}
+                <div style={{
+                    height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '0 1.5rem', flexShrink: 0,
+                    background: 'rgba(9,14,26,0.95)', borderBottom: '1px solid rgba(255,255,255,0.07)',
+                    backdropFilter: 'blur(20px)',
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{
+                            width: '32px', height: '32px', borderRadius: '8px',
+                            background: 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(234,88,12,0.15))',
+                            border: '1px solid rgba(245,158,11,0.3)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem',
+                        }}>📄</div>
                         <div>
-                            <h1 className="text-xl md:text-2xl font-bold tracking-tight text-amber-500">Invoice Generator</h1>
-                            <p className="text-[10px] md:text-xs text-slate-400 font-medium">Create Quotations & Estimates</p>
+                            <h1 style={{ fontSize: '0.9rem', fontWeight: 800, color: '#fbbf24', margin: 0 }}>Invoice Generator</h1>
+                            <p style={{ fontSize: '0.62rem', color: '#475569', margin: 0 }}>Create quotations & estimates</p>
                         </div>
-                        {/* Mobile Cart Toggle */}
-                        <button
-                            onClick={() => setIsCartOpen(!isCartOpen)}
-                            className="md:hidden relative p-2 text-white bg-slate-800 rounded-xl hover:bg-slate-700 transition-colors border border-slate-700"
-                        >
-                            <span className="text-xl">🛒</span>
-                            {cart.length > 0 && (
-                                <span className="absolute -top-1 -right-1 bg-amber-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-slate-900 shadow-sm">
-                                    {cart.length}
-                                </span>
-                            )}
-                        </button>
                     </div>
-
-                    {/* Search Bar */}
-                    <div className="relative w-full md:w-96">
-                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">🔍</span>
-                        <input
-                            type="text"
-                            className="w-full bg-slate-800 border border-slate-700 rounded-xl py-2.5 pl-10 pr-4 text-white shadow-inner focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition-all placeholder-slate-500"
-                            placeholder="Search products..."
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                        />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{ position: 'relative' }}>
+                            <span style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: '#475569', fontSize: '0.875rem' }}>🔍</span>
+                            <input type="text" placeholder="Search products..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                                style={{
+                                    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)',
+                                    borderRadius: '0.625rem', padding: '0.5rem 1rem 0.5rem 2.25rem',
+                                    color: '#e2e8f0', fontSize: '0.82rem', outline: 'none', width: '240px',
+                                }}
+                                onFocus={e => { e.target.style.borderColor = 'rgba(245,158,11,0.4)'; }}
+                                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.09)'; }}
+                            />
+                        </div>
+                        {/* Mobile cart toggle */}
+                        <button onClick={() => setIsCartOpen(!isCartOpen)} style={{
+                            position: 'relative', padding: '0.5rem 0.75rem', borderRadius: '0.625rem',
+                            background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)',
+                            color: '#94a3b8', cursor: 'pointer', display: 'none',
+                        }} className="md:hidden">
+                            🛒
+                            {cart.length > 0 && <span style={{ position: 'absolute', top: '-4px', right: '-4px', width: '16px', height: '16px', borderRadius: '50%', background: '#f59e0b', color: '#000', fontSize: '0.6rem', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{cart.length}</span>}
+                        </button>
                     </div>
                 </div>
 
-                {/* Categories Tab Bar */}
-                <div className="px-8 py-6 shrink-0 bg-white border-b border-gray-200">
-                    <div className="flex items-center justify-between mb-2">
-                        <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
-                            {CATEGORIES.map(cat => (
-                                <button
-                                    key={cat.id}
-                                    onClick={() => setActiveCategory(cat.id)}
-                                    className={`flex items-center gap-2 px-6 py-4 rounded-xl border transition-all whitespace-nowrap shadow-sm
-                                    ${activeCategory === cat.id
-                                            ? 'bg-slate-900 text-amber-500 border-slate-900 ring-2 ring-amber-500/50'
-                                            : 'bg-white text-gray-600 border-gray-200 hover:border-slate-300 hover:bg-slate-50'
-                                        }`}
-                                >
-                                    <span className="text-xl filter drop-shadow-sm">{cat.icon}</span>
-                                    <span className="font-medium">{cat.label}</span>
-                                </button>
-                            ))}
-                        </div>
+                {/* Category tabs */}
+                <div style={{ padding: '0.875rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0, background: 'rgba(9,14,26,0.6)' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', overflowX: 'auto', marginBottom: '0.625rem' }} className="scrollbar-hide">
+                        {CATEGORIES.map(cat => (
+                            <button key={cat.id} onClick={() => setActiveCategory(cat.id)} style={{
+                                display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem',
+                                borderRadius: '0.75rem', border: '1px solid', whiteSpace: 'nowrap', cursor: 'pointer',
+                                background: activeCategory === cat.id ? 'rgba(245,158,11,0.12)' : 'rgba(255,255,255,0.04)',
+                                borderColor: activeCategory === cat.id ? 'rgba(245,158,11,0.35)' : 'rgba(255,255,255,0.08)',
+                                color: activeCategory === cat.id ? '#fbbf24' : '#64748b',
+                                fontWeight: 700, fontSize: '0.8rem', transition: 'all 0.2s',
+                            }}>
+                                <span>{cat.icon}</span><span>{cat.label}</span>
+                            </button>
+                        ))}
                     </div>
 
-                    <div className="flex flex-col gap-3">
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
                         {isProfileCategory && (
-                            <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-lg border border-gray-200 w-fit">
-                                <span className="text-xs font-bold text-gray-500 px-2">Profile Color:</span>
-                                <div className="flex gap-1">
-                                    {PROFILE_COLORS.map(color => (
-                                        <button
-                                            key={color.name}
-                                            onClick={() => setProfileColor(color.name)}
-                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border transition-all ${profileColor === color.name
-                                                ? 'bg-white border-amber-500 shadow-sm text-slate-900'
-                                                : 'bg-transparent border-transparent hover:bg-gray-100'
-                                                }`}
-                                        >
-                                            <div
-                                                className="w-3 h-3 rounded-full border border-gray-300 shadow-sm"
-                                                style={{ backgroundColor: color.hex }}
-                                            />
-                                            <span className={`text-xs font-semibold ${profileColor === color.name ? 'text-gray-900' : 'text-gray-500'}`}>
-                                                {color.name}
-                                            </span>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        {currentSubCategories.length > 0 && (
-                            <div className="flex gap-2 flex-wrap">
-                                {currentSubCategories.map(sub => (
-                                    <button
-                                        key={sub.id}
-                                        onClick={() => setActiveSubCategory(sub.id)}
-                                        className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${activeSubCategory === sub.id
-                                            ? 'bg-amber-500 text-white shadow-md'
-                                            : 'bg-white text-gray-400 border border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                                            }`}
-                                    >
-                                        {sub.label}
+                            <div style={{ display: 'flex', gap: '0.25rem', background: 'rgba(255,255,255,0.04)', borderRadius: '0.625rem', padding: '3px', border: '1px solid rgba(255,255,255,0.07)', marginRight: '0.5rem' }}>
+                                {PROFILE_COLORS.map(color => (
+                                    <button key={color.name} onClick={() => setProfileColor(color.name)} style={{
+                                        display: 'flex', alignItems: 'center', gap: '0.375rem', padding: '0.25rem 0.625rem',
+                                        borderRadius: '5px', border: '1px solid', cursor: 'pointer', transition: 'all 0.15s',
+                                        background: profileColor === color.name ? 'rgba(245,158,11,0.1)' : 'transparent',
+                                        borderColor: profileColor === color.name ? 'rgba(245,158,11,0.35)' : 'transparent',
+                                    }}>
+                                        <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: color.hex, border: '1px solid rgba(255,255,255,0.2)', display: 'inline-block', flexShrink: 0 }} />
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 600, color: profileColor === color.name ? '#fbbf24' : '#64748b' }}>{color.name}</span>
                                     </button>
                                 ))}
                             </div>
                         )}
-                    </div>
-                </div>
-
-                {/* Products Grid */}
-                <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-slate-50">
-                    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                        {filteredProducts.map(product => (
-                            <ProductCard
-                                key={product.id}
-                                product={product}
-                                onClick={handleProductClick}
-                                selectedColor={profileColor}
-                            />
+                        {currentSubCategories.map(sub => (
+                            <button key={sub.id} onClick={() => setActiveSubCategory(sub.id)} style={{
+                                padding: '0.25rem 0.875rem', borderRadius: '100px', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer',
+                                border: `1px solid ${activeSubCategory === sub.id ? 'rgba(245,158,11,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                                background: activeSubCategory === sub.id ? 'rgba(245,158,11,0.12)' : 'transparent',
+                                color: activeSubCategory === sub.id ? '#fbbf24' : '#64748b', transition: 'all 0.15s',
+                            }}>{sub.label}</button>
                         ))}
                     </div>
                 </div>
-            </div>
 
-            {/* --- Mobile Cart Overlay --- */}
-            {isCartOpen && (
-                <div
-                    className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm animate-fade-in"
-                    onClick={() => setIsCartOpen(false)}
-                />
-            )}
-
-            {/* --- Right Cart Panel (Responsive Drawer) --- */}
-            <div className={`
-                fixed inset-y-0 right-0 z-50 w-[85vw] sm:w-96 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out
-                md:relative md:translate-x-0 md:shadow-none md:border-l md:border-gray-200 md:w-[400px] shrink-0
-                ${isCartOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
-            `}>
-                <div className="h-full flex flex-col">
-                    {/* Mobile Cart Header */}
-                    <div className="md:hidden flex items-center justify-between p-4 border-b border-gray-100 bg-gray-50/50">
-                        <h3 className="font-bold text-lg">Your Cart ({cart.length})</h3>
-                        <button onClick={() => setIsCartOpen(false)} className="p-2 bg-gray-200 rounded-full hover:bg-gray-300 text-gray-600">
-                            ✕
-                        </button>
+                {/* Products grid */}
+                <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar">
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
+                        {filteredProducts.map(product => (
+                            <ProductCard key={product.id} product={product} onClick={handleProductClick} selectedColor={profileColor} />
+                        ))}
                     </div>
-
-                    {/* Cart Sidebar */}
-                    <div className="flex-1 overflow-hidden relative">
-                        <CartSidebar
-                            cartItems={cart}
-                            onRemoveItem={handleRemoveItem}
-                            onEditItem={handleEditCartItem}
-                            customer={selectedCustomer}
-                            onChangeCustomer={() => setSelectedCustomer(null)}
-                            actionLabel="Review Invoice"
-                            onAction={handleReviewInvoice}
-                            enableTax={enableTax}
-                            onToggleTax={setEnableTax}
-                        />
-                    </div>
+                    {filteredProducts.length === 0 && (
+                        <div style={{ textAlign: 'center', padding: '4rem 0', color: '#334155' }}>
+                            <div style={{ fontSize: '3rem', opacity: 0.3, marginBottom: '0.75rem' }}>🔍</div>
+                            <p style={{ fontWeight: 500, fontSize: '0.875rem' }}>No products match your search</p>
+                        </div>
+                    )}
                 </div>
             </div>
 
-            {/* --- Mobile Floating Checkout Button (Only if Cart has items and is closed) --- */}
-            {!isCartOpen && cart.length > 0 && (
-                <div className="md:hidden fixed bottom-6 right-6 z-30 animate-bounce-subtle">
-                    <button
-                        onClick={() => setIsCartOpen(true)}
-                        className="bg-gray-900 text-white p-4 rounded-full shadow-xl shadow-gray-900/40 flex items-center justify-center relative hover:scale-105 active:scale-95 transition-all"
-                    >
-                        <span className="text-2xl">🛒</span>
-                        <span className="absolute -top-2 -right-2 bg-amber-500 text-white text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full border-2 border-white">
-                            {cart.length}
-                        </span>
-                    </button>
-                </div>
-            )}
+            {/* Cart sidebar */}
+            <div style={{ width: '360px', flexShrink: 0 }}>
+                <CartSidebar cartItems={cart} onRemoveItem={handleRemoveItem} onEditItem={handleEditCartItem}
+                    customer={selectedCustomer} onChangeCustomer={() => setSelectedCustomer(null)}
+                    actionLabel="Review Invoice" onAction={handleReviewInvoice}
+                    enableTax={enableTax} onToggleTax={setEnableTax} />
+            </div>
 
-            {/* --- Product Modal --- */}
-            <ProductModal
-                product={selectedProduct}
-                isOpen={modalOpen}
-                onClose={handleModalClose}
-                onAddToOrder={handleAddToOrder}
-                color={initialModalDetails?.color || profileColor}
-                initialDetails={initialModalDetails}
-                source="invoice"
-            />
+            {/* Product modal */}
+            <ProductModal product={selectedProduct} isOpen={modalOpen} onClose={handleModalClose} onAddToOrder={handleAddToOrder}
+                color={initialModalDetails?.color || profileColor} initialDetails={initialModalDetails} source="invoice" />
 
-            {/* --- OPTIMIZED CUSTOMER OVERLAY --- */}
-            {!selectedCustomer && (
-                <CustomerSelectionOverlay
-                    customers={customers}
-                    onSelectCustomer={handleCustomerSelect}
-                />
-            )}
-
+            {/* Customer overlay */}
+            {!selectedCustomer && <CustomerSelectionOverlay customers={customers} onSelectCustomer={handleCustomerSelect} />}
         </div>
     );
 }

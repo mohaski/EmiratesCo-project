@@ -1,286 +1,124 @@
-import React, { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 
-const TrashIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-    </svg>
-);
+const inputStyle = {
+    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: '0.625rem', padding: '0.625rem 0.875rem', color: '#f1f5f9',
+    fontSize: '0.875rem', outline: 'none', width: '100%', boxSizing: 'border-box',
+    fontFamily: 'var(--font-mono)', transition: 'border-color 0.2s',
+};
+const sectionStyle = { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem', padding: '1rem', marginBottom: '0.75rem' };
+const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' };
 
 const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) => {
-    // 1. EXTRACT AVAILABLE OPTIONS (Based on Product Schema)
+
     const extraAttributes = useMemo(() => {
         const extras = {};
-
-        // Identify attributes from schema (Exclude Color/Category)
-        const attrKeys = Array.isArray(product.attributes)
-            ? product.attributes
-            : Object.keys(product.attributes || {});
-
+        const attrKeys = Array.isArray(product.attributes) ? product.attributes : Object.keys(product.attributes || {});
         const allowedKeys = attrKeys.filter(key => key !== 'Color' && key !== 'Category');
-
-        if (product.variants && product.variants.length > 0) {
+        if (product.variants?.length > 0) {
             product.variants.forEach(v => {
-                // strict color filtering
-                if (color && v.attributes?.Color) {
-                    if (v.attributes.Color !== color) return;
-                }
-
-                // Collect allowed attributes
+                if (color && v.attributes?.Color && v.attributes.Color !== color) return;
                 allowedKeys.forEach(key => {
                     const val = v.attributes?.[key];
-                    if (val) {
-                        if (!extras[key]) extras[key] = new Set();
-                        extras[key].add(val);
-                    }
+                    if (val) { if (!extras[key]) extras[key] = new Set(); extras[key].add(val); }
                 });
             });
         }
-
-        // Convert Sets to sorted Arrays
         return Object.entries(extras).reduce((acc, [key, set]) => {
             acc[key] = Array.from(set).sort((a, b) => {
-                // Numeric sort for Length using regex to support '21ft'
-                const numA = parseFloat(String(a).replace(/[^\d.]/g, ''));
-                const numB = parseFloat(String(b).replace(/[^\d.]/g, ''));
-                if (!isNaN(numA) && !isNaN(numB)) {
-                    if (key === 'Length') return numB - numA; // Descending for Length
-                    return numA - numB; // Ascending for others
-                }
+                const nA = parseFloat(String(a).replace(/[^\d.]/g, '')), nB = parseFloat(String(b).replace(/[^\d.]/g, ''));
+                if (!isNaN(nA) && !isNaN(nB)) return key === 'Length' ? nB - nA : nA - nB;
                 return String(a).localeCompare(String(b));
             });
-            // Reverse Length for typical "Largest First" display if desired? 
             if (key === 'Length' && acc[key][0] < acc[key][acc[key].length - 1]) acc[key].reverse();
             return acc;
         }, {});
     }, [product, color]);
 
-    // 2. STATE
     const [fullQty, setFullQty] = useState(initialDetails?.full || 0);
     const [halfQty, setHalfQty] = useState(initialDetails?.half || 0);
     const [feet, setFeet] = useState(initialDetails?.feet || 0);
-
-    // --- State: Dynamic Attributes (e.g. Color, Length) ---
-    // Initialize with defaults if available
     const [extraSelections, setExtraSelections] = useState(() => {
         const defaults = {};
         Object.keys(extraAttributes).forEach(key => {
-            if (product.defaultAttributes && product.defaultAttributes[key]) {
-                defaults[key] = product.defaultAttributes[key];
-            } else if (extraAttributes[key] && extraAttributes[key].length > 0) {
-                // If checking 'Color', DO NOT default to first option automatically
-                // Only default others like Length/Thickness if desired
-                if (key !== 'Color') {
-                    defaults[key] = extraAttributes[key][0];
-                }
-            }
+            if (key !== 'Color') defaults[key] = product.defaultAttributes?.[key] || extraAttributes[key]?.[0];
         });
-        // Merge with initialDetails if provided
         return initialDetails?.extras ? { ...defaults, ...initialDetails.extras } : defaults;
     });
+    const [fullLengtherror, setfullLengtherror] = useState(null);
+    const [cuterror, setcuterror] = useState(null);
 
-    // Update selections if defaults change (unlikely but good practice) or product changes
     useEffect(() => {
         setExtraSelections(prev => {
             const next = { ...prev };
             Object.keys(extraAttributes).forEach(key => {
-                // If current selection is invalid for new product, reset
                 if (!extraAttributes[key].includes(next[key])) {
-                    if (product.defaultAttributes && product.defaultAttributes[key]) {
-                        next[key] = product.defaultAttributes[key];
-                    } else if (extraAttributes[key].length > 0) {
-                        next[key] = extraAttributes[key][0];
-                    }
+                    if (key !== 'Color') next[key] = product.defaultAttributes?.[key] || extraAttributes[key][0];
+                    else delete next[key];
                 }
             });
             return next;
         });
     }, [product, extraAttributes]);
 
-    // Sync Extras if attributes change (e.g. switching color changes available sizes)
-    useEffect(() => {
-        setExtraSelections(prev => {
-            const next = { ...prev };
-            let changed = false;
-            Object.keys(extraAttributes).forEach(key => {
-                // Determine if we should auto-select:
-                // If 'Color', don't auto-select unless we have a prior valid selection or default
-                if (!next[key] || !extraAttributes[key].includes(next[key])) {
-                    if (key !== 'Color') {
-                        next[key] = extraAttributes[key][0];
-                        changed = true;
-                    } else {
-                        // For Color, if invalid, leave undefined (force user selection)
-                        // Unless there's only 1 option? Common UX pattern is usually force selection.
-                        // User asked to remove default selection for color.
-                        delete next[key];
-                        changed = true;
-                    }
-                }
-            });
-            return changed ? next : prev;
-        });
-    }, [extraAttributes]);
-
-    // Derived Numeric Length for Calculation (if Length is selected)
     const selectedLengthNum = useMemo(() => {
-        if (extraSelections['Length']) {
-            const val = parseInt(String(extraSelections['Length']).replace(/\D/g, ''));
-            return val || 0;
-        }
-        return 0; // fallback if no length attribute
+        if (extraSelections['Length']) return parseInt(String(extraSelections['Length']).replace(/\D/g, '')) || 0;
+        return 0;
     }, [extraSelections]);
 
-    // 3. DETERMINE ACTIVE PRICING BASED ON SELECTION
     const pricing = useMemo(() => {
-        let matchingVariant = null;
-
-        if (product.variants) {
-            matchingVariant = product.variants.find(v => {
-                // 1. Color Check
-                if (color && v.attributes?.Color) {
-                    if (v.attributes.Color !== color) return false;
-                }
-
-                // 2. All Extra Attributes Check (Includes Length if present)
-                const extrasMatch = Object.entries(extraSelections).every(([key, val]) => {
-                    return v.attributes && v.attributes[key] === val;
-                });
-                if (!extrasMatch) return false;
-
-                return true;
-            });
-        }
-
-        if (matchingVariant) {
-            const pFull = matchingVariant.price || matchingVariant.priceFull || product.priceFull || 0;
-            const pHalf = matchingVariant.priceHalf || product.priceHalf || 0;
-
-            // Per Foot Calculation
-            let pFoot = matchingVariant.priceUnit || product.priceFoot || 0;
-            const vStock = matchingVariant.stock !== undefined ? matchingVariant.stock : (product.stock || 0);
-
-            return {
-                priceFull: pFull,
-                priceHalf: pHalf,
-                priceFoot: pFoot,
-                availableStock: vStock,
-                variantId: matchingVariant.variantId
-            };
-        }
-
-        // Fallback to Root Product Prices
-        return {
-            priceFull: product.priceFull || 0,
-            priceHalf: product.priceHalf || 0,
-            priceFoot: product.priceFoot || 0,
-            availableStock: product.stock || 0
+        const matchingVariant = product.variants?.find(v => {
+            if (color && v.attributes?.Color && v.attributes.Color !== color) return false;
+            return Object.entries(extraSelections).every(([key, val]) => v.attributes?.[key] === val);
+        });
+        if (matchingVariant) return {
+            priceFull: matchingVariant.price || matchingVariant.priceFull || product.priceFull || 0,
+            priceHalf: matchingVariant.priceHalf || product.priceHalf || 0,
+            priceFoot: matchingVariant.priceUnit || product.priceFoot || 0,
+            availableStock: matchingVariant.stock ?? product.stock ?? 0,
+            variantId: matchingVariant.variantId,
         };
+        return { priceFull: product.priceFull || 0, priceHalf: product.priceHalf || 0, priceFoot: product.priceFoot || 0, availableStock: product.stock || 0 };
+    }, [product, color, extraSelections]);
 
-    }, [product, color, extraSelections, selectedLengthNum]);
-
-    const [error, setError] = useState(null);
-
-    // 4. UPDATE PARENT
     useEffect(() => {
-        // Validation
         let isValid = true;
-        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) {
-            setError(`Only ${pricing.availableStock} Full Lengths available`);
-            isValid = false;
-        } else {
-            setError(null);
-        }
+        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setfullLengtherror(`Only ${pricing.availableStock} full lengths available`); isValid = false; }
+        else if (pricing.availableStock !== undefined && feet > selectedLengthNum) { setcuterror(`Feet cannot exceed ${selectedLengthNum}`); isValid = false; }
+        else { setfullLengtherror(null); setcuterror(null); }
 
-        const total = (fullQty * pricing.priceFull) +
-            (halfQty * pricing.priceHalf) +
-            (feet * pricing.priceFoot);
-
-        // --- UNIVERSAL SCHEMA GENERATION ---
+        const total = (fullQty * pricing.priceFull) + (halfQty * pricing.priceHalf) + (feet * pricing.priceFoot);
         const lineItems = [];
+        if (fullQty > 0) lineItems.push({ type: 'profile-full', label: 'Full Length', qty: fullQty, rate: pricing.priceFull, total: fullQty * pricing.priceFull, meta: { length: extraSelections['Length'] } });
+        if (halfQty > 0) lineItems.push({ type: 'profile-half', label: 'Half Length', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { length: extraSelections['Length'] } });
+        if (feet > 0) lineItems.push({ type: 'profile-cut', label: `Custom Cut (${feet}ft)`, qty: 1, rate: pricing.priceFoot, total: feet * pricing.priceFoot, meta: { length: feet, unit: 'ft' } });
         const attributes = [];
-
-        // 1. Line Items (The Receipt)
-        if (fullQty > 0) {
-            lineItems.push({
-                type: 'profile-full',
-                label: 'Full Length',
-                qty: fullQty,
-                rate: pricing.priceFull,
-                total: fullQty * pricing.priceFull,
-                meta: { length: extraSelections['Length'] }
-            });
-        }
-        if (halfQty > 0) {
-            lineItems.push({
-                type: 'profile-half',
-                label: 'Half Length',
-                qty: halfQty,
-                rate: pricing.priceHalf,
-                total: halfQty * pricing.priceHalf,
-                meta: { length: extraSelections['Length'] }
-            });
-        }
-        if (feet > 0) {
-            lineItems.push({
-                type: 'profile-cut',
-                label: `Custom Feet (${feet}ft)`,
-                qty: feet,
-                rate: pricing.priceFoot,
-                total: feet * pricing.priceFoot,
-                meta: { unit: 'ft' }
-            });
-        }
-
-        // 2. Attributes (Display Tags)
         if (color) attributes.push({ label: 'Color', value: color });
         if (extraSelections['Length']) attributes.push({ label: 'Length', value: extraSelections['Length'] });
-
-        Object.entries(extraSelections).forEach(([key, val]) => {
-            if (key !== 'Length' && key !== 'Color') {
-                attributes.push({ label: key, value: val });
-            }
-        });
-
-        onUpdate(total, {
-            // New Universal Format
-            lineItems,
-            attributes,
-
-            // Legacy / Specific Fields (Kept for compatibility until Phase 3)
-            full: fullQty,
-            half: halfQty,
-            feet: feet,
-            color: color || 'White',
-            extras: extraSelections,
-            variantId: pricing.variantId,
-            isValid // Pass validation status
-        });
+        Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Length' && key !== 'Color') attributes.push({ label: key, value: val }); });
+        onUpdate(total, { lineItems, attributes, full: fullQty, half: halfQty, feet, color: color || 'White', extras: extraSelections, variantId: pricing.variantId, isValid });
     }, [fullQty, halfQty, feet, pricing, color, extraSelections, onUpdate]);
 
-    const handleExtraChange = (key, val) => {
-        setExtraSelections(prev => ({ ...prev, [key]: val }));
-    };
+    const handleExtraChange = (key, val) => setExtraSelections(prev => ({ ...prev, [key]: val }));
+    const chipBtn = (active) => ({
+        padding: '0.3rem 0.875rem', borderRadius: '100px', fontSize: '0.72rem', fontWeight: 700,
+        cursor: 'pointer', border: '1px solid', transition: 'all 0.15s',
+        background: active ? 'rgba(59,130,246,0.15)' : 'transparent',
+        borderColor: active ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)',
+        color: active ? '#60a5fa' : '#64748b',
+    });
 
     return (
-        <div className="space-y-3">
-            {/* DYNAMIC ATTRIBUTE SELECTORS (Includes Length if defined in attributes) */}
+        <div>
+            {/* Dynamic attribute selectors */}
             {Object.entries(extraAttributes).length > 0 && (
-                <div className="space-y-2">
+                <div style={sectionStyle}>
                     {Object.entries(extraAttributes).map(([key, options]) => (
-                        <div key={key} className="space-y-1">
-                            {/* Header Removed per user request */}
-                            <div className="flex flex-wrap gap-1.5">
+                        <div key={key} style={{ marginBottom: '0.625rem' }}>
+                            <span style={{ ...labelStyle, display: 'block', marginBottom: '0.375rem' }}>{key}</span>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
                                 {options.map(opt => (
-                                    <button
-                                        key={opt}
-                                        onClick={() => handleExtraChange(key, opt)}
-                                        className={`px-3 py-1.5 rounded-md text-xs font-bold border transition-all ${extraSelections[key] === opt
-                                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
-                                            : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-                                            }`}
-                                    >
-                                        {opt}
-                                    </button>
+                                    <button key={opt} onClick={() => handleExtraChange(key, opt)} style={chipBtn(extraSelections[key] === opt)}>{opt}</button>
                                 ))}
                             </div>
                         </div>
@@ -288,51 +126,52 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
                 {/* Standard Lengths */}
-                <div className="bg-gray-50 p-5 rounded-xl border border-gray-200">
-                    <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><span>📏</span> Standard Lengths</h3>
-                    <div className="space-y-4">
-                        <div className="flex flex-col gap-1">
-                            <div className="flex items-center justify-between">
-                                <div><p className="text-gray-600 font-medium">Full Length</p><p className="text-xs text-blue-600 font-bold">Ksh{pricing.priceFull}/pc</p></div>
-                                <div className="flex items-center bg-white rounded-lg p-1 border border-gray-200 shadow-sm">
-                                    <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} className="w-8 h-8 rounded-md bg-gray-100 text-gray-600 hover:bg-gray-200">-</button>
-                                    <input type="number" value={fullQty} onChange={(e) => setFullQty(Number(e.target.value))} className="w-12 text-center bg-transparent text-gray-800 font-mono focus:outline-none font-bold" />
-                                    <button onClick={() => setFullQty(fullQty + 1)} className="w-8 h-8 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100">+</button>
-                                </div>
-                            </div>
-                            {error && (
-                                <div className="text-right text-red-500 text-[10px] font-bold uppercase tracking-wide animate-pulse">
-                                    {error}
-                                </div>
-                            )}
+                <div style={sectionStyle}>
+                    <p style={{ ...labelStyle, marginBottom: '0.875rem', display: 'block' }}>📏 Standard Lengths</p>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.625rem' }}>
+                        <div>
+                            <p style={{ fontSize: '0.82rem', color: '#94a3b8', margin: '0 0 2px', fontWeight: 600 }}>Full Length</p>
+                            <p style={{ fontSize: '0.68rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', margin: 0 }}>KSH{pricing.priceFull}/pc</p>
                         </div>
-                        <div className="flex items-center justify-between pt-2 border-t border-gray-200">
-                            <div><p className="text-gray-600 font-medium">Half Length</p><p className="text-xs text-blue-600 font-bold">Ksh{pricing.priceHalf}/pc</p></div>
-                            <div className="flex items-center">
-                                <button
-                                    onClick={() => setHalfQty(halfQty > 0 ? 0 : 1)}
-                                    className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors focus:outline-none ${halfQty > 0 ? 'bg-blue-600' : 'bg-gray-200'}`}
-                                >
-                                    <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${halfQty > 0 ? 'translate-x-7' : 'translate-x-1'}`} />
-                                </button>
-                            </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} style={{ width: '30px', height: '30px', borderRadius: '7px', border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.07)', color: '#94a3b8' }}>-</button>
+                            <input type="number" value={fullQty === 0 ? '' : fullQty} onChange={e => setFullQty(e.target.value === '' ? 0 : Number(e.target.value))} placeholder="0"
+                                style={{ ...inputStyle, width: '48px', textAlign: 'center', padding: '0.375rem' }} />
+                            <button onClick={() => setFullQty(fullQty + 1)} style={{ width: '30px', height: '30px', borderRadius: '7px', border: 'none', cursor: 'pointer', background: 'rgba(59,130,246,0.15)', color: '#60a5fa' }}>+</button>
                         </div>
+                    </div>
+                    {fullLengtherror && <p style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700, margin: '0 0 0.5rem', animation: 'pulse 1.5s ease-in-out infinite' }}>{fullLengtherror}</p>}
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '0.625rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                        <div>
+                            <p style={{ fontSize: '0.82rem', color: '#94a3b8', margin: '0 0 2px', fontWeight: 600 }}>Half Length</p>
+                            <p style={{ fontSize: '0.68rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', margin: 0 }}>KSH{pricing.priceHalf}/pc</p>
+                        </div>
+                        <button onClick={() => setHalfQty(halfQty > 0 ? 0 : 1)} style={{
+                            width: '44px', height: '24px', borderRadius: '100px', border: 'none', cursor: 'pointer', position: 'relative',
+                            background: halfQty > 0 ? 'linear-gradient(135deg, #3b82f6, #06b6d4)' : 'rgba(255,255,255,0.1)', transition: 'background 0.2s',
+                        }}>
+                            <span style={{ position: 'absolute', top: '3px', left: halfQty > 0 ? '22px' : '3px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block' }} />
+                        </button>
                     </div>
                 </div>
 
                 {/* Custom Cut */}
-                <div className="bg-gray-50 p-5 rounded-xl border border-gray-200">
-                    <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><span>✂️</span> Custom Cut</h3>
-                    <div className="flex flex-col gap-2">
-                        <label className="text-sm text-gray-500 font-medium">Total Feet Needed</label>
-                        <div className="flex items-center gap-2">
-                            <input type="number" value={feet} onChange={(e) => setFeet(Number(e.target.value))} className="w-full border border-gray-300 rounded-xl px-4 py-3 text-gray-800 text-lg font-mono focus:ring-2 focus:ring-blue-500/50 outline-none bg-white shadow-sm" placeholder="0" />
-                            <span className="text-gray-500 font-bold">ft</span>
-                        </div>
-                        <p className="text-right text-xs text-blue-600 font-bold mt-1">Ksh{pricing.priceFoot} / ft</p>
+                <div style={sectionStyle}>
+                    <p style={{ ...labelStyle, marginBottom: '0.875rem', display: 'block' }}>✂️ Custom Cut</p>
+                    <p style={{ fontSize: '0.78rem', color: '#64748b', margin: '0 0 0.5rem', fontWeight: 500 }}>Total feet needed</p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <input type="number" placeholder="0" value={feet === 0 ? '' : feet} onChange={e => setFeet(e.target.value === '' ? 0 : Number(e.target.value))}
+                            style={{ ...inputStyle, fontSize: '1.25rem', fontWeight: 700 }}
+                            onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
+                            onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                        />
+                        <span style={{ color: '#64748b', fontWeight: 700, flexShrink: 0 }}>ft</span>
                     </div>
+                    <p style={{ fontSize: '0.68rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', margin: '0.375rem 0 0', textAlign: 'right' }}>KSH{pricing.priceFoot}/ft</p>
+                    {cuterror && <p style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700, margin: '4px 0 0', animation: 'pulse 1.5s ease-in-out infinite' }}>{cuterror}</p>}
                 </div>
             </div>
         </div>

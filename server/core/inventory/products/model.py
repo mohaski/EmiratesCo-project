@@ -105,8 +105,18 @@ class ProductResponse(BaseModel):
 
 class StockAvailabilityResponse(BaseModel):
     message: str
-    
+
 class StockQuantityUpdateRequest(BaseModel):
     stock: int
+
+class OffcutResponse(BaseModel):
+    offcutId: int
+    product_id: int
+    variant_id: Optional[int]
+    length: float
+    quantity: int
+
+    class Config:
+        from_attributes = True
     
     

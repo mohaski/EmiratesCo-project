@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d1628"/>
+      <stop offset="100%" stop-color="#090e1a"/>
+    </linearGradient>
+    <linearGradient id="fg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <!-- Background rounded square -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Border glow -->
+  <rect width="512" height="512" rx="96" fill="none" stroke="url(#fg)" stroke-width="12" opacity="0.25"/>
+
+  <!-- Letter E -->
+  <!-- Vertical bar -->
+  <rect x="96" y="136" width="44" height="240" rx="10" fill="url(#fg)"/>
+  <!-- Top bar -->
+  <rect x="96" y="136" width="188" height="44" rx="10" fill="url(#fg)"/>
+  <!-- Middle bar -->
+  <rect x="96" y="234" width="152" height="44" rx="10" fill="url(#fg)"/>
+  <!-- Bottom bar -->
+  <rect x="96" y="332" width="188" height="44" rx="10" fill="url(#fg)"/>
+
+  <!-- Letter C -->
+  <path d="M 400 168
+             A 110 110 0 1 0 400 344"
+        fill="none"
+        stroke="url(#fg)"
+        stroke-width="44"
+        stroke-linecap="round"/>
+</svg>

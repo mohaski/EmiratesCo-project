@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+// @refresh reset
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
 
 const OrderContext = createContext();
@@ -18,49 +19,60 @@ export const OrderProvider = ({ children }) => {
     const [error, setError] = useState(null);
 
     // --- Data Fetching ---
-    const fetchOrders = async () => {
-        try {
-            setLoading(true);
-            const fetchedOrders = await api.orderService.getAllOrders();
+    const fetchOrders = useCallback(async () => {
+        setLoading(true);
+        // Fetch independently so one failure doesn't block the other
+        const [ordersResult, invoicesResult] = await Promise.allSettled([
+            api.orderService.getAllOrders(),
+            api.invoiceService.getAll(),
+        ]);
 
-            // Split into Orders and Invoices (Drafts)
-            // Backend 'status' determines the bucket.
-            const _invoices = fetchedOrders.filter(o => o.status === 'draft' || o.status === 'pending'); // 'pending' might be invoice too? Assuming 'draft' for quotes.
-            // Let's assume 'pending' is also an invoice until 'confirmed' (paid/processed).
-            // Actually, created orders are 'confirmed' by default in backend service (line 194).
-            // So 'draft' must be explicit.
-
-            const _invoicesList = fetchedOrders.filter(o => o.status === 'draft' || o.status === 'quote');
-            const _ordersList = fetchedOrders.filter(o => o.status !== 'draft' && o.status !== 'quote');
-
-            // Adapter: Map Backend Order to Frontend Shape if needed
-            // Backend: { orderId, customerId, items: [...], created_at, ... }
-            // Frontend: { id: 'ORD-123', customer: {id: ...}, items: [...], date: ... }
-            // Note: Customer details might be ID only. Frontend usually expects object. 
-            // We might need to fetch customer details or mapping. 
-            // Ideally `OrderResponse` should expand customer, or we fetch customers separately and map.
-            // keeping it simple for now, using IDs or what's available. 
-            // Frontend components using `order.customer.name` will break if `customer` is just ID.
-            // I'll check if `OrderResponse` has customer details. Defaults to ID.
-            // I might need to fetch `getAllUsers` or `getAllCustomers` to map IDs to Names.
-
-            setInvoices(_invoicesList.map(mapBackendOrder));
-            setOrders(_ordersList.map(mapBackendOrder));
-            setError(null);
-        } catch (err) {
-            console.error("Failed to fetch orders", err);
-            setError("Failed to load orders");
-        } finally {
-            setLoading(false);
+        if (ordersResult.status === 'fulfilled') {
+            setOrders(ordersResult.value.map(mapBackendOrder));
+        } else {
+            console.error("Failed to fetch orders:", ordersResult.reason);
+            setOrders([]);
         }
-    };
 
+        if (invoicesResult.status === 'fulfilled') {
+            setInvoices(invoicesResult.value.map(mapBackendInvoice));
+        } else {
+            console.error("Failed to fetch invoices:", invoicesResult.reason);
+            setInvoices([]);
+        }
+
+        const anyFailed = ordersResult.status === 'rejected' || invoicesResult.status === 'rejected';
+        setError(anyFailed ? "Some data failed to load. Check console for details." : null);
+        setLoading(false);
+    }, []);
+
+    /** Map a backend Order response to the frontend shape. */
     const mapBackendOrder = (o) => ({
         ...o,
-        id: o.orderId, // Map ID
+        id: o.orderId,
         date: o.created_at,
-        customer: { id: o.customerId, name: `Customer ${o.customerId}` }, // Placeholder if name missing. FIX LATER.
-        // items are already mapped by backend _order_to_response if I updated it correctly
+        customer: {
+            id: o.customerId,
+            name: o.customerName || (o.customerId ? `Customer #${o.customerId}` : 'Walk-in Customer'),
+        },
+        fromInvoice: !!o.source_invoice_id,
+        sourceInvoiceId: o.source_invoice_id || null,
+    });
+
+    /** Map a backend Invoice response to the frontend shape. */
+    const mapBackendInvoice = (inv) => ({
+        ...inv,
+        id: inv.invoiceId,
+        date: inv.created_at,
+        customer: {
+            id: inv.customer_id,
+            name: inv.customer_name || `Customer #${inv.customer_id}`,
+            phone: inv.customer_phone,
+            type: inv.customer_type,
+        },
+        // Whether this invoice has been turned into an order
+        isConverted: inv.status === 'converted',
+        orderId: inv.order_id || null,
     });
 
     useEffect(() => {
@@ -69,18 +81,29 @@ export const OrderProvider = ({ children }) => {
 
     // --- Actions ---
 
-    // Save a new Invoice (Draft/Quote)
+    /**
+     * Save a new Invoice (quotation/draft) to the invoices table.
+     * invoiceData shape: { customer, items, totals: { subtotal, tax, total }, enableTax }
+     */
     const addInvoice = async (invoiceData) => {
         try {
-            // invoiceData usually matches Checkout payload
-            // Force status 'draft'
-            const payload = { ...invoiceData, status: 'draft', items: invoiceData.items.map(mapItemForBackend) };
-            if (!payload.servedBy) payload.servedBy = '00000000-0000-0000-0000-000000000000'; // Fallback UUID if auth context not giving ID?
-            // Actually useAuth should provide ID. 
-            // Ideally `sales` page provides `servedBy`.
-
-            const response = await api.orderService.createOrder(payload);
-            await fetchOrders(); // Refresh
+            const { customer, items, totals, enableTax } = invoiceData;
+            const payload = {
+                customer: {
+                    id: customer?.id || null,
+                    name: customer?.name || 'Guest',
+                    phone: customer?.phone || null,
+                    type: customer?.type === 'new' ? 'guest' : 'registered',
+                },
+                items: items,
+                subtotal: totals?.grandTotal ?? totals?.subtotal ?? 0,
+                vat_amount: totals?.vat ?? 0,
+                total: totals?.total ?? 0,
+                discount: totals?.discount ?? 0,
+                vat_enabled: Boolean(enableTax),
+            };
+            const response = await api.invoiceService.create(payload);
+            await fetchOrders();
             return response;
         } catch (err) {
             console.error("Add Invoice Failed", err);
@@ -91,7 +114,7 @@ export const OrderProvider = ({ children }) => {
     // Direct Order Creation (from Checkout)
     const addOrder = async (orderData) => {
         try {
-            const { customer, totals, payment, items: rawItems, mode } = orderData;
+            const { customer, totals, payment, items: rawItems, parentOrderId } = orderData;
 
             // Map frontend items to backend structure
             const items = rawItems.map(mapItemForBackend);
@@ -104,6 +127,7 @@ export const OrderProvider = ({ children }) => {
             const payload = {
                 customerId: customer?.id ? parseInt(customer.id) : null,
                 amountPaid: parseFloat(totals.paid || 0),
+                parentOrderId: parentOrderId ? parseInt(parentOrderId) : null,
                 // servedBy: Handled below or via Auth context if available. 
                 // CheckoutPage passes 'orderData', checking if it had servedBy?
                 // CheckoutPage: const orderData = { customer, items, totals, payment... }
@@ -139,25 +163,71 @@ export const OrderProvider = ({ children }) => {
         const rawPrice = parseFloat(item.price || item.unitPrice);
         const price = isNaN(rawPrice) ? 0 : rawPrice;
 
+        // Calculators store variantId inside details, not at item top-level
+        const rawVariantId = item.variantId ?? item.details?.variantId ?? null;
+
         return {
-            productId: parseInt(item.productId || item.id), // Ensure Int
-            variantId: item.variantId ? parseInt(item.variantId) : null, // Ensure Int or Null
+            productId: parseInt(item.productId || item.id),
+            variantId: rawVariantId ? parseInt(rawVariantId) : null,
             quantity: qty,
             unitPrice: price,
             unitType: item.unit || 'pcs',
-            details: item.details // Pass complex details
+            details: item.details
         };
     };
 
-    // Convert an Invoice to an Order
-    const convertInvoiceToOrder = async (invoiceId) => {
+    /**
+     * Convert a saved invoice into a confirmed sales order via the dedicated endpoint.
+     * paymentData shape: { amount_paid, payment_method, payment_details?, discount? }
+     */
+    const convertInvoiceToOrder = async (invoiceId, paymentData = {}) => {
         try {
-            await api.orderService.updateWorkflowStatus(invoiceId, 'confirmed');
-            // Optionally update payment status if needed
-            // await api.orderService.updatePaymentStatus(invoiceId, 'Paid');
+            const payload = {
+                amount_paid: paymentData.amount_paid ?? 0,
+                payment_method: paymentData.payment_method ?? 'cash',
+                payment_details: paymentData.payment_details ?? null,
+                discount: paymentData.discount ?? null,
+            };
+            const result = await api.invoiceService.convert(invoiceId, payload);
             await fetchOrders();
+            return result; // { invoiceId, orderId, message }
         } catch (err) {
-            console.error("Conversion Failed", err);
+            console.error("Invoice conversion failed", err);
+            throw err;
+        }
+    };
+
+    /**
+     * Edit an existing order in-place via PUT /orders/{id}/edit.
+     * orderData shape mirrors addOrder but targets an existing orderId.
+     */
+    const updateOrder = async (orderId, orderData) => {
+        try {
+            const { customer, totals, payment, items: rawItems } = orderData;
+            const items = rawItems.map(mapItemForBackend);
+
+            const isPaid = totals.balance <= 0.1;
+            const paymentStatus = isPaid ? 'Paid' : (totals.paid > 0 ? 'Partial' : 'Unpaid');
+
+            const payload = {
+                customerId: customer?.id ? parseInt(customer.id) : null,
+                amountPaid: parseFloat(totals.paid || 0),
+                servedBy: orderData.servedBy || '00000000-0000-0000-0000-000000000000',
+                VAT_status: Boolean(totals.tax > 0),
+                discount: parseFloat(totals.discount || 0),
+                paymentStatus,
+                paymentMethod: payment?.method || 'cash',
+                paymentDetails: payment?.details || null,
+                items,
+                notes: `Edited order #${orderId}`,
+            };
+
+            const response = await api.orderService.editOrder(orderId, payload);
+            await fetchOrders();
+            return response;
+        } catch (err) {
+            console.error("Update Order Failed", err);
+            throw err;
         }
     };
 
@@ -188,6 +258,7 @@ export const OrderProvider = ({ children }) => {
         error,
         addInvoice,
         addOrder,
+        updateOrder,
         convertInvoiceToOrder,
         deleteInvoice,
         deleteOrder,

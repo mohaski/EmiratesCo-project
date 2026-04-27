@@ -25,11 +25,14 @@ def login(
 @router.post("/register")
 def register(
     register_request: model.UserRegistrationRequest,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
 ):
     """
-    Register a new user (Admin functionality usually).
+    Register a new user. Requires CEO or admin role.
     """
+    from utils import require_role
+    require_role(["ceo", "admin"], current_user)
     return authService.userRegistration(register_request, db)
 
 @router.get("/me", response_model=model.TokenData)
@@ -70,55 +73,69 @@ def get_customers(
 # User Management Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/", response_model=List[User])
+@router.get("/", response_model=List[model.userDetailsResponse])
 def get_all_users(
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
 ):
     """
-    Get all users.
+    Get all users. Requires authentication.
     """
+    from utils import require_role
+    require_role(["ceo", "admin", "seniorCashier"], current_user)
     return userService.get_users(db)
 
-@router.get("/{user_id}", response_model=User)
+@router.get("/{user_id}", response_model=model.userDetailsResponse)
 def get_user(
     user_id: str,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
 ):
     """
-    Get user by ID.
+    Get user by ID. Requires authentication.
     """
     return userService.get_user_by_id(user_id, db)
 
 @router.delete("/{user_id}")
 def delete_user(
     user_id: str,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
 ):
     """
-    Delete user by ID.
+    Delete user by ID. Requires CEO or admin role.
     """
+    from utils import require_role
+    require_role(["ceo", "admin"], current_user)
     return userService.delete_user(user_id, db)
 
 @router.post("/{user_id}/password-reset")
 def reset_password(
     user_id: str,
     password_data: model.passwordResetRequest,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
 ):
     """
-    Reset user password (admin or user).
+    Reset user password. User can reset their own; CEO/admin can reset any.
     """
+    from utils import require_role
+    if current_user.userId != user_id:
+        require_role(["ceo", "admin"], current_user)
     return userService.password_reset(user_id, password_data, db)
 
 @router.post("/{user_id}/change-password")
 def change_password(
     user_id: str,
     password_data: model.passwordChangeRequest,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
 ):
     """
-    Change password.
+    Change own password. Must be authenticated as the same user.
     """
+    if current_user.userId != user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot change another user's password")
     return userService.password_change(user_id, password_data, db)
 
 

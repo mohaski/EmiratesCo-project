@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+// @refresh reset
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../services/api';
 
 const ProductContext = createContext();
@@ -26,54 +27,60 @@ export const ProductProvider = ({ children }) => {
         subCategories: c.subCategories || c.sub_categories || []
     }));
 
-    const mapProducts = (rawProducts, catList) => rawProducts.map(p => {
-        const cat = catList.find(c => c.dbId === p.category_id);
-        const feVariants = p.variants ? p.variants.map(v => ({
-            id: v.variantId,
-            name: v.name,
-            attributes: v.attributes,
-            stock: v.stock_quantity,
-            price: v.price,
-            priceHalf: v.price_half,
-            priceUnit: v.price_unit
-        })) : [];
+    const mapProducts = (rawProducts, catList) => {
+        const catMap = new Map(catList.map(c => [c.dbId, c]));
 
-        let priceFull = p.price_full || 0;
-        let priceHalf = p.price_half || 0;
-        let priceFoot = p.price_unit || 0;
+        return rawProducts.map(p => {
+            const cat = catMap.get(p.category_id);
+            const feVariants = p.variants ? p.variants.map(v => ({
+                id: v.variantId,
+                variantId: v.variantId,
+                name: v.name,
+                attributes: v.attributes,
+                stock: v.stock_quantity,
+                price: v.price,
+                priceHalf: v.price_half,
+                priceUnit: v.price_unit,
+                length: v.length ?? null,
+            })) : [];
 
-        // If variable product with no root price, derive from first variant
-        if (feVariants.length > 0) {
-            // Find first variant with a price, or default to first variant
-            const representative = feVariants.find(v => v.price > 0) || feVariants[0];
+            let priceFull = p.price_full || 0;
+            let priceHalf = p.price_half || 0;
+            let priceFoot = p.price_unit || 0;
 
-            if (priceFull === 0) priceFull = representative.price || 0;
-            if (priceHalf === 0) priceHalf = representative.priceHalf || 0;
-            if (priceFoot === 0) priceFoot = representative.priceUnit || 0;
-        }
+            // If variable product with no root price, derive from first variant
+            if (feVariants.length > 0) {
+                // Find first variant with a price, or default to first variant
+                const representative = feVariants.find(v => v.price > 0) || feVariants[0];
 
-        const totalStock = p.stock_quantity || 0;
+                if (priceFull === 0) priceFull = representative.price || 0;
+                if (priceHalf === 0) priceHalf = representative.priceHalf || 0;
+                if (priceFoot === 0) priceFoot = representative.priceUnit || 0;
+            }
 
-        return {
-            id: p.productId,
-            name: p.name,
-            category: cat ? cat.id : 'general',
-            subCategory: p.sub_category,
-            itemCode: p.itemCode,
-            priceFull: priceFull,
-            priceHalf: priceHalf,
-            priceFoot: priceFoot,
-            trackOffcuts: p.trackOffcuts || p.track_offcuts || false,
-            stock: totalStock,
-            image: p.image_url || 'https://placehold.co/300x200/CCCCCC/FFFFFF?text=Product',
-            variants: feVariants,
-            attributes: { Length: p.description ? [p.description] : [] },
-            length: p.length || null
-        };
-    });
+            const totalStock = p.stock_quantity || 0;
+
+            return {
+                id: p.productId,
+                name: p.name,
+                category: cat ? cat.id : 'general',
+                subCategory: p.sub_category,
+                itemCode: p.itemCode,
+                priceFull: priceFull,
+                priceHalf: priceHalf,
+                priceFoot: priceFoot,
+                trackOffcuts: p.trackOffcuts || p.track_offcuts || false,
+                stock: totalStock,
+                image: p.image_url || 'https://placehold.co/300x200/CCCCCC/FFFFFF?text=Product',
+                variants: feVariants,
+                attributes: { Length: p.description ? [p.description] : [] },
+                length: p.length || null
+            };
+        });
+    };
 
     // --- Data Fetching ---
-    const initializeData = async () => {
+    const initializeData = useCallback(async () => {
         try {
             setLoading(true);
             const [rawCats, rawProds] = await Promise.all([
@@ -93,20 +100,23 @@ export const ProductProvider = ({ children }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
 
-    const refreshProducts = async () => {
+    const refreshProducts = useCallback(async () => {
         try {
             const raw = await api.productService.getAll();
-            // Use current 'categories' state for mapping
-            const mapped = mapProducts(raw, categories);
-            setProducts(mapped);
+            // Pull fresh categories inside the setter to avoid stale closure
+            setCategories(currentCats => {
+                const mapped = mapProducts(raw, currentCats);
+                setProducts(mapped);
+                return currentCats;
+            });
         } catch (err) {
             console.error("Failed to refresh products", err);
         }
-    };
+    }, []);
 
-    const refreshCategories = async () => {
+    const refreshCategories = useCallback(async () => {
         try {
             const raw = await api.productService.getAllCategories();
             const mapped = mapCategories(raw);
@@ -114,14 +124,14 @@ export const ProductProvider = ({ children }) => {
         } catch (err) {
             console.error("Failed to refresh categories", err);
         }
-    };
+    }, []);
 
     useEffect(() => {
         initializeData();
     }, []);
 
     // --- Actions ---
-    const addProduct = async (productData) => {
+    const addProduct = useCallback(async (productData) => {
         try {
             const cat = categories.find(c => c.id === productData.category);
             const dbCategoryId = cat ? cat.dbId : null;
@@ -158,9 +168,9 @@ export const ProductProvider = ({ children }) => {
             console.error("Add Product Failed", err);
             throw err;
         }
-    };
+    }, [categories, refreshProducts]);
 
-    const deleteProduct = async (productId) => {
+    const deleteProduct = useCallback(async (productId) => {
         try {
             await api.productService.delete(productId);
             await refreshProducts();
@@ -168,24 +178,26 @@ export const ProductProvider = ({ children }) => {
             console.error("Delete Product Failed", err);
             await refreshProducts();
         }
-    };
+    }, [refreshProducts]);
 
-    const updateProduct = async (updatedProduct) => {
+    const updateProduct = useCallback(async (updatedProduct) => {
         try {
             const payload = {
                 name: updatedProduct.name,
                 itemCode: updatedProduct.itemCode,
                 price_full: updatedProduct.priceFull,
+                trackOffcuts: updatedProduct.trackOffcuts,
             };
+            if (updatedProduct.length != null) payload.length = updatedProduct.length;
             await api.productService.update(updatedProduct.id, payload);
             await refreshProducts();
         } catch (err) {
             console.error("Update Product Failed", err);
             throw err;
         }
-    };
+    }, [refreshProducts]);
 
-    const addCategory = async (categoryInput) => {
+    const addCategory = useCallback(async (categoryInput) => {
         try {
             const name = typeof categoryInput === 'string' ? categoryInput : categoryInput.label;
             await api.productService.createCategory({ name });
@@ -194,9 +206,9 @@ export const ProductProvider = ({ children }) => {
         } catch (err) {
             console.error("Failed to add category", err);
         }
-    };
+    }, [refreshCategories]);
 
-    const addProductVariant = async (productId, variantData) => {
+    const addProductVariant = useCallback(async (productId, variantData) => {
         try {
             await api.productService.addVariant(productId, variantData);
             await refreshProducts();
@@ -205,9 +217,9 @@ export const ProductProvider = ({ children }) => {
             console.error("Failed to add variant", err);
             throw err;
         }
-    };
+    }, [refreshProducts]);
 
-    const updateProductVariant = async (variantId, updateData) => {
+    const updateProductVariant = useCallback(async (variantId, updateData) => {
         try {
             await api.productService.updateVariant(variantId, updateData);
             await refreshProducts();
@@ -216,9 +228,9 @@ export const ProductProvider = ({ children }) => {
             console.error("Failed to update variant", err);
             throw err;
         }
-    };
+    }, [refreshProducts]);
 
-    const value = {
+    const value = useMemo(() => ({
         products,
         categories,
         loading,
@@ -229,8 +241,8 @@ export const ProductProvider = ({ children }) => {
         addCategory,
         addProductVariant,
         updateProductVariant,
-        refreshProducts: initializeData // Keep exposed refresh as full refresh just in case? Or default to products
-    };
+        refreshProducts: initializeData
+    }), [products, categories, loading, error, addProduct, deleteProduct, updateProduct, addCategory, addProductVariant, updateProductVariant, initializeData]);
 
     return (
         <ProductContext.Provider value={value}>

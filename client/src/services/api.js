@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Base URL configuration (Vite proxy or direct)
-const API_URL = 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Create Axios Instance
 const api = axios.create({
@@ -30,7 +30,7 @@ export const OrderService = {
         const response = await api.get(`/orders/${id}`);
         return response.data;
     },
-    getAllOrders: async (skip = 0, limit = 20) => {
+    getAllOrders: async (skip = 0, limit = 100) => {
         const response = await api.get(`/orders/?skip=${skip}&limit=${limit}`);
         return response.data;
     },
@@ -49,7 +49,25 @@ export const OrderService = {
     getOrderItems: async (id) => {
         const response = await api.get(`/orders/${id}/items`);
         return response.data;
-    }
+    },
+    editOrder: async (id, orderData) => {
+        const response = await api.put(`/orders/${id}/edit`, orderData);
+        return response.data;
+    },
+    getAuditHistory: async (entityType = null, skip = 0, limit = 100) => {
+        const params = new URLSearchParams({ skip, limit });
+        if (entityType) params.append('entity_type', entityType);
+        const response = await api.get(`/orders/audit/history?${params}`);
+        return response.data;
+    },
+    getStoreOrders: async (status = 'confirmed', skip = 0, limit = 50) => {
+        const response = await api.get(`/orders/store-view?status=${status}&skip=${skip}&limit=${limit}`);
+        return response.data;
+    },
+    reassignOffcut: async (orderId, itemId, data) => {
+        const response = await api.put(`/orders/${orderId}/items/${itemId}/reassign-offcut`, data);
+        return response.data;
+    },
 };
 
 export const ProductService = {
@@ -91,6 +109,12 @@ export const ProductService = {
     },
     updateVariant: async (variantId, updateData) => {
         const response = await api.put(`/products/variants/${variantId}`, updateData);
+        return response.data;
+    },
+    /** Get available offcut pieces for a product. Pass variantId to filter. */
+    getOffcuts: async (productId, variantId = null) => {
+        const params = variantId ? `?variant_id=${variantId}` : '';
+        const response = await api.get(`/products/${productId}/offcuts${params}`);
         return response.data;
     },
 };
@@ -161,7 +185,50 @@ export const UserService = {
     getCustomers: async () => {
         const response = await api.get('/users/customers');
         return response.data;
-    }
+    },
+    resetPassword: async (userId, data) => {
+        // data: { currentPassword, newPassword, confirmNewPassword }
+        const response = await api.post(`/users/${userId}/password-reset`, data);
+        return response.data;
+    },
+    changePassword: async (userId, data) => {
+        // data: { newPassword, confirmNewPassword }
+        const response = await api.post(`/users/${userId}/change-password`, data);
+        return response.data;
+    },
+};
+
+export const InvoiceService = {
+    /** Create a new invoice (quotation/draft). */
+    create: async (invoiceData) => {
+        const response = await api.post('/invoices/', invoiceData);
+        return response.data;
+    },
+    /** List all invoices. Pass status to filter: 'draft'|'sent'|'converted'|'cancelled' */
+    getAll: async (skip = 0, limit = 100, status = null) => {
+        const params = new URLSearchParams({ skip, limit });
+        if (status) params.append('status', status);
+        const response = await api.get(`/invoices/?${params}`);
+        return response.data;
+    },
+    /** Get a single invoice by ID. */
+    get: async (id) => {
+        const response = await api.get(`/invoices/${id}`);
+        return response.data;
+    },
+    /** Update a draft invoice (items, customer, totals, or mark sent/cancelled). */
+    update: async (id, data) => {
+        const response = await api.put(`/invoices/${id}`, data);
+        return response.data;
+    },
+    /**
+     * Convert an invoice into a confirmed sales order.
+     * data: { amount_paid, payment_method, payment_details?, discount? }
+     */
+    convert: async (id, data) => {
+        const response = await api.post(`/invoices/${id}/convert`, data);
+        return response.data;
+    },
 };
 
 export const MessagingService = {
@@ -181,6 +248,7 @@ export const MessagingService = {
 
 // Attach services to api instance for convenience
 api.orderService = OrderService;
+api.invoiceService = InvoiceService;
 api.productService = ProductService;
 api.financialService = FinancialService;
 api.userService = UserService;
