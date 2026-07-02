@@ -19,6 +19,7 @@ class Token(BaseModel):
     
 class TokenData(BaseModel):
     userId: Optional[str] 
+    username: Optional[str]
     role: Optional[str]
     
     def get_uuid(self):

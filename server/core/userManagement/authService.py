@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 from fastapi import Depends, HTTPException, status
 from passlib.context import CryptContext
 import jwt
+import json
+import logging
 from jwt import PyJWTError
 from sqlmodel import Session, select, or_
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +14,8 @@ from entities.users import User
 from . import model
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from config import settings
+
+logger = logging.getLogger("emiratesco.auth")
 
 SECRET_KEY = settings.JWT_SECRET_KEY
 ALGORITHM = settings.JWT_ALGORITHM
@@ -31,6 +35,12 @@ def userRegistration(register_user_request: model.UserRegistrationRequest, db: S
     # Check if user already exists
     existing_user = db.exec(select(User).where(User.email == register_user_request.email)).first()
     if existing_user:
+        logger.warning(json.dumps({
+            "event": "user.registration.failed",
+            "reason": "email_already_exists",
+            "email_attempted": register_user_request.email,
+            "role_attempted": register_user_request.role,
+        }))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User with this email already exists")
     
     try:
@@ -49,9 +59,23 @@ def userRegistration(register_user_request: model.UserRegistrationRequest, db: S
         db.add(create_user)
         db.commit()
         db.refresh(create_user)
-        
+
+        logger.info(json.dumps({
+            "event": "user.registered",
+            "user_id": str(create_user.userId),
+            "username": create_user.username,
+            "email": create_user.email,
+            "role": create_user.role,
+        }))
+
     except IntegrityError:
         db.rollback()
+        logger.warning(json.dumps({
+            "event": "user.registration.failed",
+            "reason": "duplicate_field",
+            "username_attempted": register_user_request.username,
+            "email_attempted": register_user_request.email,
+        }))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User details already exist (Duplicate username, email, or phone number)")
         
     except Exception as e:
@@ -63,14 +87,40 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Verify a stored password against one provided by user"""
         return pwd_context.verify(plain_password, hashed_password)
     
-def authenticate_user(identifier: str, password: str, db: Session) -> User | bool:
-        """Authenticate user by email OR username and password"""
-        user = db.exec(select(User).where(or_(User.email == identifier, User.username == identifier))).first()
-        if not user or not verify_password(password, user.password):
-            return False
-        return user
+def authenticate_user(username: str, password: str, db: Session) -> dict | bool:
+    """Authenticate user by email OR username and password"""
+
+    user = db.exec(select(User).where(User.username == username)).first()
+
+    if not user:
+        logger.warning(json.dumps({
+            "event": "User authentication failed",
+            "message": "No account found with this username",
+            "provided_username": username,
+        }))
+        return {"Success": False, "reason": "no user"}
+
+    if not verify_password(password, user.password):
+        logger.warning(json.dumps({
+            "event": "User authentication failed",
+            "message": "Incorrect password provided",
+            "provided_username": username,
+        }))
+        return {"success": False, "reason": "wrong password"}
+    
+    logger.info(json.dumps({
+            "Event": "Login successfully",
+            "User_id": str(user.userId),
+            "role": user.role
+        }))
+    return {
+        "success": True,
+        "user": user
+    }
     
 def create_access_token(username: str, email: str, userId: UUID, role: str) -> str:
+    try:
+        
         """Create a JWT access token with expiry."""
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         encode = {
@@ -80,15 +130,46 @@ def create_access_token(username: str, email: str, userId: UUID, role: str) -> s
             "role": role,
             "exp": expire,
         }
+        
         return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
     
+    except PyJWTError as e:
+        logger.error(json.dumps({
+            "Event": 'Token creation failed',
+            "message": "JWT encoding error",
+            "Error": str(e)
+        }))
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail= 'Could not create access token'
+        )
+    
+    except Exception as e:
+        logger.error(json.dumps({
+            "event": "Token creation failed",
+            "message": "Unexpected error during token creation",
+            "error": str(e),
+        }))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred",
+        )
+    
 def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: Session = Depends(get_session)) -> model.Token:
-        user= authenticate_user(form_data.username, form_data.password, db)
-        if not user:
+        result= authenticate_user(form_data.username, form_data.password, db)
+        if not result["success"]:
+            messages = {
+                'no user': f"No account with username {form_data.username}",
+                'wrong password': "The password is incorrect"
+            }
             raise HTTPException(
                 status_code = status.HTTP_401_UNAUTHORIZED,
-                detail = "Incorrect email or password",
+                detail = f"{messages.get(result['reason'])}, Authentication failure",
+                headers={"WWW-Authenticate": "Bearer"}
             )
+        
+        user = result['user']
             
         access_token = create_access_token(
             username = user.username,
@@ -96,6 +177,13 @@ def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depen
             userId = user.userId,
             role = user.role
         )
+        
+        logger.info(json.dumps({
+            "event": "Access token created successfully",
+            "username": user.username,
+            "userId": str(user.userId),
+        }))
+        
         return model.Token(access_token=access_token, token_type="bearer")
     
 def verify_token(token: str) -> model.TokenData:
@@ -110,7 +198,7 @@ def verify_token(token: str) -> model.TokenData:
                     status_code = status.HTTP_401_UNAUTHORIZED,
                     detail = "Could not validate credentials",
                 )
-            return model.TokenData(userId=userId, role=role)
+            return model.TokenData(userId=userId, username=username, role=role)
         except PyJWTError:
             raise HTTPException(
                 status_code= status.HTTP_401_UNAUTHORIZED,

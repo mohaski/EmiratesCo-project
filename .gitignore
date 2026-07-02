@@ -1,9 +1,10 @@
-# Environment variables
-.env
+# Environment variables — server secrets never committed
+server/.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+# client/.env.production is intentional (public URL only, no secrets)
 
 # Python
 __pycache__/

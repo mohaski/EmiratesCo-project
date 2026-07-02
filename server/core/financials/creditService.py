@@ -16,7 +16,7 @@ def create_credit(credit_data: model.CreditCreateRequest, db: Session = Depends(
         new_credit = Credit(
             orderId=credit_data.orderId,
             customerId=credit_data.customerId,
-            amount= credit_data.amount_due,
+            amount=credit_data.amount,
             amount_due=credit_data.amount_due,
             status=credit_data.status
         )
@@ -96,12 +96,12 @@ def check_credit_for_customer_by_customerId(customerId, db: Session = Depends(ge
     return [
         
         model.checkCreditResponse(
-            creditId = customerCredit.creditId,
-            customerName = customer_name,
-            status = customerCredit.status,
-            amount = customerCredit.amount,
-            unpaidAmount = customerCredit.unpaid_amount,
-            settledAt = customerCredit.settledAt
+            creditId=customerCredit.creditId,
+            customerName=customer_name,
+            status=customerCredit.status,
+            amount=customerCredit.amount,
+            unpaidAmount=customerCredit.amount_due,
+            settled_at=customerCredit.settledAt.isoformat() if customerCredit.settledAt else None
         ) for customerCredit in customerCreditList
     ] 
     

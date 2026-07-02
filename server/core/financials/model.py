@@ -15,22 +15,23 @@ class PaymentResponse(BaseModel):
 class CreditCreateRequest(BaseModel):
     orderId: int
     customerId: int
-    amountDue: float
+    amount: float          # full order total
+    amount_due: float      # outstanding balance
     status: str
     settledAt: Optional[str] = None
-    
+
 
 class CreditCreateResponse(BaseModel):
     message: str
     creditId: Optional[int]
-    
-class checkCreditResponse:
+
+class checkCreditResponse(BaseModel):
     customerName: str
     creditId: int
     status: str
     amount: float
     unpaidAmount: float
-    settled_at: Optional[str]
+    settled_at: Optional[str] = None
     
     
 class CreditUpdate(BaseModel):

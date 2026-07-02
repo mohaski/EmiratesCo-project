@@ -15,7 +15,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
 
     const handleEditClick = v => {
         setEditingVariantId(getVariantId(v));
-        setEditForm({ price: v.price || v.priceFull || 0, priceHalf: v.priceHalf || 0, priceUnit: v.priceUnit || 0, length: v.length || '', stockChange: 0 });
+        setEditForm({ price: v.price || v.priceFull || 0, priceHalf: v.priceHalf || 0, priceUnit: v.priceUnit || 0, length: v.length || '', width: v.width || '', height: v.height || '', stockChange: 0 });
     };
 
     const handleSaveEdit = async originalVariant => {
@@ -25,6 +25,8 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                 price_unit: parseFloat(editForm.priceUnit), stock_change: parseInt(editForm.stockChange) || 0,
             };
             if (editForm.length !== '') payload.length = parseFloat(editForm.length);
+            if (editForm.width !== '') payload.width = parseFloat(editForm.width);
+            if (editForm.height !== '') payload.height = parseFloat(editForm.height);
             await updateProductVariant(originalVariant.id, payload);
             setEditingVariantId(null);
         } catch { alert("Update failed"); }
@@ -92,7 +94,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                     <h4 style={{ fontSize: '0.875rem', fontWeight: 700, color: '#e2e8f0', margin: '0 0 4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</h4>
                                                     {isEditing ? (
                                                         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.375rem' }}>
-                                                            {[{ label: 'Full', key: 'price' }, ...(product.trackOffcuts ? [{ label: 'Half', key: 'priceHalf' }, { label: 'Unit(ft)', key: 'priceUnit' }, { label: 'Bar Len(ft)', key: 'length' }] : [])].map(f => (
+                                                            {[{ label: 'Full', key: 'price' }, ...(product.trackOffcuts ? [{ label: 'Half', key: 'priceHalf' }, { label: 'Unit(ft)', key: 'priceUnit' }, { label: 'Bar Len(ft)', key: 'length' }] : []), ...(product.category === 'glass' ? [{ label: 'Width(ft)', key: 'width' }, { label: 'Height(ft)', key: 'height' }] : [])].map(f => (
                                                                 <div key={f.key}>
                                                                     <div style={{ fontSize: '0.58rem', fontWeight: 700, color: '#475569', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '2px' }}>{f.label}</div>
                                                                     <input type="number" style={inputStyle} value={editForm[f.key]} onChange={e => setEditForm(p => ({ ...p, [f.key]: e.target.value }))}
@@ -101,13 +103,18 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                             ))}
                                                         </div>
                                                     ) : (
-                                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                                             <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: '4px', padding: '1px 7px', color: '#94a3b8' }}>
                                                                 KSH{variant.price || variant.priceFull || '—'}
                                                             </span>
                                                             <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '4px', padding: '1px 7px', color: '#4ade80' }}>
                                                                 Stock: {variant.stock || 0}
                                                             </span>
+                                                            {(variant.width || variant.height) && (
+                                                                <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: '4px', padding: '1px 7px', color: '#22d3ee' }}>
+                                                                    {variant.width || '?'}ft × {variant.height || '?'}ft
+                                                                </span>
+                                                            )}
                                                         </div>
                                                     )}
                                                 </div>

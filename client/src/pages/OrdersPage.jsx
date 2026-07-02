@@ -54,7 +54,14 @@ export default function OrdersPage() {
         }
     }, [navigate]);
     const handleViewInvoice = useCallback((invoice) => navigate('/invoice/review', { state: { invoice } }), [navigate]);
-    const handleConvertInvoice = useCallback((invoice) => navigate('/checkout', { state: { cartItems: invoice.items, customer: invoice.customer, enableTax: invoice.vat_enabled ?? false } }), [navigate]);
+    const handleConvertInvoice = useCallback((invoice) => navigate('/checkout', {
+        state: {
+            cartItems: invoice.items,
+            customer: invoice.customer,
+            enableTax: invoice.vat_enabled ?? false,
+            sourceInvoiceId: invoice.id,
+        }
+    }), [navigate]);
 
     const tabs = [
         { id: 'orders', label: 'Sales Orders', color: '#3b82f6', count: orders.length },

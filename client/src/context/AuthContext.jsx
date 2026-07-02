@@ -53,6 +53,10 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('emirates_pos_cart');
+    localStorage.removeItem('emirates_pos_customer');
+    localStorage.removeItem('emirates_pos_session_type');
+    window.dispatchEvent(new Event('pos:logout'));
     setUser(null);
   };
 

@@ -165,7 +165,6 @@ def convert_invoice_to_order(
       4. Link Invoice → Order (invoice.order_id) and Order → Invoice (order.source_invoice_id).
       5. Mark invoice as 'converted'.
     """
-    from core.inventory.inventoryService import deduct_stock_for_order_item
     from core.ordering.orderService import compute_VAT_amount
 
     inv = db.get(Invoice, invoice_id)
@@ -236,7 +235,8 @@ def convert_invoice_to_order(
                 details=details,
             )
             db.add(order_item)
-            deduct_stock_for_order_item(db, order_item)
+            # Stock is deducted only when the order is confirmed at checkout (POST /orders/)
+            # Do NOT deduct here
 
         # Link invoice → order
         inv.order_id = new_order.orderId

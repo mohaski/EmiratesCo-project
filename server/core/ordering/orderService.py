@@ -13,6 +13,7 @@ from entities.products import Product, Category
 from entities.variants import Variant
 from entities.offcuts import Offcut
 from entities.editHistory import EditHistory
+from entities.invoices import Invoice
 from db.database import get_session
 from loggiing import logger
 from utils import require_role
@@ -128,8 +129,6 @@ def _calculate_complex_item_total(
     Calculate item total using DB prices for validation.
     Handles both simple items (Variant/Product price) and complex lineItems (Full/Half/Cuts).
     """
-    from entities.products import Product
-    from entities.variants import Variant
     
     # 1. Fetch Product & Variant
     if products_cache is not None and item_req.productId in products_cache:
@@ -253,16 +252,26 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # 🔐 Ensure user has privilege to create
         require_role(["seniorCashier", "juniorCashier", "ceo", "admin"], current_user)
 
-        # 1. Create the Order Shell (Pending totals)
+        # 1. Validate source invoice (if converting) before touching anything
+        source_inv = None
+        if order_data.sourceInvoiceId:
+            source_inv = db.get(Invoice, order_data.sourceInvoiceId)
+            if not source_inv:
+                raise HTTPException(status_code=404, detail=f"Invoice {order_data.sourceInvoiceId} not found")
+            if source_inv.status == "converted":
+                raise HTTPException(status_code=400, detail="Invoice has already been converted to an order")
+
+        # 2. Create the Order Shell (Pending totals)
         new_order = Order(
             customerid=order_data.customerId,
             servedby=order_data.servedBy,
             parent_orderid=order_data.parentOrderId,
+            source_invoice_id=order_data.sourceInvoiceId,
             VAT_status=order_data.VAT_status,
             payment_status=order_data.paymentStatus,
             discount=order_data.discount,
             amountPayed=order_data.amountPaid,
-            status=order_data.status or "confirmed", # Default to confirmed if paid? Or pending.
+            status=order_data.status or "confirmed",
             payment_method=order_data.paymentMethod,
             payment_details=order_data.paymentDetails,
             subtotal=0.0,
@@ -276,9 +285,6 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # Pre-fetch Products and Variants for performance (N+1 fix)
         product_ids = [item.productId for item in order_data.items]
         variant_ids = [item.variantId for item in order_data.items if item.variantId]
-
-        from entities.products import Product
-        from entities.variants import Variant
 
         products_cache = {}
         if product_ids:
@@ -335,6 +341,46 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         new_order.balance = float(final_total - Decimal(order_data.amountPaid))
 
         db.add(new_order)
+
+        # Mark source invoice as converted in the same transaction
+        if source_inv is not None:
+            from datetime import datetime, timezone
+            source_inv.status = "converted"
+            source_inv.order_id = new_order.orderId
+            source_inv.converted_at = datetime.now(timezone.utc)
+            db.add(source_inv)
+
+        # Auto-create credit record when there is an outstanding balance for a known customer
+        if new_order.balance > 0.01 and new_order.customerid:
+            from entities.credits import Credit
+            credit_status = "Partially Paid" if (order_data.amountPaid or 0) > 0 else "Pending"
+            new_credit = Credit(
+                orderId=new_order.orderId,
+                customerId=new_order.customerid,
+                amount=float(final_total),
+                amount_due=float(new_order.balance),
+                status=credit_status,
+            )
+            db.add(new_credit)
+            logger.info(
+                f"Credit record created for order {new_order.orderId}: "
+                f"amount={float(final_total):.2f}, due={float(new_order.balance):.2f}, status={credit_status}"
+            )
+
+        # Record payment when money was actually collected
+        if (order_data.amountPaid or 0) > 0:
+            from entities.payments import Payment
+            pay_method = (order_data.paymentMethod or "cash").lower()
+            if pay_method not in {"cash", "mpesa", "split", "number"}:
+                pay_method = "cash"
+            new_payment_rec = Payment(
+                orderId=new_order.orderId,
+                amount=float(order_data.amountPaid),
+                payment_method=pay_method,
+                recorded_by=current_user.userId,
+            )
+            db.add(new_payment_rec)
+
         db.commit()
 
         logger.info(f"Order {new_order.orderId} created (Items: {len(order_data.items)}) by {current_user.userId}.")
@@ -344,10 +390,13 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         )
     except HTTPException:
         raise
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating transactional order: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Something went wrong while creating the order. Please try again.")
     
 def get_order_by_orderId(order_id: int, db: Session = Depends(get_session)) -> model.OrderResponse:
     """
@@ -674,15 +723,19 @@ def update_order(
         net = max(calculated_subtotal - discount_val, Decimal("0.00"))
         vat = compute_VAT_amount(net) if order_data.VAT_status else Decimal("0.00")
         final_total = net + vat
-        amount_paid = Decimal(str(order_data.amountPaid))
-        new_balance = max(final_total - amount_paid, Decimal("0.00"))
+
+        # Accumulate payments: add the new payment on top of what was already collected
+        new_payment = Decimal(str(order_data.amountPaid))
+        prior_paid = Decimal(str(order.amountPayed or 0))
+        total_paid = min(prior_paid + new_payment, final_total)
+        new_balance = max(final_total - total_paid, Decimal("0.00"))
 
         is_paid = new_balance <= Decimal("0.10")
-        payment_status = "Paid" if is_paid else ("Partial" if amount_paid > 0 else "Unpaid")
+        payment_status = "Paid" if is_paid else ("Partial" if total_paid > 0 else "Unpaid")
 
         order.customerid = order_data.customerId
         order.discount = float(discount_val)
-        order.amountPayed = float(amount_paid)
+        order.amountPayed = float(total_paid)
         order.subtotal = float(net)
         order.total = float(final_total)
         order.balance = float(new_balance)
@@ -726,6 +779,21 @@ def update_order(
             notes=order_data.notes or financial_note,
         )
         db.add(audit)
+
+        # Record the payment collected during this edit (new_payment is the delta paid now)
+        if new_payment > Decimal("0"):
+            from entities.payments import Payment
+            pay_method = (order_data.paymentMethod or "cash").lower()
+            if pay_method not in {"cash", "mpesa", "split", "number"}:
+                pay_method = "cash"
+            edit_payment_rec = Payment(
+                orderId=order_id,
+                amount=float(new_payment),
+                payment_method=pay_method,
+                recorded_by=current_user.userId,
+            )
+            db.add(edit_payment_rec)
+
         db.commit()
 
         logger.info(f"Order {order_id} edited by {current_user.userId}")
@@ -733,10 +801,13 @@ def update_order(
 
     except HTTPException:
         raise
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         db.rollback()
         logger.error(f"Error editing order {order_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to edit order")
+        raise HTTPException(status_code=500, detail="Something went wrong while updating the order. Please try again.")
 
 
 def get_audit_history(

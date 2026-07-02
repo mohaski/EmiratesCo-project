@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from typing import List, Optional
 from sqlmodel import Session
 from db.database import get_session
 from core.userManagement.authService import get_current_user
+from ws.manager import manager
 from . import model, orderService, orderItemService
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -12,12 +13,16 @@ router = APIRouter(prefix="/orders", tags=["Orders"])
 # ---------------------------------------------------------------------------
 
 @router.post("/", response_model=model.OrderCreateResponse)
-def create_order(
+async def create_order(
     order_data: model.OrderCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    return orderService.create_order(order_data, db, current_user)
+    result = orderService.create_order(order_data, db, current_user)
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
 
 
 @router.get("/", response_model=List[model.OrderResponse])
@@ -76,49 +81,58 @@ def get_order(
 
 
 @router.put("/{order_id}/edit", response_model=model.OrderCreateResponse)
-def edit_order(
+async def edit_order(
     order_id: int,
     order_data: model.OrderEditRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
     """Edit an existing order: restores stock, replaces items, writes audit log."""
-    return orderService.update_order(order_id, order_data, db, current_user)
+    result = orderService.update_order(order_id, order_data, db, current_user)
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
 
 
 @router.put("/{order_id}/items/{item_id}/reassign-offcut", response_model=model.OffcutReassignResponse)
-def reassign_item_offcut(
+async def reassign_item_offcut(
     order_id: int,
     item_id: int,
     body: model.OffcutReassignRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
-    """
-    Store manager: swap which offcut(s) fulfill a cut line in an order item.
-    Uses SELECT FOR UPDATE — safe under concurrent requests.
-    """
-    return orderService.reassign_item_offcut(db, order_id, item_id, body, current_user)
+    result = orderService.reassign_item_offcut(db, order_id, item_id, body, current_user)
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    return result
 
 
 @router.put("/{order_id}/payment-status", response_model=model.OrderStatusUpdateResponse)
-def update_payment_status(
+async def update_payment_status(
     order_id: int,
     new_status: str,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    return orderService.update_order_payment_status(order_id, new_status, db, current_user)
+    result = orderService.update_order_payment_status(order_id, new_status, db, current_user)
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    return result
 
 
 @router.put("/{order_id}/workflow-status", response_model=model.OrderStatusUpdateResponse)
-def update_workflow_status(
+async def update_workflow_status(
     order_id: int,
     new_status: str,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    return orderService.update_order_status(order_id, new_status, db, current_user)
+    result = orderService.update_order_status(order_id, new_status, db, current_user)
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    return result
 
 
 @router.get("/{order_id}/items", response_model=List[model.OrderItemResponse])

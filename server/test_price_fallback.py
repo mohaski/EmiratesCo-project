@@ -14,7 +14,7 @@ class MockVariant:
 
 # Extract Logic to test (Simplified version of what I wrote in orderService)
 def calculate_logic(product, line_item):
-    l_type = line_item.get("type", "")
+    l_type = line_item.get("type", "") 
     qty = Decimal(line_item.get("qty", 0))
     rate = Decimal("0.00")
     

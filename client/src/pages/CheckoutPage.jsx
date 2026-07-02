@@ -104,7 +104,7 @@ export default function CheckoutPage() {
     const { user } = useAuth();
     const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart } = useCart();
     const { addOrder, updateOrder } = useOrders();
-    const { mode, originalTotal = 0 } = location.state || {};
+    const { mode, originalTotal = 0, originalBalance = 0 } = location.state || {};
     const editOrderId = mode === 'edit' ? (location.state?.orderData?.id ?? location.state?.orderData?.orderId ?? null) : null;
     // When arriving from invoice-convert or link mode, items & customer come via navigation state
     const fromInvoice = Boolean(location.state?.cartItems);
@@ -112,6 +112,7 @@ export default function CheckoutPage() {
     const customer = fromInvoice ? location.state.customer : ctxCustomer;
     const enableTax = location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled;
     const parentOrderId = location.state?.parentOrderId ?? null;
+    const sourceInvoiceId = location.state?.sourceInvoiceId ?? null;
 
     const [loading, setLoading] = useState(false);
     const [paymentError, setPaymentError] = useState(null);
@@ -122,8 +123,8 @@ export default function CheckoutPage() {
     const [cashAmount, setCashAmount] = useState('');
 
     const isRegistered = useMemo(() => {
-        if (!customer) return false;
-        return ['registered', 'corporate', 'frequent'].includes(customer.type);
+        if (!customer?.id) return false;
+        return ['individual', 'cooperate', 'corporate', 'registered', 'frequent'].includes(customer.type);
     }, [customer]);
 
     const { subtotal: rawSubtotal } = useCartTotals(cartItems, enableTax);
@@ -163,6 +164,7 @@ export default function CheckoutPage() {
             const orderData = {
                 customer, items: cartItems, servedBy: user?.userId, VAT_status: enableTax,
                 parentOrderId,
+                sourceInvoiceId,
                 totals: { subtotal, tax, total, discount: discountValue, paid: currentPayable, balance },
                 payment: {
                     method: paymentMethod, isPartial,
@@ -176,7 +178,7 @@ export default function CheckoutPage() {
             } else {
                 await addOrder(orderData);
             }
-            if (!fromInvoice) clearCart();
+            clearCart();
             navigate('/orders');
         } catch (err) {
             console.error('Payment failed', err);
@@ -184,7 +186,7 @@ export default function CheckoutPage() {
         } finally {
             setLoading(false);
         }
-    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, currentPayable, balance, paymentMethod, isPartial, cashAmount, mpesaAutoAmount, mode, enableTax, user, fromInvoice, parentOrderId]);
+    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, currentPayable, balance, paymentMethod, isPartial, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId]);
 
     if (cartItems.length === 0) {
         return (
@@ -550,10 +552,16 @@ export default function CheckoutPage() {
                                 <span style={{ fontSize: '0.825rem', color: '#22c55e', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>−KSH {discountValue.toFixed(2)}</span>
                             </div>
                         )}
-                        {mode === 'edit' && (
+                        {mode === 'edit' && originalTotal > 0 && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', background: 'rgba(59,130,246,0.08)', padding: '0.375rem 0.625rem', borderRadius: '0.375rem' }}>
-                                <span style={{ fontSize: '0.8rem', color: '#60a5fa' }}>Previously Paid</span>
+                                <span style={{ fontSize: '0.8rem', color: '#60a5fa' }}>Prior Collection</span>
                                 <span style={{ fontSize: '0.8rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>−KSH {originalTotal.toFixed(2)}</span>
+                            </div>
+                        )}
+                        {mode === 'edit' && originalBalance > 0 && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', background: 'rgba(245,158,11,0.08)', padding: '0.375rem 0.625rem', borderRadius: '0.375rem' }}>
+                                <span style={{ fontSize: '0.8rem', color: '#fbbf24' }}>Outstanding Balance</span>
+                                <span style={{ fontSize: '0.8rem', color: '#fbbf24', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>KSH {originalBalance.toFixed(2)}</span>
                             </div>
                         )}
                         <div style={{ height: '1px', background: 'rgba(255,255,255,0.07)', margin: '0.25rem 0' }} />
@@ -633,9 +641,9 @@ export default function CheckoutPage() {
                                 Processing…
                             </>
                         ) : currentPayable === 0
-                            ? 'Confirm On Credit →'
+                            ? 'Confirm Credit →'
                             : balance > 0
-                                ? `Pay KSH ${currentPayable.toFixed(2)} & Credit Bal →`
+                                ? `Confirm & Record Credit · KSH ${currentPayable.toFixed(2)} →`
                                 : editOrderId ? `Update Order · KSH ${total.toFixed(2)} →` : `Confirm Payment · KSH ${total.toFixed(2)} →`
                         }
                     </button>

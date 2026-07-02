@@ -1,5 +1,21 @@
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+from datetime import datetime
+
+class RestockHistoryItem(BaseModel):
+    id: int
+    product_id: int
+    product_name: str
+    variant_name: str
+    qty_added: float
+    stock_before: float
+    stock_after: float
+    added_by: str
+    added_at: datetime
+
+    class Config:
+        from_attributes = True
+
 
 class CategoryCreate(BaseModel):
     name: str
@@ -18,12 +34,16 @@ class VariantCreate(BaseModel):
     price_half: Optional[float] = None
     price_unit: Optional[float] = None
     length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
 
 class VariantUpdate(BaseModel):
     price: Optional[float] = None
     price_half: Optional[float] = None
     price_unit: Optional[float] = None
     length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
     stock_change: Optional[int] = None
     
 class VariantResponse(BaseModel):
@@ -35,6 +55,8 @@ class VariantResponse(BaseModel):
     price_half: Optional[float]
     price_unit: Optional[float]
     length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
 
 class ProductCreate(BaseModel):
     name: str
@@ -51,10 +73,13 @@ class ProductCreate(BaseModel):
     
     trackOffcuts: bool = False
     alarm_quantity: int = 0
-    
+
+    width: Optional[float] = None
+    height: Optional[float] = None
+
     # Simple Product Support
     stock: Optional[int] = 0
-    
+
     variants: List[VariantCreate] = []
 
 class ProductCreateResponse(BaseModel):
@@ -75,7 +100,9 @@ class ProductUpdateRequest(BaseModel):
     
     trackOffcuts: Optional[bool] = None
     alarm_quantity: Optional[int] = None
-    
+    width: Optional[float] = None
+    height: Optional[float] = None
+
 class ProductUpdateResponse(BaseModel):
     message: str
     id: int
@@ -95,10 +122,12 @@ class ProductResponse(BaseModel):
     price_full: Optional[float]
     price_half: Optional[float]
     price_unit: Optional[float] = None
-    length: Optional[float] = None # Added length field
-    
+    length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+
     track_offcuts: bool = False
-    
+
     # Computed or Relation
     variants: List[VariantResponse] = []
     

@@ -1,0 +1,16 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloudflare Tunnel config — copy this file to:
+#   C:\Users\mohas\.cloudflared\config.yml
+#
+# Replace:
+#   <TUNNEL_ID>   → the UUID printed by: cloudflared tunnel create emiratesco-api
+#   api.yourdomain.com → your actual hostname (must exist in Cloudflare DNS)
+# ─────────────────────────────────────────────────────────────────────────────
+
+tunnel: <TUNNEL_ID>
+credentials-file: C:\Users\mohas\.cloudflared\<TUNNEL_ID>.json
+
+ingress:
+  - hostname: api.yourdomain.com
+    service: http://localhost:8000
+  - service: http_status:404

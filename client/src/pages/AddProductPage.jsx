@@ -6,7 +6,6 @@ const INITIAL_ATTRIBUTES = {
     'Color': ['White', 'Silver', 'Gold', 'Bronze', 'Grey', 'Matt Black'],
     'Thickness': ['4mm', '5mm', '6mm', '8mm', '10mm', '12mm'],
     'Length': ['21ft', '17ft', '16ft', '15ft'],
-    'Roll Type': ['Big Roll', 'Small Roll'],
     'Size': ['Standard', 'Large', 'Small']
 };
 
@@ -31,8 +30,10 @@ export default function AddProductPage() {
     const [newProductData, setNewProductData] = useState({
         name: '', itemCode: '', category: 'ke-profile', subCategory: 'window',
         image: null, applicableAttributes: ['Color'], defaultAttributes: {},
-        stock: '', priceFull: '', priceHalf: '', priceFoot: '', length: '', trackOffcuts: false
+        stock: '', priceFull: '', priceHalf: '', priceFoot: '', length: '', trackOffcuts: false,
+        width: '', height: '',
     });
+    const [hasDimensions, setHasDimensions] = useState(false);
 
     const [matrixSelections, setMatrixSelections] = useState({});
     const [matrixValues, setMatrixValues] = useState({});
@@ -48,7 +49,7 @@ export default function AddProductPage() {
 
     const [selectedExistingProduct, setSelectedExistingProduct] = useState(null);
     const [variantSelections, setVariantSelections] = useState({});
-    const [variantPricing, setVariantPricing] = useState({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '' });
+    const [variantPricing, setVariantPricing] = useState({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '', width: '', height: '' });
 
     const activeProductAttributes = useMemo(() => {
         const p = mode === 'new' ? newProductData : selectedExistingProduct;
@@ -103,7 +104,8 @@ export default function AddProductPage() {
         let defaults = [];
         if (cat.includes('profile')) defaults = ['Color', 'Length'];
         else if (cat === 'glass') defaults = ['Thickness'];
-        setNewProductData(prev => ({ ...prev, category: cat, subCategory: defaultSub, applicableAttributes: defaults, defaultAttributes: {} }));
+        setHasDimensions(cat === 'glass');
+        setNewProductData(prev => ({ ...prev, category: cat, subCategory: defaultSub, applicableAttributes: defaults, defaultAttributes: {}, width: '', height: '' }));
         setMatrixSelections({});
         setMatrixValues({});
     };
@@ -138,7 +140,7 @@ export default function AddProductPage() {
         p.category === filterCategory && (p.subCategory === filterSubCategory || (!p.subCategory && filterSubCategory === 'general'))
     ), [products, filterCategory, filterSubCategory]);
 
-    const handleSelectExisting = product => { setSelectedExistingProduct(product); setVariantSelections({}); setVariantPricing({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '' }); };
+    const handleSelectExisting = product => { setSelectedExistingProduct(product); setVariantSelections({}); setVariantPricing({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '', width: '', height: '' }); };
     const handleVariantSelection = (attrKey, value) => setVariantSelections(prev => ({ ...prev, [attrKey]: value }));
     const handlePricingChange = e => setVariantPricing(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
@@ -185,7 +187,7 @@ export default function AddProductPage() {
                         const parts = name.split(' - ');
                         const attrs = {};
                         newProductData.applicableAttributes.forEach((key, i) => { attrs[key] = parts[i]; });
-                        return { id: `v-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, name, attributes: attrs, price: parseFloat(vals.priceFull || 0), stock: parseInt(vals.stock || 0), details: { priceFull: parseFloat(vals.priceFull || 0), priceHalf: parseFloat(vals.priceHalf || 0), priceUnit: parseFloat(vals.priceUnit || 0) }, length: attrs['Length'] ? parseFloat(attrs['Length']) : (vals.length ? parseFloat(vals.length) : null) };
+                        return { id: `v-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, name, attributes: attrs, price: parseFloat(vals.priceFull || 0), stock: parseInt(vals.stock || 0), details: { priceFull: parseFloat(vals.priceFull || 0), priceHalf: parseFloat(vals.priceHalf || 0), priceUnit: parseFloat(vals.priceUnit || 0) }, length: attrs['Length'] ? parseFloat(attrs['Length']) : (vals.length ? parseFloat(vals.length) : null), width: vals.width ? parseFloat(vals.width) : null, height: vals.height ? parseFloat(vals.height) : null };
                     });
                     finalProduct = { id: `p-${Date.now()}`, ...newProductData, attributes: matrixSelections, variants, stock: 0, priceFull: 0, priceHalf: 0, priceFoot: 0, image: 'https://placehold.co/300x200/555555/FFFFFF?text=New+Product' };
                     alert(`Product Created: ${newProductData.name}\n${variants.length} Variants Generated.`);
@@ -200,13 +202,13 @@ export default function AddProductPage() {
                 const updatedProduct = { ...selectedExistingProduct };
                 const variantName = Object.values(variantSelections).join(' - ');
                 const lengthVal = variantSelections['Length'] ? parseFloat(variantSelections['Length']) : (variantPricing.length ? parseFloat(variantPricing.length) : null);
-                const newVariant = { id: `v-${Date.now()}`, attributes: { ...variantSelections }, price: parseFloat(variantPricing.priceFull || 0), stock: parseInt(variantPricing.initialStock || 0), details: { priceFull: parseFloat(variantPricing.priceFull || 0), priceHalf: parseFloat(variantPricing.priceHalf || 0), priceUnit: parseFloat(variantPricing.priceUnit || 0) }, length: lengthVal };
+                const newVariant = { id: `v-${Date.now()}`, attributes: { ...variantSelections }, price: parseFloat(variantPricing.priceFull || 0), stock: parseInt(variantPricing.initialStock || 0), details: { priceFull: parseFloat(variantPricing.priceFull || 0), priceHalf: parseFloat(variantPricing.priceHalf || 0), priceUnit: parseFloat(variantPricing.priceUnit || 0) }, length: lengthVal, width: variantPricing.width ? parseFloat(variantPricing.width) : null, height: variantPricing.height ? parseFloat(variantPricing.height) : null };
                 if (!updatedProduct.variants) updatedProduct.variants = [];
                 updatedProduct.variants.push(newVariant);
                 if (lengthVal && (updatedProduct.category === 'accessories' || updatedProduct.category.includes('profile'))) updatedProduct.trackOffcuts = true;
                 updateProduct(updatedProduct);
                 alert(`Variant Added!\n${selectedExistingProduct.name}\nVariant: ${variantName}`);
-                setSelectedExistingProduct(null); setVariantSelections({}); setVariantPricing({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '' });
+                setSelectedExistingProduct(null); setVariantSelections({}); setVariantPricing({ priceFull: '', priceHalf: '', priceUnit: '', initialStock: '', width: '', height: '' });
             }
             setSubmitting(false);
         }, 800);
@@ -357,6 +359,18 @@ export default function AddProductPage() {
                                                                 <input type="number" step="0.1" name="length" value={newProductData.length} onChange={handleNewChange} placeholder="e.g. 6.0" style={inputStyle} onFocus={onFocusBorder} onBlur={onBlurBorder} />
                                                             </div>
                                                         )}
+                                                        {newProductData.category === 'glass' && (
+                                                            <>
+                                                                <div>
+                                                                    <label style={{ ...labelStyle, color: '#22d3ee' }}>Width (ft)</label>
+                                                                    <input type="number" step="0.01" name="width" value={newProductData.width} onChange={handleNewChange} placeholder="e.g. 4.0" style={{ ...inputStyle, borderColor: 'rgba(6,182,212,0.25)' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                                </div>
+                                                                <div>
+                                                                    <label style={{ ...labelStyle, color: '#22d3ee' }}>Height (ft)</label>
+                                                                    <input type="number" step="0.01" name="height" value={newProductData.height} onChange={handleNewChange} placeholder="e.g. 3.0" style={{ ...inputStyle, borderColor: 'rgba(6,182,212,0.25)' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                                </div>
+                                                            </>
+                                                        )}
                                                         <div style={{ display: 'flex', alignItems: 'center' }}>
                                                             <label style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', cursor: 'pointer' }}>
                                                                 <button type="button" onClick={() => setNewProductData(prev => ({ ...prev, trackOffcuts: !prev.trackOffcuts }))} style={{ width: '44px', height: '24px', borderRadius: '100px', border: 'none', cursor: 'pointer', position: 'relative', background: newProductData.trackOffcuts ? 'linear-gradient(135deg, #3b82f6, #06b6d4)' : 'rgba(255,255,255,0.1)', transition: 'background 0.2s', flexShrink: 0 }}>
@@ -404,7 +418,7 @@ export default function AddProductPage() {
                                                                     <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>{name}</span>
                                                                 </div>
                                                                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', flex: 1 }}>
-                                                                    {['stock', 'priceFull', ...(newProductData.trackOffcuts ? ['priceHalf', 'priceUnit'] : []), ...(newProductData.category === 'accessories' && newProductData.applicableAttributes.includes('Length') ? ['length'] : [])].map(field => (
+                                                                    {['stock', 'priceFull', ...(newProductData.trackOffcuts ? ['priceHalf', 'priceUnit'] : []), ...(newProductData.category === 'accessories' && newProductData.applicableAttributes.includes('Length') ? ['length'] : []), ...(hasDimensions ? ['width', 'height'] : [])].map(field => (
                                                                         <div key={field} style={{ minWidth: '70px', flex: 1 }}>
                                                                             <label style={{ ...labelStyle, marginBottom: '2px' }}>{field}</label>
                                                                             <input type="number" value={matrixValues[name]?.[field] || ''} onChange={e => handleMatrixValueChange(name, field, e.target.value)} style={{ ...inputStyle, padding: '0.375rem 0.5rem', fontSize: '0.78rem' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
@@ -477,6 +491,21 @@ export default function AddProductPage() {
                                                     </div>
                                                 );
                                             })}
+
+                                            {/* Dimensions toggle — auto-selected for glass */}
+                                            {newProductData.category === 'glass' && (
+                                                <div style={{ borderRadius: '0.875rem', border: `1px solid ${hasDimensions ? 'rgba(6,182,212,0.4)' : 'rgba(255,255,255,0.07)'}`, background: hasDimensions ? 'rgba(6,182,212,0.08)' : 'rgba(255,255,255,0.03)', padding: '0.75rem 1rem', transition: 'all 0.15s' }}>
+                                                    <div onClick={() => setHasDimensions(v => !v)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                                                        <div>
+                                                            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: hasDimensions ? '#22d3ee' : '#64748b' }}>Dimensions</span>
+                                                            <p style={{ fontSize: '0.65rem', color: '#475569', margin: '2px 0 0' }}>Width × Height per variant</p>
+                                                        </div>
+                                                        <div style={{ width: '18px', height: '18px', borderRadius: '5px', border: `1px solid ${hasDimensions ? 'rgba(6,182,212,0.6)' : 'rgba(255,255,255,0.15)'}`, background: hasDimensions ? 'rgba(6,182,212,0.5)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                                            {hasDimensions && <svg width="10" height="10" fill="none" stroke="#fff" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 )}
@@ -588,6 +617,18 @@ export default function AddProductPage() {
                                                     <label style={labelStyle}>Length</label>
                                                     <input type="number" step="0.1" name="length" value={variantPricing.length || ''} onChange={handlePricingChange} placeholder="e.g 6.0" style={inputStyle} onFocus={onFocusBorder} onBlur={onBlurBorder} />
                                                 </div>
+                                            )}
+                                            {selectedExistingProduct.category === 'glass' && (
+                                                <>
+                                                    <div>
+                                                        <label style={labelStyle}>Width (ft)</label>
+                                                        <input type="number" step="0.01" name="width" value={variantPricing.width} onChange={handlePricingChange} placeholder="e.g. 4.0" style={inputStyle} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                    </div>
+                                                    <div>
+                                                        <label style={labelStyle}>Height (ft)</label>
+                                                        <input type="number" step="0.01" name="height" value={variantPricing.height} onChange={handlePricingChange} placeholder="e.g. 3.0" style={inputStyle} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                    </div>
+                                                </>
                                             )}
                                         </div>
                                     </div>

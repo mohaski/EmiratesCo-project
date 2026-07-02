@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { showToast, extractErrorMessage } from '../utils/toast';
 
 // Base URL configuration (Vite proxy or direct)
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -11,14 +12,35 @@ const api = axios.create({
     },
 });
 
-// Interceptor for Auth Token
+// Interceptor: attach auth token
 api.interceptors.request.use((config) => {
-    const token = localStorage.getItem('token'); // Assuming standard token storage
+    const token = localStorage.getItem('token');
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
 });
+
+// Interceptor: global error toasts — every failed request shows a message
+api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        const status = error.response?.status;
+
+        if (status === 401) {
+            showToast('Your session has expired. Please log in again.', 'warning');
+            return Promise.reject(error);
+        }
+        if (status === 403) {
+            showToast('You do not have permission to perform this action.', 'warning');
+            return Promise.reject(error);
+        }
+
+        const message = extractErrorMessage(error);
+        showToast(message, status >= 500 ? 'error' : 'warning');
+        return Promise.reject(error);
+    }
+);
 
 export const OrderService = {
     // Transactional Order Creation
@@ -115,6 +137,12 @@ export const ProductService = {
     getOffcuts: async (productId, variantId = null) => {
         const params = variantId ? `?variant_id=${variantId}` : '';
         const response = await api.get(`/products/${productId}/offcuts${params}`);
+        return response.data;
+    },
+    getRestockHistory: async (skip = 0, limit = 100, productId = null) => {
+        const params = new URLSearchParams({ skip, limit });
+        if (productId) params.append('product_id', productId);
+        const response = await api.get(`/products/restock-history?${params}`);
         return response.data;
     },
 };

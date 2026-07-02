@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from typing import List, Optional
 from sqlmodel import Session
 from db.database import get_session
-from entities.products import Product
 from core.userManagement.authService import get_current_user
+from ws.manager import manager
 from . import model, service
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -13,16 +13,15 @@ router = APIRouter(prefix="/products", tags=["Products"])
 # ---------------------------------------------------------------------------
 
 @router.post("/", response_model=model.ProductCreateResponse)
-def create_product(
+async def create_product(
     product_data: model.ProductCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """
-    Create a new product with optional variants.
-    Requires Admin/CEO role.
-    """
-    return service.create_product(product_data, db, current_user)
+    result = service.create_product(product_data, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
 
 @router.get("/", response_model=List[model.ProductResponse])
 def get_products(
@@ -32,98 +31,103 @@ def get_products(
     category_id: Optional[int] = None,
     db: Session = Depends(get_session)
 ):
-    """
-    Get all products with pagination and search.
-    """
     return service.getAllProducts(skip, limit, search, category_id, db)
 
 @router.get("/categories", response_model=List[model.CategoryResponse])
 def get_categories(
     db: Session = Depends(get_session)
 ):
-    """
-    Get all product categories.
-    """
     return service.getAllCategories(db)
 
 @router.post("/categories", response_model=model.CategoryResponse)
-def create_category(
+async def create_category(
     category_data: model.CategoryCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """
-    Create a new category.
-    """
-    return service.create_category(category_data, db)
+    result = service.create_category(category_data, db)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
 
 @router.put("/{product_id}", response_model=model.ProductUpdateResponse)
-def update_product(
+async def update_product(
     product_id: int,
     update_data: model.ProductUpdateRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """
-    Update product details.
-    """
-    return service.update_product(product_id, update_data, db, current_user)
+    result = service.update_product(product_id, update_data, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
 
 @router.delete("/{product_id}")
-def delete_product(
+async def delete_product(
     product_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """
-    Delete a product.
-    """
-    return service.remove_product(product_id, db, current_user)
+    result = service.remove_product(product_id, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
 
 # ---------------------------------------------------------------------------
 # Variant Management
 # ---------------------------------------------------------------------------
 
 @router.post("/{product_id}/variants", response_model=model.VariantResponse)
-def add_product_variant(
+async def add_product_variant(
     product_id: int,
     variant_data: model.VariantCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """
-    Add a variant to a product.
-    """
-    return service.add_variant(product_id, variant_data, db)
+    result = service.add_variant(product_id, variant_data, db)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
 
 @router.put("/variants/{variant_id}", response_model=model.VariantResponse)
-def update_variant(
+async def update_variant(
     variant_id: int,
     update_data: model.VariantUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """
-    Update variant price or stock.
-    """
-    return service.update_variant(variant_id, update_data, db)
+    result = service.update_variant(variant_id, update_data, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
 
 # ---------------------------------------------------------------------------
 # Stock Management
 # ---------------------------------------------------------------------------
 
 @router.put("/{product_id}/stock")
-def update_product_stock(
+async def update_product_stock(
     product_id: int,
     stock_data: model.StockQuantityUpdateRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """
-    Add stock to a simple (non-variant) product.
-    Positive stock value adds; negative removes.
-    """
-    return service.update_simple_product_stock(product_id, stock_data.stock, db)
+    result = service.update_simple_product_stock(product_id, stock_data.stock, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
+
+@router.get("/restock-history", response_model=list[model.RestockHistoryItem])
+def get_restock_history(
+    skip: int = 0,
+    limit: int = 100,
+    product_id: Optional[int] = None,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Restock audit log — accessible to seniorCashier, ceo, and admin."""
+    return service.get_restock_history(db, skip, limit, product_id)
 
 @router.get("/{product_id}/offcuts", response_model=List[model.OffcutResponse])
 def get_product_offcuts(
@@ -132,10 +136,6 @@ def get_product_offcuts(
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    """
-    Return all available offcut pieces for a product, sorted longest first.
-    Pass variant_id to filter to a specific variant's offcuts.
-    """
     return service.get_offcuts_for_product(product_id, db, variant_id)
 
 @router.get("/{product_id}/availability", response_model=model.StockAvailabilityResponse)
@@ -145,7 +145,4 @@ def check_availability(
     variant_id: Optional[int] = Query(None, description="Optional Variant ID"),
     db: Session = Depends(get_session)
 ):
-    """
-    Check stock availability.
-    """
     return service.check_stock_availability(product_id, qty, db, variant_id)

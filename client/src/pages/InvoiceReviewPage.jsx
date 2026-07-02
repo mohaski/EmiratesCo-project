@@ -34,10 +34,14 @@ export default function InvoiceReviewPage() {
     const { subtotal, tax, total } = useCartTotals(cartItems, enableTax);
     const totals = useMemo(() => ({ grandTotal: subtotal, vat: tax, total }), [subtotal, tax, total]);
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!customer || cartItems.length === 0) return;
-        addInvoice({ ...invoiceMeta, customer, items: cartItems, totals, type: 'invoice' });
-        navigate('/orders');
+        try {
+            await addInvoice({ customer, items: cartItems, totals, enableTax });
+            navigate('/orders');
+        } catch (err) {
+            console.error('Failed to save invoice:', err);
+        }
     };
 
     const handlePrint = () => window.print();

@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(npm run *)",
-      "Bash(npx pwa-assets-generator *)"
+      "Bash(npx pwa-assets-generator *)",
+      "Bash(python -c \"import secrets; print\\(secrets.token_hex\\(32\\)\\)\")",
+      "PowerShell(& \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\.venv\\\\Scripts\\\\python.exe\" -c \"import websockets; print\\(websockets.__version__\\)\" 2>&1)",
+      "PowerShell(& \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\.venv\\\\Scripts\\\\pip.exe\" list 2>&1)",
+      "PowerShell(findstr -i \"websocket\\\\|uvicorn\\\\|starlette\\\\|fastapi\")"
     ]
   }
 }

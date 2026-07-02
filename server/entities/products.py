@@ -34,7 +34,9 @@ class Product(SQLModel, table=True):
     price_unit: Optional[float] = Field(default=0.0)
     
     length: Optional[float] = Field(default=None)
-    
+    width: Optional[float] = Field(default=None)
+    height: Optional[float] = Field(default=None)
+
     # Relationships
     category: Optional["Category"] = Relationship(back_populates="products")
     orderItems: List["OrderItem"] = Relationship(back_populates="product")

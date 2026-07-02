@@ -1,5 +1,7 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useProducts } from '../context/ProductContext';
+import { useAuth } from '../context/AuthContext';
+import api from '../services/api';
 import AddStockModal from '../components/inventory/AddStockModal';
 
 const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Bronze', 'Grey', 'Matt Black'];
@@ -7,6 +9,7 @@ const GLASS_THICKNESSES = ['4mm', '6mm', '8mm', '10mm', '12mm'];
 
 export default function InventoryPage() {
     const { products, categories: CATEGORIES, updateProduct, updateProductVariant } = useProducts();
+    const { user } = useAuth();
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('ke-profile');
     const [filterSubCategory, setFilterSubCategory] = useState('window');
@@ -16,6 +19,24 @@ export default function InventoryPage() {
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [selectedVariant, setSelectedVariant] = useState('');
     const [stockToAdd, setStockToAdd] = useState('');
+
+    const canViewHistory = user?.role === 'ceo' || user?.role === 'admin';
+    const [sidebarTab, setSidebarTab] = useState('recent');
+    const [restockHistory, setRestockHistory] = useState([]);
+    const [historyLoading, setHistoryLoading] = useState(false);
+
+    const loadHistory = useCallback(async () => {
+        setHistoryLoading(true);
+        try {
+            const data = await api.productService.getRestockHistory();
+            setRestockHistory(data);
+        } catch { /* silently fail */ }
+        finally { setHistoryLoading(false); }
+    }, []);
+
+    useEffect(() => {
+        if (sidebarTab === 'history' && canViewHistory) loadHistory();
+    }, [sidebarTab, canViewHistory, loadHistory]);
 
     useEffect(() => {
         setInventory(products.map(p => {
@@ -223,32 +244,100 @@ export default function InventoryPage() {
                     </div>
                 </div>
 
-                {/* Right: Recent activity */}
+                {/* Right sidebar */}
                 <div style={{
-                    width: '280px', flexShrink: 0,
+                    width: '300px', flexShrink: 0,
                     borderLeft: '1px solid rgba(255,255,255,0.07)',
                     background: 'rgba(0,0,0,0.2)',
                     display: 'flex', flexDirection: 'column',
                     padding: '1.25rem',
                 }}>
-                    <h3 style={{ fontSize: '0.8rem', fontWeight: 700, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase', margin: '0 0 1rem' }}>Recent Updates</h3>
-                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
-                        {recentUpdates.length === 0 ? (
-                            <p style={{ fontSize: '0.78rem', color: '#334155', textAlign: 'center', marginTop: '2rem', fontStyle: 'italic' }}>No updates this session</p>
-                        ) : recentUpdates.map(u => (
-                            <div key={u.id} style={{
-                                padding: '0.75rem', borderRadius: '0.625rem',
-                                background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.15)',
-                            }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-                                    <span style={{ fontSize: '0.65rem', color: '#475569', fontFamily: 'var(--font-mono)' }}>{u.time}</span>
-                                    <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#4ade80', background: 'rgba(34,197,94,0.1)', borderRadius: '100px', padding: '1px 6px' }}>+In</span>
-                                </div>
-                                <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '2px' }}>{u.product}</div>
-                                <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Added <span style={{ color: '#f1f5f9', fontWeight: 700 }}>{u.qty}</span> units</div>
-                            </div>
-                        ))}
+                    {/* Tab toggle */}
+                    <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '0.625rem', padding: '3px', marginBottom: '1rem' }}>
+                        <button onClick={() => setSidebarTab('recent')} style={{
+                            flex: 1, padding: '0.375rem 0', borderRadius: '0.4rem', border: 'none', cursor: 'pointer',
+                            background: sidebarTab === 'recent' ? 'rgba(255,255,255,0.09)' : 'transparent',
+                            color: sidebarTab === 'recent' ? '#e2e8f0' : '#475569',
+                            fontWeight: 700, fontSize: '0.72rem', transition: 'all 0.15s',
+                        }}>This Session</button>
+                        {canViewHistory && (
+                            <button onClick={() => setSidebarTab('history')} style={{
+                                flex: 1, padding: '0.375rem 0', borderRadius: '0.4rem', border: 'none', cursor: 'pointer',
+                                background: sidebarTab === 'history' ? 'rgba(59,130,246,0.15)' : 'transparent',
+                                color: sidebarTab === 'history' ? '#60a5fa' : '#475569',
+                                fontWeight: 700, fontSize: '0.72rem', transition: 'all 0.15s',
+                            }}>Restock Audit</button>
+                        )}
                     </div>
+
+                    {sidebarTab === 'recent' ? (
+                        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
+                            {recentUpdates.length === 0 ? (
+                                <p style={{ fontSize: '0.78rem', color: '#334155', textAlign: 'center', marginTop: '2rem', fontStyle: 'italic' }}>No updates this session</p>
+                            ) : recentUpdates.map(u => (
+                                <div key={u.id} style={{ padding: '0.75rem', borderRadius: '0.625rem', background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.15)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                                        <span style={{ fontSize: '0.65rem', color: '#475569', fontFamily: 'var(--font-mono)' }}>{u.time}</span>
+                                        <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#4ade80', background: 'rgba(34,197,94,0.1)', borderRadius: '100px', padding: '1px 6px' }}>+In</span>
+                                    </div>
+                                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '2px' }}>{u.product}</div>
+                                    <div style={{ fontSize: '0.7rem', color: '#64748b' }}>Added <span style={{ color: '#f1f5f9', fontWeight: 700 }}>{u.qty}</span> units</div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: 'hidden' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                                <span style={{ fontSize: '0.65rem', color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                                    {restockHistory.length} entries
+                                </span>
+                                <button onClick={loadHistory} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#475569', fontSize: '0.72rem', fontWeight: 600 }}>
+                                    Refresh
+                                </button>
+                            </div>
+
+                            {historyLoading ? (
+                                <p style={{ fontSize: '0.78rem', color: '#334155', textAlign: 'center', marginTop: '2rem' }}>Loading...</p>
+                            ) : restockHistory.length === 0 ? (
+                                <p style={{ fontSize: '0.78rem', color: '#334155', textAlign: 'center', marginTop: '2rem', fontStyle: 'italic' }}>No restock records yet</p>
+                            ) : (
+                                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
+                                    {restockHistory.map(h => {
+                                        const isAdd = h.qty_added > 0;
+                                        const date = new Date(h.added_at);
+                                        return (
+                                            <div key={h.id} style={{
+                                                padding: '0.75rem', borderRadius: '0.625rem',
+                                                background: isAdd ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)',
+                                                border: `1px solid ${isAdd ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
+                                            }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.375rem' }}>
+                                                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#e2e8f0', flex: 1, marginRight: '0.5rem', lineHeight: 1.3 }}>
+                                                        {h.product_name}{h.variant_name ? ` · ${h.variant_name}` : ''}
+                                                    </span>
+                                                    <span style={{
+                                                        fontSize: '0.72rem', fontWeight: 800, flexShrink: 0,
+                                                        color: isAdd ? '#4ade80' : '#f87171',
+                                                        background: isAdd ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                                                        borderRadius: '100px', padding: '1px 7px',
+                                                    }}>
+                                                        {isAdd ? '+' : ''}{h.qty_added}
+                                                    </span>
+                                                </div>
+                                                <div style={{ fontSize: '0.65rem', color: '#64748b', display: 'flex', justifyContent: 'space-between' }}>
+                                                    <span>{h.stock_before} → {h.stock_after}</span>
+                                                    <span style={{ color: '#475569' }}>{h.added_by}</span>
+                                                </div>
+                                                <div style={{ fontSize: '0.62rem', color: '#334155', marginTop: '0.25rem', fontFamily: 'var(--font-mono)' }}>
+                                                    {date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 

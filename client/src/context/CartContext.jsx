@@ -59,6 +59,17 @@ export const CartProvider = ({ children }) => {
         localStorage.setItem('emirates_pos_session_type', sessionType);
     }, [cartItems, customer, taxEnabled, sessionType]);
 
+    // Clear in-memory state when user logs out
+    useEffect(() => {
+        const handleLogout = () => {
+            setCartItems([]);
+            setCustomer(null);
+            setSessionType('sales');
+        };
+        window.addEventListener('pos:logout', handleLogout);
+        return () => window.removeEventListener('pos:logout', handleLogout);
+    }, []);
+
     // --- Actions ---
 
     const addToCart = useCallback((item) => {

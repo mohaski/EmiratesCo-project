@@ -57,11 +57,12 @@ def create_product(
             price_half=product_data.price_half,
             price_unit=product_data.price_unit,
             length=product_data.length,
-            
+            width=product_data.width,
+            height=product_data.height,
+
             track_offcuts=product_data.trackOffcuts,
             alarm_quantity=product_data.alarm_quantity,
-            
-            # Explicit Simple/Variable Logic
+
             has_variants=has_variants,
             stock_quantity=initial_stock
         )
@@ -83,7 +84,9 @@ def create_product(
                     price=v_data.price,
                     price_half=v_data.price_half,
                     price_unit=v_data.price_unit,
-                    length=v_data.length
+                    length=v_data.length,
+                    width=v_data.width,
+                    height=v_data.height,
                 )
                 db.add(new_variant)
             
@@ -185,7 +188,9 @@ def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session 
             price=variant_data.price,
             price_half=variant_data.price_half,
             price_unit=variant_data.price_unit,
-            length=variant_data.length
+            length=variant_data.length,
+            width=variant_data.width,
+            height=variant_data.height,
         )
         db.add(variant)
         
@@ -205,38 +210,69 @@ def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session 
         logger.error(f"Add Variant Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Session = Depends(get_session)):
+def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Session = Depends(get_session), current_user=None):
     try:
         variant = db.get(Variant, variant_id)
         if not variant:
              raise HTTPException(status_code=404, detail="Variant not found")
-        
+
         # 1. Update Prices
         if update_data.price is not None:
              logger.info(f"Updating Variant {variant_id} Price: {variant.price} -> {update_data.price}")
              variant.price = update_data.price
-        
+
         if update_data.price_half is not None:
              variant.price_half = update_data.price_half
-             
+
         if update_data.price_unit is not None:
              variant.price_unit = update_data.price_unit
 
         if update_data.length is not None:
              variant.length = update_data.length
-             
+
+        if update_data.width is not None:
+             variant.width = update_data.width
+
+        if update_data.height is not None:
+             variant.height = update_data.height
+
         # 2. Update Stock (Delta)
         if update_data.stock_change is not None:
              logger.info(f"Adjusting Variant {variant_id} Stock: {variant.stock_quantity} + {update_data.stock_change}")
-             
+
+             old_stock = variant.stock_quantity
              variant.stock_quantity += update_data.stock_change
-             
+
              # Sync Parent
              product = db.get(Product, variant.product_id)
              if product:
                   product.stock_quantity = (product.stock_quantity or 0) + update_data.stock_change
                   db.add(product)
-        
+
+             if current_user is not None:
+                  from entities.editHistory import EditHistory
+                  from uuid import UUID
+                  db.add(EditHistory(
+                      entity_type='restock',
+                      entity_id=variant.product_id,
+                      edited_by=UUID(current_user.userId),
+                      action='restock',
+                      before_snapshot={
+                          'variant_id': variant_id,
+                          'variant_name': variant.name or '',
+                          'product_name': product.name if product else '',
+                          'stock_quantity': old_stock,
+                      },
+                      after_snapshot={
+                          'variant_id': variant_id,
+                          'variant_name': variant.name or '',
+                          'product_name': product.name if product else '',
+                          'stock_quantity': float(variant.stock_quantity),
+                          'change': update_data.stock_change,
+                      },
+                      notes=current_user.username,
+                  ))
+
         db.add(variant)
         db.commit()
         db.refresh(variant)
@@ -274,7 +310,7 @@ def getAllCategories(db: Session = Depends(get_session)):
 
 # --- STOCK ---
 
-def update_simple_product_stock(product_id: int, stock_change: int, db: Session) -> dict:
+def update_simple_product_stock(product_id: int, stock_change: int, db: Session, current_user=None) -> dict:
     """
     Add or remove stock from a simple (non-variant) product.
     stock_change can be positive (add) or negative (remove).
@@ -285,11 +321,33 @@ def update_simple_product_stock(product_id: int, stock_change: int, db: Session)
             raise HTTPException(status_code=404, detail="Product not found")
         if product.has_variants:
             raise HTTPException(status_code=400, detail="Use variant endpoints to update stock for variable products")
-        new_qty = (product.stock_quantity or 0) + stock_change
+        old_qty = product.stock_quantity or 0
+        new_qty = old_qty + stock_change
         if new_qty < 0:
             raise HTTPException(status_code=400, detail=f"Insufficient stock. Current: {product.stock_quantity}")
         product.stock_quantity = new_qty
         db.add(product)
+
+        if current_user is not None:
+            from entities.editHistory import EditHistory
+            from uuid import UUID
+            db.add(EditHistory(
+                entity_type='restock',
+                entity_id=product_id,
+                edited_by=UUID(current_user.userId),
+                action='restock',
+                before_snapshot={
+                    'product_name': product.name,
+                    'stock_quantity': old_qty,
+                },
+                after_snapshot={
+                    'product_name': product.name,
+                    'stock_quantity': new_qty,
+                    'change': stock_change,
+                },
+                notes=current_user.username,
+            ))
+
         db.commit()
         db.refresh(product)
         logger.info(f"Stock updated for product {product_id}: {product.stock_quantity}")
@@ -300,6 +358,42 @@ def update_simple_product_stock(product_id: int, stock_change: int, db: Session)
         db.rollback()
         logger.error(f"Update Stock Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+def get_restock_history(
+    db: Session,
+    skip: int = 0,
+    limit: int = 100,
+    product_id: Optional[int] = None,
+) -> list:
+    from entities.editHistory import EditHistory
+    stmt = (
+        select(EditHistory)
+        .where(EditHistory.entity_type == 'restock')
+        .order_by(EditHistory.edited_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    if product_id is not None:
+        stmt = stmt.where(EditHistory.entity_id == product_id)
+
+    rows = db.exec(stmt).all()
+    results = []
+    for r in rows:
+        before = r.before_snapshot or {}
+        after = r.after_snapshot or {}
+        results.append(model.RestockHistoryItem(
+            id=r.id,
+            product_id=r.entity_id,
+            product_name=after.get('product_name') or before.get('product_name', ''),
+            variant_name=after.get('variant_name', ''),
+            qty_added=float(after.get('change', 0)),
+            stock_before=float(before.get('stock_quantity', 0)),
+            stock_after=float(after.get('stock_quantity', 0)),
+            added_by=r.notes or str(r.edited_by),
+            added_at=r.edited_at,
+        ))
+    return results
+
 
 def get_offcuts_for_product(
     product_id: int,

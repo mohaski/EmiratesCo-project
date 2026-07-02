@@ -330,11 +330,14 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
             if full_len <= 0 or not track:
                 _restore_simple_stock(db, product, variant, qty)
             else:
-                # Each half consumed 1 bar and left a half-length offcut; reverse that
-                for _ in range(qty):
-                    _restore_simple_stock(db, product, variant, 1)
-                    half_len = round(full_len / 2.0, 4)
-                    _remove_offcut(db, product, variant, half_len)
+                sources = line.get("offcut_sources")
+                if sources:
+                    restore_specific_offcut_sources(db, product, variant, sources)
+                else:
+                    for _ in range(qty):
+                        _restore_simple_stock(db, product, variant, 1)
+                        half_len = round(full_len / 2.0, 4)
+                        _remove_offcut(db, product, variant, half_len)
 
         elif "cut" in l_type:
             meta = line.get("meta", {})
@@ -345,12 +348,17 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
             if not track or full_len <= 0:
                 _restore_simple_stock(db, product, variant, qty)
             else:
-                # Each cut consumed 1 bar and left a remainder offcut; reverse that
-                for _ in range(qty):
-                    _restore_simple_stock(db, product, variant, 1)
-                    remainder = round(full_len - cut_len, 4)
-                    if remainder > 0.01:
-                        _remove_offcut(db, product, variant, remainder)
+                sources = line.get("offcut_sources")
+                if sources:
+                    # Use the exact recorded sources — mirrors restore_specific_offcut_sources
+                    restore_specific_offcut_sources(db, product, variant, sources)
+                else:
+                    # No source record (legacy) — fall back to full-bar assumption
+                    for _ in range(qty):
+                        _restore_simple_stock(db, product, variant, 1)
+                        remainder = round(full_len - cut_len, 4)
+                        if remainder > 0.01:
+                            _remove_offcut(db, product, variant, remainder)
 
         elif "roll" in l_type or "meter" in l_type or "unit" in l_type:
             _restore_simple_stock(db, product, variant, qty)

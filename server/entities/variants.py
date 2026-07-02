@@ -25,7 +25,9 @@ class Variant(SQLModel, table=True):
     price_unit: Optional[float] = Field(default=None)
     
     length: Optional[float] = Field(default=None)
-    
+    width: Optional[float] = Field(default=None)   # Sheet width (glass)
+    height: Optional[float] = Field(default=None)  # Sheet height (glass)
+
     # Relationships
     product: "Product" = Relationship(back_populates="variants")
     orderItems: List["OrderItem"] = Relationship(back_populates="variant") 

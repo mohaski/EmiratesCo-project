@@ -4,6 +4,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import { OrderProvider } from './context/OrderContext';
 import { ProductProvider } from './context/ProductContext';
+import { ToastProvider } from './context/ToastContext';
+import { WebSocketProvider } from './context/WebSocketContext';
 import PWAPrompt from './components/PWAPrompt';
 
 // Eager: auth pages load instantly on first visit
@@ -51,7 +53,9 @@ const AppLayout = () => (
 
 function App() {
   return (
+    <ToastProvider>
     <AuthProvider>
+      <WebSocketProvider>
       <ProductProvider>
         <OrderProvider>
           <CartProvider>
@@ -89,7 +93,9 @@ function App() {
           </CartProvider>
         </OrderProvider>
       </ProductProvider>
+      </WebSocketProvider>
     </AuthProvider>
+    </ToastProvider>
   );
 }
 

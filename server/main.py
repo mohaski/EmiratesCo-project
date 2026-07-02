@@ -18,6 +18,7 @@ from core.financials.controller import router as financials_router
 from core.userManagement.controller import router as users_router
 from core.messaging.controller import router as messaging_router
 from core.invoices.controller import router as invoices_router
+from ws.router import router as ws_router
 
 # ── Logging Setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -85,12 +86,14 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
-        *_extra,   # injects VERCEL_URL and any other origins from .env
+        *_extra,
     ],
+    allow_origin_regex=r"https://emirates-co-project.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Request-ID"],
     expose_headers=["X-Request-ID", "X-Response-Time"],
+    max_age=3600,
 )
 
 # ── Routers ──────────────────────────────────────────────────────────────────
@@ -100,6 +103,7 @@ app.include_router(products_router)
 app.include_router(financials_router)
 app.include_router(users_router)
 app.include_router(messaging_router)
+app.include_router(ws_router)
 
 # ── Utility Endpoints ─────────────────────────────────────────────────────────
 @app.get("/", tags=["System"])

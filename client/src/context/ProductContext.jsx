@@ -1,6 +1,7 @@
 // @refresh reset
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../services/api';
+import { wsEvents } from '../utils/wsEvents';
 
 const ProductContext = createContext();
 
@@ -42,6 +43,8 @@ export const ProductProvider = ({ children }) => {
                 priceHalf: v.price_half,
                 priceUnit: v.price_unit,
                 length: v.length ?? null,
+                width: v.width ?? null,
+                height: v.height ?? null,
             })) : [];
 
             let priceFull = p.price_full || 0;
@@ -70,6 +73,8 @@ export const ProductProvider = ({ children }) => {
                 priceHalf: priceHalf,
                 priceFoot: priceFoot,
                 trackOffcuts: p.trackOffcuts || p.track_offcuts || false,
+                width: p.width ?? null,
+                height: p.height ?? null,
                 stock: totalStock,
                 image: p.image_url || 'https://placehold.co/300x200/CCCCCC/FFFFFF?text=Product',
                 variants: feVariants,
@@ -130,6 +135,11 @@ export const ProductProvider = ({ children }) => {
         initializeData();
     }, []);
 
+    // Re-fetch whenever another client (or tab) mutates products
+    useEffect(() => {
+        return wsEvents.on('products_updated', refreshProducts);
+    }, [refreshProducts]);
+
     // --- Actions ---
     const addProduct = useCallback(async (productData) => {
         try {
@@ -150,6 +160,8 @@ export const ProductProvider = ({ children }) => {
                 price_unit: parseFloat(productData.priceFoot || 0),
                 stock: parseInt(productData.stock || 0),
                 length: parseFloat(productData.length || 0),
+                width: productData.width ? parseFloat(productData.width) : null,
+                height: productData.height ? parseFloat(productData.height) : null,
                 trackOffcuts: productData.trackOffcuts || false,
                 variants: productData.variants ? productData.variants.map(v => ({
                     attributes: v.attributes,
@@ -157,7 +169,9 @@ export const ProductProvider = ({ children }) => {
                     price: parseFloat(v.price || 0),
                     price_half: v.details ? parseFloat(v.details.priceHalf || 0) : 0,
                     price_unit: v.details ? parseFloat(v.details.priceUnit || 0) : 0,
-                    length: v.length ? parseFloat(v.length) : (productData.length ? parseFloat(productData.length) : null)
+                    length: v.length ? parseFloat(v.length) : (productData.length ? parseFloat(productData.length) : null),
+                    width: v.width ? parseFloat(v.width) : null,
+                    height: v.height ? parseFloat(v.height) : null,
                 })) : []
             };
 

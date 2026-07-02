@@ -561,17 +561,21 @@ export default function SalesDashboard() {
                         originalTotal={0}
                         actionLabel={isEditMode ? 'Update Order' : 'Checkout'}
                         onAction={isEditMode ? () => {
+                            const od = location.state.orderData;
                             navigate('/checkout', {
                                 state: {
                                     cartItems: cart,
                                     customer: selectedCustomer,
                                     enableTax,
                                     mode: 'edit',
-                                    originalTotal: location.state.orderData.amountPayed ?? location.state.orderData.amountPaid ?? 0,
-                                    orderData: { id: location.state.orderData.id ?? location.state.orderData.orderId },
+                                    // amountPaid = what was already collected (used to compute the delta owed)
+                                    originalTotal: od.amountPayed ?? od.amountPaid ?? 0,
+                                    // balance = outstanding balance before this edit (shown to the cashier for context)
+                                    originalBalance: od.balance ?? 0,
+                                    orderData: { id: od.id ?? od.orderId },
                                 },
                             });
-                        } : location.state?.mode === 'link' ? () => {
+                        } :location.state?.mode === 'link' ? () => {
                             navigate('/checkout', {
                                 state: {
                                     cartItems: cart,

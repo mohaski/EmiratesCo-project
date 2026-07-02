@@ -17,6 +17,7 @@ class OrderCreate(BaseModel):
     # totalAmount is now calculated by backend
     # totalAmount: float = 0.0 
     parentOrderId: Optional[int] = None
+    sourceInvoiceId: Optional[int] = None   # set when converting an invoice at checkout
     servedBy: UUID
     VAT_status: bool = False
     discount: Optional[float] = 0.0
