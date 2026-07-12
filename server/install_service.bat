@@ -2,7 +2,7 @@
 :: ─────────────────────────────────────────────────────────────────────────────
 :: Installs EmiratesCo API as a Windows Service using NSSM.
 :: Run this ONCE as Administrator after installing NSSM.
-:: Download NSSM: https://nssm.cc/download  (unzip, put nssm.exe in C:\nssm\)
+:: Download NSSM: https://nssm.cc/download (unzip, put win64\nssm.exe at C:\nssm\win64\nssm.exe)
 :: ─────────────────────────────────────────────────────────────────────────────
 title Install EmiratesCo Service
 cd /d "%~dp0"
@@ -12,8 +12,11 @@ set SERVICE_NAME=EmiratesCoAPI
 set SERVER_DIR=%~dp0
 set PYTHON=
 
-:: Detect Python path (venv takes priority)
-if exist "%SERVER_DIR%venv\Scripts\python.exe" (
+:: Detect Python path — project-root .venv first (matches start.bat), then a
+:: server-local venv, then fall back to whatever's on PATH.
+if exist "%SERVER_DIR%..\.venv\Scripts\python.exe" (
+    set PYTHON=%SERVER_DIR%..\.venv\Scripts\python.exe
+) else if exist "%SERVER_DIR%venv\Scripts\python.exe" (
     set PYTHON=%SERVER_DIR%venv\Scripts\python.exe
 ) else (
     for /f "delims=" %%i in ('where python') do set PYTHON=%%i
@@ -33,7 +36,8 @@ echo.
 :: Single worker: the WebSocket broadcast manager (ws/manager.py) keeps
 :: connections in an in-process list, not shared across workers — with
 :: workers > 1, live-update pushes would miss clients on other workers.
-%NSSM% install %SERVICE_NAME% "%PYTHON%" "-m" "uvicorn" "main:app" "--host" "0.0.0.0" "--port" "8000" "--workers" "1"
+:: 127.0.0.1: this laptop is standalone (no other device needs to reach it).
+%NSSM% install %SERVICE_NAME% "%PYTHON%" "-m" "uvicorn" "main:app" "--host" "127.0.0.1" "--port" "8000" "--workers" "1"
 %NSSM% set %SERVICE_NAME% AppDirectory "%SERVER_DIR%"
 %NSSM% set %SERVICE_NAME% DisplayName "EmiratesCo API Server"
 %NSSM% set %SERVICE_NAME% Description "FastAPI backend for EmiratesCo Management System"

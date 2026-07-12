@@ -27,11 +27,11 @@ if not exist ".env" (
     exit /b 1
 )
 
-echo [*] Starting FastAPI on http://0.0.0.0:8000 ...
+echo [*] Starting FastAPI on http://127.0.0.1:8000 ...
 echo [*] Press Ctrl+C to stop.
 echo.
 
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --log-level info
+python -m uvicorn main:app --host 127.0.0.1 --port 8000 --log-level info
 
 echo.
 echo [*] Server stopped.
