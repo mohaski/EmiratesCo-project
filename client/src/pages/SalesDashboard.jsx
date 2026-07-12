@@ -71,7 +71,9 @@ export default function SalesDashboard() {
         loadOrder,
         clearCart,
         sessionType,
-        setSessionType
+        setSessionType,
+        linkedRef,
+        setLinkedRef
     } = useCart();
 
     const [enableTax, setEnableTax] = useState(() =>
@@ -143,12 +145,23 @@ export default function SalesDashboard() {
             if (loadedStateRef.current?.startsWith('link')) return;
             loadedStateRef.current = stateKey;
             setSelectedCustomer(location.state.customer);
+            setLinkedRef({ type: 'link', id: location.state.parentOrderId ?? null });
             setEnableTax(!location.state.customer || location.state.customer.type === 'corporate');
+        } else if (location.state?.mode === 'convert' && location.state?.cartItems) {
+            // Editing a to-be-converted invoice's items — cartItems are already in
+            // frontend cart-item shape (they round-trip from invoice.items as-is),
+            // so no backend-shape mapping needed here (unlike the edit-order branch above).
+            if (loadedStateRef.current?.startsWith('convert')) return;
+            loadedStateRef.current = stateKey;
+            loadOrder({ items: location.state.cartItems, customer: location.state.customer || null });
+            setLinkedRef({ type: 'convert', id: location.state.sourceInvoiceId ?? null });
+            setEnableTax(location.state.enableTax ?? (!location.state.customer || location.state.customer.type === 'corporate'));
         } else if (!location.state?.mode) {
             loadedStateRef.current = null;
             setSelectedCustomer(null);
+            setLinkedRef(null);
         }
-    }, [location.state, loadOrder, setSelectedCustomer, PRODUCTS]);
+    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, PRODUCTS]);
 
     const handleProductClick = useCallback((product) => {
         setSelectedProduct(product);
@@ -240,7 +253,7 @@ export default function SalesDashboard() {
                                     Edit: #{String(location.state?.orderData?.id ?? '').slice(-6)}
                                 </span>
                             )}
-                            {location.state?.mode === 'link' && (
+                            {linkedRef?.type === 'link' && (
                                 <span style={{
                                     fontSize: '0.65rem', fontWeight: 700,
                                     padding: '0.2rem 0.6rem',
@@ -252,6 +265,20 @@ export default function SalesDashboard() {
                                     textTransform: 'uppercase',
                                 }}>
                                     Linked Order
+                                </span>
+                            )}
+                            {linkedRef?.type === 'convert' && (
+                                <span style={{
+                                    fontSize: '0.65rem', fontWeight: 700,
+                                    padding: '0.2rem 0.6rem',
+                                    background: 'rgba(245,158,11,0.12)',
+                                    border: '1px solid rgba(245,158,11,0.25)',
+                                    borderRadius: '100px',
+                                    color: '#fbbf24',
+                                    letterSpacing: '0.06em',
+                                    textTransform: 'uppercase',
+                                }}>
+                                    Converting Invoice #{String(linkedRef.id ?? '').slice(-6)}
                                 </span>
                             )}
                         </div>
@@ -575,13 +602,22 @@ export default function SalesDashboard() {
                                     orderData: { id: od.id ?? od.orderId },
                                 },
                             });
-                        } :location.state?.mode === 'link' ? () => {
+                        } : linkedRef?.type === 'link' ? () => {
                             navigate('/checkout', {
                                 state: {
                                     cartItems: cart,
                                     customer: selectedCustomer,
                                     enableTax,
-                                    parentOrderId: location.state.parentOrderId,
+                                    parentOrderId: linkedRef.id,
+                                },
+                            });
+                        } : linkedRef?.type === 'convert' ? () => {
+                            navigate('/checkout', {
+                                state: {
+                                    cartItems: cart,
+                                    customer: selectedCustomer,
+                                    enableTax,
+                                    sourceInvoiceId: linkedRef.id,
                                 },
                             });
                         } : undefined}

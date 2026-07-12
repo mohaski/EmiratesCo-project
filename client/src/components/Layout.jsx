@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { useNavigate, useLocation, Outlet, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { ROUTE_ROLES } from '../config/routePermissions';
 
 const NAV_ICONS = {
   overview: (
@@ -13,11 +14,6 @@ const NAV_ICONS = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />
       <rect x="9" y="3" width="6" height="4" rx="1.5" /><path d="M9 12h6M9 16h4" />
-    </svg>
-  ),
-  activeOrders: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
     </svg>
   ),
   sales: (
@@ -74,10 +70,8 @@ const NAV_ICONS = {
 const ROLE_LABELS = {
   ceo: 'Executive',
   admin: 'Administrator',
-  seniorCashier: 'Senior Cashier',
-  juniorCashier: 'Cashier',
-  storeManager: 'Store Manager',
-  stockmanager: 'Stock Manager',
+  manager: 'Manager',
+  cashier: 'Cashier',
 };
 
 function useWindowWidth() {
@@ -97,6 +91,12 @@ export default function Layout() {
   const location = useLocation();
   const { logout, user } = useAuth();
   const windowWidth = useWindowWidth();
+
+  // Route-level guard: sidebar hiding a link isn't enough to stop direct navigation
+  // or hardcoded redirects (e.g. post-checkout) from landing a role on a page it
+  // isn't permitted to see, so re-check here against the same ROUTE_ROLES map.
+  const allowedRoles = ROUTE_ROLES[location.pathname];
+  const isAuthorized = !allowedRoles || allowedRoles.includes(user?.role);
 
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1024;
@@ -119,17 +119,16 @@ export default function Layout() {
   }, [isMobile, isMobileOpen]);
 
   const menuItems = [
-    { path: '/', label: 'Overview', iconKey: 'overview', roles: ['admin', 'ceo', 'seniorCashier', 'juniorCashier', 'storeManager'] },
-    { path: '/store/active-orders', label: 'Active Orders', iconKey: 'activeOrders', roles: ['storeManager'] },
-    { path: '/sales', label: 'Sales POS', iconKey: 'sales', roles: ['seniorCashier', 'juniorCashier'] },
-    { path: '/invoice', label: 'Invoices', iconKey: 'invoice', roles: ['seniorCashier', 'juniorCashier'] },
-    { path: '/orders', label: 'Order History', iconKey: 'orders', roles: ['seniorCashier'] },
-    { path: '/inventory', label: 'Stock Control', iconKey: 'inventory', roles: ['seniorCashier'] },
-    { path: '/add-product', label: 'Add Product', iconKey: 'addProduct', roles: ['admin', 'ceo'] },
-    { path: '/manage-products', label: 'Manage Products', iconKey: 'manageProducts', roles: ['admin', 'ceo'] },
+    { path: '/', label: 'Overview', iconKey: 'overview' },
+    { path: '/sales', label: 'Sales POS', iconKey: 'sales' },
+    { path: '/invoice', label: 'Invoices', iconKey: 'invoice' },
+    { path: '/orders', label: 'Order History', iconKey: 'orders' },
+    { path: '/inventory', label: 'Stock Control', iconKey: 'inventory' },
+    { path: '/add-product', label: 'Add Product', iconKey: 'addProduct' },
+    { path: '/manage-products', label: 'Manage Products', iconKey: 'manageProducts' },
   ];
 
-  const filteredItems = menuItems.filter(item => item.roles.includes(user?.role));
+  const filteredItems = menuItems.filter(item => (ROUTE_ROLES[item.path] || []).includes(user?.role));
   const roleLabel = ROLE_LABELS[user?.role] || user?.role || 'User';
   const initials = (user?.firstName || user?.name || 'U').slice(0, 2).toUpperCase();
 
@@ -424,7 +423,7 @@ export default function Layout() {
           position: 'relative', display: 'flex', flexDirection: 'column',
           minWidth: 0,
         }}>
-          <Outlet />
+          {isAuthorized ? <Outlet /> : <Navigate to="/" replace />}
         </main>
       </div>
     </div>

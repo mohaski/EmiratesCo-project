@@ -1,13 +1,23 @@
-import { memo } from 'react';
+import { memo, useEffect, useRef } from 'react';
 
-const InvoiceCard = memo(({ invoice, onView, onConvert }) => (
-    <div style={{
+const InvoiceCard = memo(({ invoice, onView, onConvert, highlighted }) => {
+    const cardRef = useRef(null);
+
+    useEffect(() => {
+        if (highlighted) cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, [highlighted]);
+
+    return (
+    <div
+    ref={cardRef}
+    style={{
         background: 'linear-gradient(135deg, rgba(245,158,11,0.06), rgba(255,255,255,0.02))',
-        border: '1px solid rgba(245,158,11,0.15)',
+        border: highlighted ? '1px solid rgba(245,158,11,0.6)' : '1px solid rgba(245,158,11,0.15)',
         borderRadius: '1rem', padding: '1.25rem 1.5rem',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1.5rem',
         flexWrap: 'wrap', transition: 'all 0.2s ease',
         position: 'relative', overflow: 'hidden',
+        boxShadow: highlighted ? '0 0 0 3px rgba(245,158,11,0.2), 0 8px 24px rgba(245,158,11,0.2)' : 'none',
     }}
     onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(245,158,11,0.3)'; e.currentTarget.style.background = 'linear-gradient(135deg, rgba(245,158,11,0.09), rgba(255,255,255,0.03))'; }}
     onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(245,158,11,0.15)'; e.currentTarget.style.background = 'linear-gradient(135deg, rgba(245,158,11,0.06), rgba(255,255,255,0.02))'; }}
@@ -71,6 +81,7 @@ const InvoiceCard = memo(({ invoice, onView, onConvert }) => (
             >👁️ View</button>
         </div>
     </div>
-));
+    );
+});
 
 export default InvoiceCard;

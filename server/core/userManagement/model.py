@@ -61,13 +61,13 @@ class CustomerCreateRequest(BaseModel):
 
     @field_validator('phoneNumber')
     def validate_phoneNumber(cls, v: str):
-        # Accept UAE (+971), international (+XXX), or local formats
+        # Accept international (+XXX) or local formats
         # Minimum 7 digits after stripping symbols; max 15 (E.164)
         digits = re.sub(r'[\s\-\(\)\+]', '', v)
         if not digits.isdigit() or not (7 <= len(digits) <= 15):
             raise ValueError(
-                'Invalid phone number. Use UAE format (+971 5X XXX XXXX) '
-                'or any valid international number.'
+                'Invalid phone number. Use international format (e.g. +1 555 000 0000) '
+                'or a valid local number.'
             )
         return v
             

@@ -33,6 +33,7 @@ export const ProductProvider = ({ children }) => {
 
         return rawProducts.map(p => {
             const cat = catMap.get(p.category_id);
+            const unit = p.unit || 'ft';
             const feVariants = p.variants ? p.variants.map(v => ({
                 id: v.variantId,
                 variantId: v.variantId,
@@ -45,20 +46,36 @@ export const ProductProvider = ({ children }) => {
                 length: v.length ?? null,
                 width: v.width ?? null,
                 height: v.height ?? null,
+                unitQuantity: v.unit_quantity ?? null,
+                unit,
             })) : [];
 
-            let priceFull = p.price_full || 0;
-            let priceHalf = p.price_half || 0;
-            let priceFoot = p.price_unit || 0;
+            const applicableAttributes = p.applicable_attributes || [];
+            const hasDimensions = p.has_dimensions || false;
 
-            // If variable product with no root price, derive from first variant
+            // Real attribute key -> distinct-value-list map, aggregated from the variants
+            // themselves (list-type AND custom-type attributes alike, e.g. Color/Length/unit).
+            // Sales calculators (Profile/Dynamic/Glass) use this to know which attributes are
+            // selectable for a product — it must reflect actual variant data, not a guess.
+            const attributeValueSets = {};
+            feVariants.forEach(v => {
+                Object.entries(v.attributes || {}).forEach(([key, val]) => {
+                    if (val === undefined || val === null || val === '') return;
+                    if (!attributeValueSets[key]) attributeValueSets[key] = new Set();
+                    attributeValueSets[key].add(val);
+                });
+            });
+            const variantAttributes = Object.fromEntries(
+                Object.entries(attributeValueSets).map(([k, set]) => [k, Array.from(set)])
+            );
+
+            // Price/dimensions live only on variants now — derive a representative display value.
+            let priceFull = 0, priceHalf = 0, priceFoot = 0;
             if (feVariants.length > 0) {
-                // Find first variant with a price, or default to first variant
                 const representative = feVariants.find(v => v.price > 0) || feVariants[0];
-
-                if (priceFull === 0) priceFull = representative.price || 0;
-                if (priceHalf === 0) priceHalf = representative.priceHalf || 0;
-                if (priceFoot === 0) priceFoot = representative.priceUnit || 0;
+                priceFull = representative.price || 0;
+                priceHalf = representative.priceHalf || 0;
+                priceFoot = representative.priceUnit || 0;
             }
 
             const totalStock = p.stock_quantity || 0;
@@ -73,13 +90,13 @@ export const ProductProvider = ({ children }) => {
                 priceHalf: priceHalf,
                 priceFoot: priceFoot,
                 trackOffcuts: p.trackOffcuts || p.track_offcuts || false,
-                width: p.width ?? null,
-                height: p.height ?? null,
+                unit,
                 stock: totalStock,
                 image: p.image_url || 'https://placehold.co/300x200/CCCCCC/FFFFFF?text=Product',
                 variants: feVariants,
-                attributes: { Length: p.description ? [p.description] : [] },
-                length: p.length || null
+                attributes: variantAttributes,
+                applicableAttributes,
+                hasDimensions,
             };
         });
     };
@@ -155,23 +172,20 @@ export const ProductProvider = ({ children }) => {
                 itemCode: productData.itemCode,
                 category_id: dbCategoryId || 1,
                 sub_category: productData.subCategory,
-                price_full: parseFloat(productData.priceFull || 0),
-                price_half: parseFloat(productData.priceHalf || 0),
-                price_unit: parseFloat(productData.priceFoot || 0),
-                stock: parseInt(productData.stock || 0),
-                length: parseFloat(productData.length || 0),
-                width: productData.width ? parseFloat(productData.width) : null,
-                height: productData.height ? parseFloat(productData.height) : null,
                 trackOffcuts: productData.trackOffcuts || false,
+                unit: productData.unit || 'ft',
+                applicable_attributes: productData.applicableAttributes || [],
+                has_dimensions: !!productData.hasDimensions,
                 variants: productData.variants ? productData.variants.map(v => ({
                     attributes: v.attributes,
                     stock_quantity: parseInt(v.stock || 0),
                     price: parseFloat(v.price || 0),
                     price_half: v.details ? parseFloat(v.details.priceHalf || 0) : 0,
                     price_unit: v.details ? parseFloat(v.details.priceUnit || 0) : 0,
-                    length: v.length ? parseFloat(v.length) : (productData.length ? parseFloat(productData.length) : null),
+                    length: v.length ? parseFloat(v.length) : null,
                     width: v.width ? parseFloat(v.width) : null,
                     height: v.height ? parseFloat(v.height) : null,
+                    unit_quantity: v.unitQuantity != null ? parseFloat(v.unitQuantity) : null,
                 })) : []
             };
 
@@ -199,10 +213,9 @@ export const ProductProvider = ({ children }) => {
             const payload = {
                 name: updatedProduct.name,
                 itemCode: updatedProduct.itemCode,
-                price_full: updatedProduct.priceFull,
                 trackOffcuts: updatedProduct.trackOffcuts,
+                unit: updatedProduct.unit,
             };
-            if (updatedProduct.length != null) payload.length = updatedProduct.length;
             await api.productService.update(updatedProduct.id, payload);
             await refreshProducts();
         } catch (err) {
@@ -233,6 +246,30 @@ export const ProductProvider = ({ children }) => {
         }
     }, [refreshProducts]);
 
+    // Adds one or more variants to an existing product in a single request.
+    // `variantsData` items use the same frontend shape produced by the Add Product
+    // matrix generator: { attributes, stock, price, details: {priceHalf, priceUnit}, length, width, unitQuantity }.
+    const addProductVariants = useCallback(async (productId, variantsData) => {
+        try {
+            const payload = variantsData.map(v => ({
+                attributes: v.attributes,
+                stock_quantity: parseInt(v.stock || 0),
+                price: parseFloat(v.price || 0),
+                price_half: v.details ? parseFloat(v.details.priceHalf || 0) : 0,
+                price_unit: v.details ? parseFloat(v.details.priceUnit || 0) : 0,
+                length: v.length ? parseFloat(v.length) : null,
+                width: v.width ? parseFloat(v.width) : null,
+                unit_quantity: v.unitQuantity != null ? parseFloat(v.unitQuantity) : null,
+            }));
+            await api.productService.addVariantsBulk(productId, payload);
+            await refreshProducts();
+            return true;
+        } catch (err) {
+            console.error("Failed to add variants", err);
+            throw err;
+        }
+    }, [refreshProducts]);
+
     const updateProductVariant = useCallback(async (variantId, updateData) => {
         try {
             await api.productService.updateVariant(variantId, updateData);
@@ -254,9 +291,10 @@ export const ProductProvider = ({ children }) => {
         updateProduct,
         addCategory,
         addProductVariant,
+        addProductVariants,
         updateProductVariant,
         refreshProducts: initializeData
-    }), [products, categories, loading, error, addProduct, deleteProduct, updateProduct, addCategory, addProductVariant, updateProductVariant, initializeData]);
+    }), [products, categories, loading, error, addProduct, deleteProduct, updateProduct, addCategory, addProductVariant, addProductVariants, updateProductVariant, initializeData]);
 
     return (
         <ProductContext.Provider value={value}>

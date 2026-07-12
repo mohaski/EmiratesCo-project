@@ -34,16 +34,10 @@ def create_product(
         if db.exec(query).first():
             raise HTTPException(status_code=400, detail="Product with this name or code already exists")
 
-        # 2. Determine Mode
-        has_variants = len(product_data.variants) > 0
-        initial_stock = 0
-        
-        if not has_variants:
-            # Simple Product: Use provided stock
-            initial_stock = product_data.stock or 0
-        else:
-            # Variable Product: Stock is sum of variants
-            initial_stock = sum(v.stock_quantity for v in product_data.variants)
+        # 2. Every product must have at least one variant — price/stock/dimensions live there.
+        if not product_data.variants:
+            raise HTTPException(status_code=400, detail="Product must have at least one variant")
+        initial_stock = sum(v.stock_quantity for v in product_data.variants)
 
         # 3. Create Product Entity
         new_product = Product(
@@ -53,46 +47,44 @@ def create_product(
             sub_category=product_data.sub_category,
             description=product_data.description,
             image_url=product_data.image_url,
-            price_full=product_data.price_full,
-            price_half=product_data.price_half,
-            price_unit=product_data.price_unit,
-            length=product_data.length,
-            width=product_data.width,
-            height=product_data.height,
 
             track_offcuts=product_data.trackOffcuts,
             alarm_quantity=product_data.alarm_quantity,
+            unit=product_data.unit,
 
-            has_variants=has_variants,
+            applicable_attributes=product_data.applicable_attributes,
+            has_dimensions=product_data.has_dimensions,
+
+            has_variants=True,
             stock_quantity=initial_stock
         )
         db.add(new_product)
         db.flush() # Generate ID but stay in transaction
         db.refresh(new_product)
-        
-        # 4. Create Variants (Only if Variable Mode)
-        if has_variants:
-            for v_data in product_data.variants:
-                # Generate Name
-                v_name = " - ".join(str(v) for v in v_data.attributes.values())
-                
-                new_variant = Variant(
-                    product_id=new_product.productId,
-                    name=v_name,
-                    attributes=v_data.attributes,
-                    stock_quantity=v_data.stock_quantity,
-                    price=v_data.price,
-                    price_half=v_data.price_half,
-                    price_unit=v_data.price_unit,
-                    length=v_data.length,
-                    width=v_data.width,
-                    height=v_data.height,
-                )
-                db.add(new_variant)
-            
+
+        # 4. Create Variants
+        for v_data in product_data.variants:
+            # Generate Name
+            v_name = " - ".join(str(v) for v in v_data.attributes.values())
+
+            new_variant = Variant(
+                product_id=new_product.productId,
+                name=v_name,
+                attributes=v_data.attributes,
+                stock_quantity=v_data.stock_quantity,
+                price=v_data.price,
+                price_half=v_data.price_half,
+                price_unit=v_data.price_unit,
+                length=v_data.length,
+                width=v_data.width,
+                height=v_data.height,
+                unit_quantity=v_data.unit_quantity,
+            )
+            db.add(new_variant)
+
         db.commit()
 
-        logger.info(f"Product created: {new_product.name} (Simple: {not has_variants})")
+        logger.info(f"Product created: {new_product.name} ({len(product_data.variants)} variant(s))")
         return model.ProductCreateResponse(message="Product created successfully", id=new_product.productId)
 
     except HTTPException:
@@ -191,6 +183,7 @@ def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session 
             length=variant_data.length,
             width=variant_data.width,
             height=variant_data.height,
+            unit_quantity=variant_data.unit_quantity,
         )
         db.add(variant)
         
@@ -208,6 +201,52 @@ def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session 
     except Exception as e:
         db.rollback()
         logger.error(f"Add Variant Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+def add_variants_bulk(product_id: int, variants_data: List[model.VariantCreate], db: Session = Depends(get_session)):
+    """Create multiple variants for a product in a single transaction (used by the
+    'Add Variant' matrix generator, which can produce more than one variant at once)."""
+    try:
+        product = db.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+        if not variants_data:
+            raise HTTPException(status_code=400, detail="At least one variant is required")
+
+        created = []
+        total_stock = 0.0
+        for variant_data in variants_data:
+            final_name = " - ".join(str(v) for v in variant_data.attributes.values())
+            variant = Variant(
+                product_id=product_id,
+                name=final_name,
+                attributes=variant_data.attributes,
+                stock_quantity=variant_data.stock_quantity,
+                price=variant_data.price,
+                price_half=variant_data.price_half,
+                price_unit=variant_data.price_unit,
+                length=variant_data.length,
+                width=variant_data.width,
+                height=variant_data.height,
+                unit_quantity=variant_data.unit_quantity,
+            )
+            db.add(variant)
+            created.append(variant)
+            total_stock += variant_data.stock_quantity
+
+        product.has_variants = True
+        product.stock_quantity = (product.stock_quantity or 0) + total_stock
+        db.add(product)
+
+        db.commit()
+        for v in created:
+            db.refresh(v)
+        return created
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Add Variants Bulk Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Session = Depends(get_session), current_user=None):
@@ -235,6 +274,9 @@ def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Sessio
 
         if update_data.height is not None:
              variant.height = update_data.height
+
+        if update_data.unit_quantity is not None:
+             variant.unit_quantity = update_data.unit_quantity
 
         # 2. Update Stock (Delta)
         if update_data.stock_change is not None:

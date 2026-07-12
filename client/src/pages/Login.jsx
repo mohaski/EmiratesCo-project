@@ -310,7 +310,7 @@ export default function Login() {
                         Secure access powered by EmiratesCo Platform
                     </p>
                     <p style={{ fontSize: '0.68rem', color: '#1e293b', marginTop: '0.25rem' }}>
-                        v2.0 · Dubai, UAE
+                        v2.0
                     </p>
                 </div>
             </div>

@@ -82,7 +82,7 @@ def get_all_users(
     Get all users. Requires authentication.
     """
     from utils import require_role
-    require_role(["ceo", "admin", "seniorCashier"], current_user)
+    require_role(["ceo", "admin", "manager"], current_user)
     return userService.get_users(db)
 
 @router.get("/{user_id}", response_model=model.userDetailsResponse)

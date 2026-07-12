@@ -4,6 +4,7 @@ from sqlmodel import Session
 from db.database import get_session
 from core.userManagement.authService import get_current_user
 from ws.manager import manager
+from utils import require_role
 from . import model, orderService, orderItemService
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -29,21 +30,11 @@ async def create_order(
 def get_orders(
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_session)
-):
-    return orderService.get_all_orders(db, skip, limit)
-
-
-@router.get("/store-view", response_model=List[model.StoreOrderResponse])
-def get_store_orders(
-    status: str = "confirmed",
-    skip: int = 0,
-    limit: int = 50,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user),
+    current_user = Depends(get_current_user)
 ):
-    """Confirmed orders with only profile/glass items, enriched with offcut data."""
-    return orderService.get_store_orders(db, status, skip, limit)
+    require_role(["manager", "ceo", "admin"], current_user)
+    return orderService.get_all_orders(db, skip, limit)
 
 
 @router.get("/audit/history", response_model=List[model.EditHistoryResponse])
@@ -75,8 +66,10 @@ def get_orders_by_customer(
 @router.get("/{order_id}", response_model=model.OrderResponse)
 def get_order(
     order_id: int,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
 ):
+    require_role(["manager", "cashier", "ceo", "admin"], current_user)
     return orderService.get_order_by_orderId(order_id, db)
 
 
@@ -92,20 +85,6 @@ async def edit_order(
     result = orderService.update_order(order_id, order_data, db, current_user)
     background_tasks.add_task(manager.broadcast, "orders_updated")
     background_tasks.add_task(manager.broadcast, "products_updated")
-    return result
-
-
-@router.put("/{order_id}/items/{item_id}/reassign-offcut", response_model=model.OffcutReassignResponse)
-async def reassign_item_offcut(
-    order_id: int,
-    item_id: int,
-    body: model.OffcutReassignRequest,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_session),
-    current_user = Depends(get_current_user),
-):
-    result = orderService.reassign_item_offcut(db, order_id, item_id, body, current_user)
-    background_tasks.add_task(manager.broadcast, "orders_updated")
     return result
 
 
@@ -132,6 +111,21 @@ async def update_workflow_status(
 ):
     result = orderService.update_order_status(order_id, new_status, db, current_user)
     background_tasks.add_task(manager.broadcast, "orders_updated")
+    return result
+
+
+@router.put("/{order_id}/cancel", response_model=model.OrderStatusUpdateResponse)
+async def cancel_order(
+    order_id: int,
+    body: model.OrderCancelRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Cancel an order — requires the CEO-configured PIN. Restores stock/offcuts."""
+    result = orderService.cancel_order_with_pin(order_id, body.pin, db, current_user)
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    background_tasks.add_task(manager.broadcast, "products_updated")
     return result
 
 

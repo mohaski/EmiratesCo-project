@@ -210,7 +210,7 @@ const CeoDashboard = () => {
         { icon: '🧾', title: 'Order #1847 confirmed',      desc: 'Glass 12mm — KSH 2,400',  time: '2m ago',  color: '#3b82f6' },
         { icon: '💳', title: 'Payment received',           desc: 'Customer: Al Rashid Corp', time: '15m ago', color: '#22c55e' },
         { icon: '📦', title: 'Stock alert: Low inventory', desc: '6mm Clear Glass < 10 units', time: '1h ago',  color: '#f59e0b' },
-        { icon: '👤', title: 'New customer registered',    desc: 'Dubai Contracting LLC',    time: '2h ago',  color: '#a855f7' },
+        { icon: '👤', title: 'New customer registered',    desc: 'Al Fahim Contracting LLC', time: '2h ago',  color: '#a855f7' },
         { icon: '🔧', title: 'Order #1839 completed',      desc: 'Ready for pickup',         time: '3h ago',  color: '#22c55e' },
     ];
 

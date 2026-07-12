@@ -1,6 +1,6 @@
 import { useOrders } from '../context/OrderContext';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import logo from '../assets/logo.png';
 import { useProducts } from '../context/ProductContext';
 import InvoiceItemRow from '../components/invoices/InvoiceItemRow';
@@ -34,13 +34,21 @@ export default function InvoiceReviewPage() {
     const { subtotal, tax, total } = useCartTotals(cartItems, enableTax);
     const totals = useMemo(() => ({ grandTotal: subtotal, vat: tax, total }), [subtotal, tax, total]);
 
+    const [isSaving, setIsSaving] = useState(false);
+    const alreadySaved = Boolean(savedInvoice);
+
     const handleSave = async () => {
-        if (!customer || cartItems.length === 0) return;
+        // savedInvoice means we're viewing a previously-persisted invoice — re-saving
+        // would create a duplicate row (the backend has no dedup of its own).
+        // isSaving guards against a second click firing before the first request resolves.
+        if (!customer || cartItems.length === 0 || alreadySaved || isSaving) return;
+        setIsSaving(true);
         try {
             await addInvoice({ customer, items: cartItems, totals, enableTax });
             navigate('/orders');
         } catch (err) {
             console.error('Failed to save invoice:', err);
+            setIsSaving(false);
         }
     };
 
@@ -70,22 +78,25 @@ export default function InvoiceReviewPage() {
             {/* Action Bar */}
             <div className="print-hidden" style={{ maxWidth: '210mm', margin: '0 auto 1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                    <button onClick={() => navigate('/invoice', { state: { mode: 'edit', enableTax } })} style={{
+                    <button onClick={() => alreadySaved
+                        ? navigate('/orders', { state: { activeTab: 'invoices', highlightId: savedInvoice.id } })
+                        : navigate('/invoice', { state: { mode: 'edit', enableTax } })} style={{
                         display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)',
                         borderRadius: '0.75rem', padding: '0.5rem 1rem', color: '#94a3b8', cursor: 'pointer', fontWeight: 600, fontSize: '0.82rem', transition: 'all 0.15s',
                     }}
                     onMouseEnter={e => { e.currentTarget.style.color = '#f1f5f9'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
                     onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)'; }}>
-                        ← Back to Edit
+                        {alreadySaved ? '← Back to Order History' : '← Back to Edit'}
                     </button>
                     <div style={{ display: 'flex', gap: '0.75rem' }}>
-                        <button onClick={handleSave} style={{
+                        <button onClick={handleSave} disabled={alreadySaved || isSaving} style={{
                             padding: '0.625rem 1.5rem', borderRadius: '0.75rem', border: '1px solid rgba(255,255,255,0.12)',
-                            background: 'rgba(255,255,255,0.07)', color: '#e2e8f0', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', transition: 'all 0.15s',
+                            background: 'rgba(255,255,255,0.07)', color: '#e2e8f0', fontWeight: 700, fontSize: '0.82rem',
+                            cursor: (alreadySaved || isSaving) ? 'not-allowed' : 'pointer', opacity: (alreadySaved || isSaving) ? 0.5 : 1, transition: 'all 0.15s',
                         }}
-                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; }}
+                        onMouseEnter={e => { if (!alreadySaved && !isSaving) e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}>
-                            💾 Save as Draft
+                            {alreadySaved ? '✓ Saved' : isSaving ? 'Saving...' : '💾 Save as Draft'}
                         </button>
                         <button onClick={handlePrint} style={{
                             padding: '0.625rem 1.5rem', borderRadius: '0.75rem', border: 'none',
@@ -115,7 +126,6 @@ export default function InvoiceReviewPage() {
                             <div>
                                 <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a', margin: '0 0 2px', letterSpacing: '-0.02em' }}>EmiratesCo</h1>
                                 <p style={{ fontSize: '0.82rem', color: '#64748b', fontWeight: 600, margin: '0 0 4px' }}>Aluminium & Glass</p>
-                                <p style={{ fontSize: '0.72rem', color: '#94a3b8', margin: 0 }}>Dubai, UAE</p>
                             </div>
                         </div>
                         <div style={{ textAlign: 'right' }}>
@@ -171,7 +181,7 @@ export default function InvoiceReviewPage() {
                                 </div>
                                 {enableTax && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.625rem' }}>
-                                        <span style={{ fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>VAT (5%)</span>
+                                        <span style={{ fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>VAT (16%)</span>
                                         <span style={{ fontSize: '0.82rem', color: '#1e293b', fontFamily: 'monospace', fontWeight: 600 }}>KSH {totals.vat.toFixed(2)}</span>
                                     </div>
                                 )}
@@ -185,7 +195,7 @@ export default function InvoiceReviewPage() {
 
                     {/* Footer */}
                     <div style={{ marginTop: 'auto', paddingTop: '3rem', borderTop: '1px solid #f1f5f9', textAlign: 'center' }}>
-                        <p style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Thank you for your business · EmiratesCo Aluminium & Glass · Dubai, UAE</p>
+                        <p style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Thank you for your business · EmiratesCo Aluminium & Glass</p>
                     </div>
                 </div>
             </div>

@@ -28,6 +28,9 @@ class Variant(SQLModel, table=True):
     width: Optional[float] = Field(default=None)   # Sheet width (glass)
     height: Optional[float] = Field(default=None)  # Sheet height (glass)
 
+    # Numeric quantity carried by a "custom" attribute value (e.g. 1000 for "1000pcs")
+    unit_quantity: Optional[float] = Field(default=None)
+
     # Relationships
     product: "Product" = Relationship(back_populates="variants")
     orderItems: List["OrderItem"] = Relationship(back_populates="variant") 

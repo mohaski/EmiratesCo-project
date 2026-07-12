@@ -6,10 +6,10 @@ import { useOrders } from '../context/OrderContext';
 import { useCartTotals } from '../hooks/useCartTotals';
 
 /* ── Review Item Card ── */
-const ReviewItemCard = memo(({ item, index }) => (
+const ReviewItemCard = memo(({ item, index, onRemove }) => (
     <div style={{
         display: 'grid',
-        gridTemplateColumns: '1fr auto auto',
+        gridTemplateColumns: onRemove ? '1fr auto auto auto' : '1fr auto auto',
         gap: '1rem',
         padding: '1.25rem 1.5rem',
         borderBottom: '1px solid rgba(255,255,255,0.05)',
@@ -71,6 +71,16 @@ const ReviewItemCard = memo(({ item, index }) => (
                 KSH {item.totalPrice?.toFixed(2)}
             </div>
         </div>
+
+        {/* Remove */}
+        {onRemove && (
+            <button onClick={() => onRemove(index)} title="Remove item" style={{
+                background: 'none', border: 'none', cursor: 'pointer', color: '#475569',
+                fontSize: '1.1rem', padding: '0.25rem', lineHeight: 1, transition: 'color 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = '#f87171'; }}
+            onMouseLeave={e => { e.currentTarget.style.color = '#475569'; }}>×</button>
+        )}
     </div>
 ));
 
@@ -108,11 +118,17 @@ export default function CheckoutPage() {
     const editOrderId = mode === 'edit' ? (location.state?.orderData?.id ?? location.state?.orderData?.orderId ?? null) : null;
     // When arriving from invoice-convert or link mode, items & customer come via navigation state
     const fromInvoice = Boolean(location.state?.cartItems);
-    const cartItems = fromInvoice ? location.state.cartItems : ctxCartItems;
+    // Local + mutable so items can be removed right here without losing the sourceInvoiceId
+    // connection (which lives in this page's own closure/state, not in CartContext).
+    const [cartItems, setCartItems] = useState(() => fromInvoice ? location.state.cartItems : ctxCartItems);
     const customer = fromInvoice ? location.state.customer : ctxCustomer;
     const enableTax = location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled;
     const parentOrderId = location.state?.parentOrderId ?? null;
     const sourceInvoiceId = location.state?.sourceInvoiceId ?? null;
+
+    const removeItem = useCallback((index) => {
+        setCartItems(prev => prev.filter((_, i) => i !== index));
+    }, []);
 
     const [loading, setLoading] = useState(false);
     const [paymentError, setPaymentError] = useState(null);
@@ -219,22 +235,40 @@ export default function CheckoutPage() {
                 <div style={{ maxWidth: '780px', margin: '0 auto' }}>
 
                     {/* Back nav */}
-                    <button
-                        onClick={() => navigate('/sales', { state: { enableTax } })}
-                        style={{
-                            display: 'flex', alignItems: 'center', gap: '0.5rem',
-                            background: 'none', border: 'none', cursor: 'pointer',
-                            color: '#475569', fontSize: '0.8rem', fontWeight: 600,
-                            letterSpacing: '0.06em', textTransform: 'uppercase',
-                            marginBottom: '2rem',
-                            transition: 'color 0.2s ease',
-                        }}
-                        onMouseEnter={e => { e.currentTarget.style.color = '#94a3b8'; }}
-                        onMouseLeave={e => { e.currentTarget.style.color = '#475569'; }}
-                    >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
-                        Back to Sales
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <button
+                            onClick={() => sourceInvoiceId
+                                ? navigate('/orders', { state: { activeTab: 'invoices', highlightId: sourceInvoiceId } })
+                                : navigate('/sales', { state: { enableTax, mode: 'back' } })}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                background: 'none', border: 'none', cursor: 'pointer',
+                                color: '#475569', fontSize: '0.8rem', fontWeight: 600,
+                                letterSpacing: '0.06em', textTransform: 'uppercase',
+                                transition: 'color 0.2s ease',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.color = '#94a3b8'; }}
+                            onMouseLeave={e => { e.currentTarget.style.color = '#475569'; }}
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+                            {sourceInvoiceId ? 'Back to Order History' : 'Back to Sales'}
+                        </button>
+
+                        {sourceInvoiceId && (
+                            <button
+                                onClick={() => navigate('/sales', { state: { mode: 'convert', cartItems, customer, sourceInvoiceId, enableTax } })}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                    background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
+                                    borderRadius: '0.75rem', padding: '0.5rem 1rem',
+                                    color: '#fbbf24', cursor: 'pointer', fontWeight: 700, fontSize: '0.78rem',
+                                    transition: 'all 0.15s',
+                                }}
+                                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(245,158,11,0.16)'; }}
+                                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(245,158,11,0.08)'; }}
+                            >✏️ Add / Edit Items</button>
+                        )}
+                    </div>
 
                     {/* Page header */}
                     <div style={{ marginBottom: '2rem' }}>
@@ -245,6 +279,11 @@ export default function CheckoutPage() {
                             {mode === 'edit' && (
                                 <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.625rem', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: '100px', color: '#fbbf24', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
                                     Edit Mode
+                                </span>
+                            )}
+                            {sourceInvoiceId && (
+                                <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.625rem', background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: '100px', color: '#60a5fa', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                                    From Invoice #{String(sourceInvoiceId).slice(-6)}
                                 </span>
                             )}
                         </div>
@@ -263,7 +302,7 @@ export default function CheckoutPage() {
                         {/* Table header */}
                         <div style={{
                             display: 'grid',
-                            gridTemplateColumns: '1fr auto auto',
+                            gridTemplateColumns: '1fr auto auto auto',
                             gap: '1rem',
                             padding: '0.875rem 1.5rem',
                             background: 'rgba(255,255,255,0.02)',
@@ -272,10 +311,11 @@ export default function CheckoutPage() {
                             <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Item Description</span>
                             <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em', textTransform: 'uppercase', minWidth: '180px' }}>Breakdown</span>
                             <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'right' }}>Total</span>
+                            <span />
                         </div>
 
                         {cartItems.map((item, idx) => (
-                            <ReviewItemCard key={`${item.id}-${idx}`} item={item} index={idx} />
+                            <ReviewItemCard key={`${item.id}-${idx}`} item={item} index={idx} onRemove={removeItem} />
                         ))}
 
                         {/* Summary row */}

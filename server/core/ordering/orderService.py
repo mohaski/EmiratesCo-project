@@ -9,20 +9,15 @@ from sqlmodel import Session, select
 
 from entities.orders import Order
 from entities.orderItems import OrderItem
-from entities.products import Product, Category
+from entities.products import Product
 from entities.variants import Variant
-from entities.offcuts import Offcut
 from entities.editHistory import EditHistory
 from entities.invoices import Invoice
 from db.database import get_session
 from loggiing import logger
 from utils import require_role
 from ..userManagement.authService import get_current_user
-from ..inventory.inventoryService import (
-    deduct_stock_for_order_item,
-    restore_specific_offcut_sources,
-    apply_specific_offcut_sources,
-)
+from ..inventory.inventoryService import deduct_stock_for_order_item
 from . import model
 from typing import List
 
@@ -146,6 +141,11 @@ def _calculate_complex_item_total(
         else:
             variant = db.get(Variant, item_req.variantId)
 
+    # Pricing/length now live only on the variant. Every product is required to have
+    # at least one, so resolve a variant even if the request didn't specify one.
+    if variant is None:
+        variant = db.exec(select(Variant).where(Variant.product_id == product.productId)).first()
+
     # 2. Check for Complex Line Items
     details = item_req.details or {}
     line_items = details.get("lineItems")
@@ -163,34 +163,27 @@ def _calculate_complex_item_total(
             rate = Decimal("0.00")
             
             if "full" in l_type:
-                # Use Product Full Price
-                rate = Decimal(product.price_full)
-                if rate == 0: 
+                # Use Variant Full Price
+                rate = Decimal(variant.price) if variant and variant.price else Decimal("0")
+                if rate == 0:
                      rate = Decimal(line.get("rate", 0))
 
             elif "half" in l_type:
-                # Use Product Half Price
-                rate = Decimal(product.price_half or 0)
-                if rate == 0: 
+                # Use Variant Half Price
+                rate = Decimal(variant.price_half) if variant and variant.price_half else Decimal("0")
+                if rate == 0:
                      rate = Decimal(line.get("rate", 0))
 
             elif "cut" in l_type:
                 if "glass" in l_type or "area" in meta:
                     # Glass: area (sqft) × price per sqft → piece price
                     area = Decimal(str(meta.get("area", 0)))
-                    sqft_price = Decimal(str(product.price_unit or 0))
-                    if variant and variant.price_unit:
-                        sqft_price = Decimal(str(variant.price_unit))
+                    sqft_price = Decimal(str(variant.price_unit)) if variant and variant.price_unit else Decimal("0")
                     rate = (area * sqft_price) if sqft_price > 0 else Decimal(str(line.get("rate", 0)))
                 else:
                     # Profile / accessory cut: length (ft) × price per foot → line total
                     length = Decimal(str(meta.get("length", 0)))
-                    # Prefer variant price_unit, fall back to product price_unit
-                    unit_price = Decimal("0")
-                    if variant and variant.price_unit:
-                        unit_price = Decimal(str(variant.price_unit))
-                    elif product.price_unit:
-                        unit_price = Decimal(str(product.price_unit))
+                    unit_price = Decimal(str(variant.price_unit)) if variant and variant.price_unit else Decimal("0")
 
                     if length > 0 and unit_price > 0:
                         rate = length * unit_price
@@ -219,20 +212,12 @@ def _calculate_complex_item_total(
         
     else:
         # --- Simple Calculation ---
-        # Prefer Variant Price -> Product Price -> Request Unit Price (Legacy/Trust)
+        # Prefer Variant Price -> Request Unit Price (Legacy/Trust)
         price = Decimal(item_req.unitPrice) # Default to trust if no DB match
-        
+
         if variant and variant.price > 0:
             price = Decimal(variant.price)
-        elif product.price_full > 0 and not product.price_unit:
-             # Fallback to full price if it's a "whole" item sale?
-             # Depends on unitType. 
-             pass
-             
-        # Just use the simple logic we had before
-        if variant and variant.price > 0:
-            price = Decimal(variant.price)
-            
+
         return Decimal(item_req.quantity) * price
 
 
@@ -250,7 +235,7 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
     """
     try:
         # 🔐 Ensure user has privilege to create
-        require_role(["seniorCashier", "juniorCashier", "ceo", "admin"], current_user)
+        require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
         # 1. Validate source invoice (if converting) before touching anything
         source_inv = None
@@ -326,7 +311,7 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
             calculated_subtotal += item_total
 
         # 3. Apply Financials to Order
-        discount_val = Decimal(order_data.discount or 0)
+        discount_val = Decimal(str(order_data.discount or 0))
         net_subtotal = calculated_subtotal - discount_val
         if net_subtotal < 0: net_subtotal = Decimal("0.00")
 
@@ -336,9 +321,13 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         else:
             final_total = net_subtotal
 
+        amount_paid_val = Decimal(str(order_data.amountPaid or 0))
+        raw_balance = final_total - amount_paid_val
+        new_balance = raw_balance if raw_balance > Decimal("0.10") else Decimal("0.00")
+
         new_order.subtotal = float(net_subtotal)
         new_order.total = float(final_total)
-        new_order.balance = float(final_total - Decimal(order_data.amountPaid))
+        new_order.balance = float(new_balance)
 
         db.add(new_order)
 
@@ -635,7 +624,7 @@ def update_order(
     from entities.products import Product
     from entities.variants import Variant
 
-    require_role(["seniorCashier", "juniorCashier", "ceo", "admin"], current_user)
+    require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
     order = db.get(Order, order_id)
     if not order:
@@ -852,7 +841,7 @@ def update_order_payment_status(
     """
     try:
         # 🔐 Ensure user has privilege to update
-        require_role(["seniorCashier", "juniorCashier", "ceo", "admin"], current_user)
+        require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
         order = db.get(Order, order_id)
         if not order:
@@ -876,6 +865,23 @@ def update_order_payment_status(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _restore_and_cancel(db: Session, order: Order) -> None:
+    """
+    Restore stock/offcuts for every item on an order and flip it to cancelled.
+    Idempotent — a no-op if the order is already cancelled, so callers can't
+    accidentally double-restore stock by cancelling twice.
+    """
+    from core.inventory.inventoryService import restore_stock_for_order_item
+
+    if order.status == "cancelled":
+        return
+    items = db.exec(select(OrderItem).where(OrderItem.order_id == order.orderId)).all()
+    for item in items:
+        restore_stock_for_order_item(db, item)
+    order.status = "cancelled"
+    db.add(order)
+
+
 def update_order_status(
     order_id: int,
     new_status: str,
@@ -884,9 +890,16 @@ def update_order_status(
 ) -> model.OrderStatusUpdateResponse:
     """
     Update the workflow status of an existing order (pending → confirmed → ready → completed).
+    Cancelling an order is a separate, PIN-protected action — see cancel_order_with_pin.
     """
     try:
-        require_role(["seniorCashier", "juniorCashier", "ceo", "admin", "storeManager"], current_user)
+        require_role(["manager", "cashier", "ceo", "admin"], current_user)
+
+        if new_status == "cancelled":
+            raise HTTPException(
+                status_code=400,
+                detail="Cancelling an order requires the cancel PIN — use PUT /orders/{id}/cancel instead.",
+            )
 
         order = db.get(Order, order_id)
         if not order:
@@ -909,234 +922,42 @@ def update_order_status(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-# ---------------------------------------------------------------------------
-# Store-manager order view
-# ---------------------------------------------------------------------------
-
-_STORE_CATEGORY_TYPES = {"ke-profile", "tz-profile", "glass"}
-
-
-def get_store_orders(
-    db: Session,
-    status_filter: str = "confirmed",
-    skip: int = 0,
-    limit: int = 50,
-) -> List[model.StoreOrderResponse]:
-    """
-    Returns orders (filtered by status) that contain profile or glass items.
-    Each item is enriched with its canonical category and—for cut lines on
-    offcut-tracked products—the list of available offcuts for reassignment.
-    """
-    if status_filter == "all":
-        stmt = (
-            select(Order)
-            .where(Order.status.in_(["confirmed", "pending", "processing"]))
-            .order_by(Order.created_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
-    else:
-        stmt = (
-            select(Order)
-            .where(Order.status == status_filter)
-            .order_by(Order.created_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
-
-    orders = db.exec(stmt).all()
-    result = []
-
-    for order in orders:
-        store_items = []
-        for item in order.orderItems:
-            product = db.get(Product, item.product_id)
-            if not product:
-                continue
-
-            cat = db.get(Category, product.category_id) if product.category_id else None
-            cat_type = (cat.type if cat else "") or ""
-
-            if cat_type not in _STORE_CATEGORY_TYPES:
-                continue  # skip accessories
-
-            canonical = "profile" if "profile" in cat_type else "glass"
-
-            details = item.details or {}
-            line_items = details.get("lineItems", [])
-            # Flag actual custom cuts — type contains "cut" but not "full"
-            # Handles 'profile-cut', 'cut', 'cut-custom', etc.
-            has_cuts = any(
-                "cut" in li.get("type", "").lower() and "full" not in li.get("type", "").lower()
-                for li in line_items
-            )
-
-            # Gather available offcuts (only relevant for cut-tracked profiles)
-            available_offcuts: List[model.OffcutInfo] = []
-            if has_cuts and product.track_offcuts:
-                oc_stmt = (
-                    select(Offcut)
-                    .where(
-                        Offcut.product_id == product.productId,
-                        Offcut.quantity > 0,
-                    )
-                    .order_by(Offcut.length.asc())
-                )
-                if item.variant_id:
-                    oc_stmt = oc_stmt.where(Offcut.variant_id == item.variant_id)
-                else:
-                    oc_stmt = oc_stmt.where(Offcut.variant_id == None)  # noqa: E711
-                for oc in db.exec(oc_stmt).all():
-                    available_offcuts.append(
-                        model.OffcutInfo(offcutId=oc.offcutId, length=oc.length, quantity=oc.quantity)
-                    )
-
-            variant = db.get(Variant, item.variant_id) if item.variant_id else None
-
-            store_items.append(model.StoreItemResponse(
-                item_id=item.item_id,
-                product_id=item.product_id,
-                product_name=product.name,
-                variant_id=item.variant_id,
-                variant_name=variant.name if variant else None,
-                category=canonical,
-                details=item.details,
-                available_offcuts=available_offcuts,
-                has_cuts=has_cuts,
-                track_offcuts=product.track_offcuts,
-            ))
-
-        if not store_items:
-            continue  # skip orders with no profile/glass items
-
-        result.append(model.StoreOrderResponse(
-            order=_order_to_shallow_response(order),
-            store_items=store_items,
-        ))
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Store-manager offcut reassignment (concurrency-safe)
-# ---------------------------------------------------------------------------
-
-def reassign_item_offcut(
-    db: Session,
+def cancel_order_with_pin(
     order_id: int,
-    item_id: int,
-    request: model.OffcutReassignRequest,
-    current_user,
-) -> model.OffcutReassignResponse:
+    pin: str,
+    db: Session = Depends(get_session),
+    current_user=Depends(get_current_user)
+) -> model.OrderStatusUpdateResponse:
     """
-    Let a store manager swap which offcuts fulfill a cut line in an order item.
-
-    Concurrency safety: apply_specific_offcut_sources uses SELECT FOR UPDATE so
-    two concurrent requests cannot double-consume the same offcut row.
+    Cancel an order from Order History. Requires the CEO-configured 4-digit PIN.
+    Restores stock/offcuts for every item; idempotent if already cancelled.
     """
-    require_role(["storeManager", "ceo", "admin"], current_user)
+    from core.settings.service import verify_cancel_pin, cancel_pin_is_configured
 
     try:
+        require_role(["manager", "cashier", "ceo", "admin"], current_user)
+
+        if not cancel_pin_is_configured(db):
+            raise HTTPException(
+                status_code=400,
+                detail="No cancel PIN has been set up yet. Ask the CEO to configure one.",
+            )
+        if not verify_cancel_pin(db, pin):
+            raise HTTPException(status_code=403, detail="Incorrect PIN.")
+
         order = db.get(Order, order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
-        item = db.exec(
-            select(OrderItem)
-            .where(OrderItem.item_id == item_id, OrderItem.order_id == order_id)
-        ).first()
-        if not item:
-            raise HTTPException(status_code=404, detail="Order item not found")
-
-        details = item.details or {}
-        line_items = details.get("lineItems", [])
-
-        if request.cut_line_index >= len(line_items):
-            raise HTTPException(status_code=400, detail="cut_line_index out of range")
-
-        cut_line = line_items[request.cut_line_index]
-        l_type = cut_line.get("type", "")
-        if "cut" not in l_type and "half" not in l_type:
-            raise HTTPException(status_code=400, detail="Specified line is not a cut/half type")
-
-        # Required length per piece × number of pieces
-        meta = cut_line.get("meta", {})
-        cut_len = float(meta.get("length", 0))
-        qty = int(cut_line.get("qty", 1))
-        required_total = round(cut_len * qty, 4)
-        if required_total <= 0:
-            raise HTTPException(status_code=400, detail="Cut line has no length")
-
-        product = db.get(Product, item.product_id)
-        if not product:
-            raise HTTPException(status_code=404, detail="Product not found")
-        if not product.track_offcuts:
-            raise HTTPException(status_code=400, detail="Product does not track offcuts")
-
-        variant = db.get(Variant, item.variant_id) if item.variant_id else None
-
-        # Snapshot before
-        old_sources = cut_line.get("offcut_sources", [])
-
-        # 1. Undo original allocation
-        restore_specific_offcut_sources(db, product, variant, old_sources)
-
-        # 2. Apply new manager-chosen allocation (SELECT FOR UPDATE inside)
-        new_sources_raw = [
-            {"offcut_id": s.offcut_id, "length_used": s.length_used}
-            for s in request.new_sources
-        ]
-        applied = apply_specific_offcut_sources(
-            db, product, variant, new_sources_raw, required_total
-        )
-
-        # 3. Persist updated sources into item.details
-        cut_line["offcut_sources"] = applied
-        line_items[request.cut_line_index] = cut_line
-        item.details = {**details, "lineItems": line_items}
-        db.add(item)
-
-        # 4. Audit log
-        history = EditHistory(
-            entity_type="order_item_offcut",
-            entity_id=item_id,
-            edited_by=current_user.userId,
-            action="offcut_reassign",
-            before_snapshot={
-                "order_id": order_id,
-                "item_id": item_id,
-                "cut_line_index": request.cut_line_index,
-                "required_total": required_total,
-                "old_sources": old_sources,
-            },
-            after_snapshot={
-                "order_id": order_id,
-                "item_id": item_id,
-                "cut_line_index": request.cut_line_index,
-                "required_total": required_total,
-                "new_sources": applied,
-            },
-            notes=request.notes,
-        )
-        db.add(history)
+        _restore_and_cancel(db, order)
         db.commit()
+        db.refresh(order)
 
-        logger.info(
-            f"Offcut reassigned on order {order_id} item {item_id} "
-            f"cut_line {request.cut_line_index} by {current_user.userId}"
-        )
-        return model.OffcutReassignResponse(
-            message="Offcut assignment updated successfully",
-            new_sources=applied,
-        )
-
+        logger.info(f"Order {order_id} cancelled (PIN-verified) by {current_user.userId}.")
+        return model.OrderStatusUpdateResponse(message=f"Order {order_id} cancelled.")
     except HTTPException:
-        db.rollback()
         raise
-    except ValueError as e:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         db.rollback()
-        logger.error(f"Error reassigning offcut: {e}", exc_info=True)
+        logger.error(f"Error cancelling order {order_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")

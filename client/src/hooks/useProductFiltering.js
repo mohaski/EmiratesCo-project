@@ -3,7 +3,7 @@ import { useProducts } from '../context/ProductContext';
 
 export const PROFILE_COLORS = [
     { name: 'White', hex: '#FFFFFF' },
-    { name: 'Bronze', hex: '#8B4513' },
+    { name: 'Brown', hex: '#8B4513' },
     { name: 'Silver', hex: '#C0C0C0' },
     { name: 'Grey', hex: '#808080' }
 ];

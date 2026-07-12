@@ -18,7 +18,7 @@ def deduct_stock_for_order_item(db: Session, item: OrderItem) -> None:
       - Otherwise                        → simple quantity deduction from details.quantity
 
     For cut lines on offcut-tracked products, offcut_sources is recorded in each
-    lineItem dict so the store manager can later reassign which offcuts fulfill the cut.
+    lineItem dict for later restoration if the order is edited or cancelled.
     """
     product = db.get(Product, item.product_id)
     if not product:
@@ -89,7 +89,13 @@ def _process_line_items(
                 continue
 
             if track:
-                _process_cut_with_offcuts(db, product, variant, cut_len, qty, full_len, line)
+                manual_selection = line.get("offcut_selection")
+                if manual_selection:
+                    line["offcut_sources"] = apply_manual_cut_selection(
+                        db, product, variant, manual_selection, cut_len * qty, full_len
+                    )
+                else:
+                    _process_cut_with_offcuts(db, product, variant, cut_len, qty, full_len, line)
             else:
                 _deduct_full_stock(db, product, variant, qty)
 
@@ -109,9 +115,22 @@ def _process_line_items(
 def _get_full_length(product: Product, variant: Optional[Variant] = None) -> float:
     if variant and variant.length:
         return float(variant.length)
-    if product.length:
-        return float(product.length)
     return 0.0
+
+
+def _lock_variant(db: Session, variant: Variant) -> Variant:
+    """Re-fetch a variant with SELECT ... FOR UPDATE so concurrent deductions
+    against the same row block instead of racing (lost-update prevention)."""
+    return db.exec(
+        select(Variant).where(Variant.variantId == variant.variantId).with_for_update()
+    ).first()
+
+
+def _lock_product(db: Session, product: Product) -> Product:
+    """Re-fetch a product with SELECT ... FOR UPDATE — see _lock_variant."""
+    return db.exec(
+        select(Product).where(Product.productId == product.productId).with_for_update()
+    ).first()
 
 
 def _deduct_full_stock(
@@ -120,8 +139,10 @@ def _deduct_full_stock(
     variant: Optional[Variant],
     qty: int,
 ) -> None:
-    """Deduct whole units. Validates stock first. Syncs parent total when deducting a variant."""
+    """Deduct whole units. Locks the row first to prevent concurrent oversell,
+    validates stock, then syncs parent total when deducting a variant."""
     if variant:
+        variant = _lock_variant(db, variant)
         if variant.stock_quantity < qty:
             raise ValueError(
                 f"Insufficient stock for '{variant.name or product.name}'. "
@@ -130,9 +151,11 @@ def _deduct_full_stock(
         variant.stock_quantity -= qty
         db.add(variant)
         # Keep parent product total in sync
+        product = _lock_product(db, product)
         product.stock_quantity = max(0, (product.stock_quantity or 0) - qty)
         db.add(product)
     else:
+        product = _lock_product(db, product)
         if product.stock_quantity < qty:
             raise ValueError(
                 f"Insufficient stock for '{product.name}'. "
@@ -148,8 +171,10 @@ def _deduct_simple_stock(
     variant: Optional[Variant],
     qty: float,
 ) -> None:
-    """Deduct fractional or integer units. Validates stock first. Syncs parent total."""
+    """Deduct fractional or integer units. Locks the row first to prevent
+    concurrent oversell, validates stock, then syncs parent total."""
     if variant:
+        variant = _lock_variant(db, variant)
         if variant.stock_quantity < qty:
             raise ValueError(
                 f"Insufficient stock for '{variant.name or product.name}'. "
@@ -157,9 +182,11 @@ def _deduct_simple_stock(
             )
         variant.stock_quantity -= qty
         db.add(variant)
+        product = _lock_product(db, product)
         product.stock_quantity = max(0, (product.stock_quantity or 0) - qty)
         db.add(product)
     else:
+        product = _lock_product(db, product)
         if product.stock_quantity < qty:
             raise ValueError(
                 f"Insufficient stock for '{product.name}'. "
@@ -170,6 +197,96 @@ def _deduct_simple_stock(
 
 
 # ── Offcut best-fit algorithm ─────────────────────────────────────────────────
+
+def _fulfill_one_cut_via_best_fit(
+    db: Session,
+    product: Product,
+    variant: Optional[Variant],
+    required_length: float,
+    full_length: float,
+) -> dict:
+    """
+    Fulfil a single cut of required_length:
+      1. Find the shortest available offcut that is >= required_length.
+      2. If found  → consume it, create a remainder offcut if significant.
+      3. If not    → consume 1 whole from stock, create a remainder offcut.
+
+    Returns a single source dict (same shape as an offcut_sources entry).
+    Raises ValueError if required_length exceeds full_length and no offcut fits.
+    """
+    stmt = (
+        select(Offcut)
+        .where(
+            Offcut.product_id == product.productId,
+            Offcut.length >= required_length,
+            Offcut.quantity > 0,
+        )
+        .order_by(Offcut.length.asc())  # smallest fit first → least waste
+        .with_for_update()  # prevent two concurrent cuts from claiming the same offcut
+    )
+    if variant:
+        stmt = stmt.where(Offcut.variant_id == variant.variantId)
+    else:
+        stmt = stmt.where(Offcut.variant_id == None)  # noqa: E711
+
+    best_offcut = db.exec(stmt).first()
+
+    if best_offcut:
+        # ── Use the offcut ────────────────────────────────────────────────
+        oc_id = best_offcut.offcutId
+        oc_len = best_offcut.length
+        best_offcut.quantity -= 1
+        remainder = round(oc_len - required_length, 4)
+        if best_offcut.quantity == 0:
+            db.delete(best_offcut)
+        else:
+            db.add(best_offcut)
+
+        if remainder > 0.01:
+            _upsert_offcut(db, product, variant, remainder)
+
+        return {
+            "source": "offcut",
+            "offcut_id": oc_id,
+            "offcut_length": oc_len,
+            "length_used": required_length,
+            "remainder_created": remainder if remainder > 0.01 else 0,
+        }
+
+    # ── No offcut fits — fall back to consuming a whole bar ────────────────
+    if full_length <= 0:
+        logger.warning(
+            f"Product {product.productId} has no full length; "
+            "deducting 1 whole without creating a remainder offcut."
+        )
+        _deduct_full_stock(db, product, variant, 1)
+        return {
+            "source": "full_bar",
+            "offcut_id": None,
+            "offcut_length": 0,
+            "length_used": required_length,
+            "remainder_created": 0,
+        }
+
+    if required_length > full_length:
+        raise ValueError(
+            f"Cut length {required_length} exceeds full bar length {full_length} "
+            f"for product '{product.name}'"
+        )
+
+    _deduct_full_stock(db, product, variant, 1)
+    remainder = round(full_length - required_length, 4)
+    if remainder > 0.01:
+        _upsert_offcut(db, product, variant, remainder)
+
+    return {
+        "source": "full_bar",
+        "offcut_id": None,
+        "offcut_length": full_length,
+        "length_used": required_length,
+        "remainder_created": remainder if remainder > 0.01 else 0,
+    }
+
 
 def _process_cut_with_offcuts(
     db: Session,
@@ -182,94 +299,18 @@ def _process_cut_with_offcuts(
 ) -> None:
     """
     Best-fit algorithm for cut-piece deduction (only called when track_offcuts=True).
+    Fulfils qty_cuts separate cuts of required_length, each via _fulfill_one_cut_via_best_fit.
 
-    For each cut needed:
-      1. Find the shortest available offcut that is >= required_length.
-      2. If found  → consume it, create a remainder offcut if significant.
-      3. If not    → consume 1 whole from stock, create a remainder offcut.
-
-    If line_item_dict is provided, records offcut_sources list into it so the
-    store manager can later reassign which offcuts fulfill each cut.
+    If line_item_dict is provided, records offcut_sources list into it for
+    later restoration if the order is edited or cancelled.
     """
     if required_length <= 0:
         return
 
-    sources = []
-
-    for _ in range(qty_cuts):
-        stmt = (
-            select(Offcut)
-            .where(
-                Offcut.product_id == product.productId,
-                Offcut.length >= required_length,
-                Offcut.quantity > 0,
-            )
-            .order_by(Offcut.length.asc())  # smallest fit first → least waste
-        )
-        if variant:
-            stmt = stmt.where(Offcut.variant_id == variant.variantId)
-        else:
-            stmt = stmt.where(Offcut.variant_id == None)  # noqa: E711
-
-        best_offcut = db.exec(stmt).first()
-
-        if best_offcut:
-            # ── Use the offcut ────────────────────────────────────────────
-            oc_id = best_offcut.offcutId
-            oc_len = best_offcut.length
-            best_offcut.quantity -= 1
-            remainder = round(oc_len - required_length, 4)
-            if best_offcut.quantity == 0:
-                db.delete(best_offcut)
-            else:
-                db.add(best_offcut)
-
-            if remainder > 0.01:
-                _upsert_offcut(db, product, variant, remainder)
-
-            sources.append({
-                "source": "offcut",
-                "offcut_id": oc_id,
-                "offcut_length": oc_len,
-                "length_used": required_length,
-                "remainder_created": remainder if remainder > 0.01 else 0,
-            })
-
-        else:
-            # ── Fall back to consuming a whole bar ────────────────────────
-            if full_length <= 0:
-                logger.warning(
-                    f"Product {product.productId} has no full length; "
-                    "deducting 1 whole without creating a remainder offcut."
-                )
-                _deduct_full_stock(db, product, variant, 1)
-                sources.append({
-                    "source": "full_bar",
-                    "offcut_id": None,
-                    "offcut_length": 0,
-                    "length_used": required_length,
-                    "remainder_created": 0,
-                })
-                continue
-
-            if required_length > full_length:
-                raise ValueError(
-                    f"Cut length {required_length} exceeds full bar length {full_length} "
-                    f"for product '{product.name}'"
-                )
-
-            _deduct_full_stock(db, product, variant, 1)
-            remainder = round(full_length - required_length, 4)
-            if remainder > 0.01:
-                _upsert_offcut(db, product, variant, remainder)
-
-            sources.append({
-                "source": "full_bar",
-                "offcut_id": None,
-                "offcut_length": full_length,
-                "length_used": required_length,
-                "remainder_created": remainder if remainder > 0.01 else 0,
-            })
+    sources = [
+        _fulfill_one_cut_via_best_fit(db, product, variant, required_length, full_length)
+        for _ in range(qty_cuts)
+    ]
 
     if line_item_dict is not None:
         line_item_dict["offcut_sources"] = sources
@@ -373,7 +414,7 @@ def _remove_offcut(db, product, variant, length: float) -> None:
         Offcut.product_id == product.productId,
         Offcut.length >= length - 0.01,
         Offcut.length <= length + 0.01,
-    )
+    ).with_for_update()
     if variant:
         stmt = stmt.where(Offcut.variant_id == variant.variantId)
     else:
@@ -429,30 +470,22 @@ def restore_specific_offcut_sources(
             _remove_offcut(db, product, variant, remainder)
 
 
-def apply_specific_offcut_sources(
+def _consume_offcut_sources(
     db: Session,
     product: Product,
     variant: Optional[Variant],
-    new_sources: list,
-    required_total_length: float,
+    sources: list,
 ) -> list:
     """
-    Consume manager-specified offcuts for a cut.  Uses SELECT FOR UPDATE to
+    Consume a list of caller-specified offcuts.  Uses SELECT FOR UPDATE to
     prevent concurrent double-use of the same offcut.
 
-    new_sources: list of {"offcut_id": int, "length_used": float}
+    sources: list of {"offcut_id": int, "length_used": float}
     Returns: list of recorded source dicts (same shape as offcut_sources).
-    Raises ValueError if any offcut is unavailable or totals don't match.
+    Raises ValueError if any offcut is unavailable or too short.
     """
-    total = sum(float(s["length_used"]) for s in new_sources)
-    if abs(total - required_total_length) > 0.02:
-        raise ValueError(
-            f"Selected offcut lengths ({total:.2f} ft) must equal "
-            f"the required cut ({required_total_length:.2f} ft)"
-        )
-
     result = []
-    for s in new_sources:
+    for s in sources:
         oc_id = int(s["offcut_id"])
         length_used = float(s["length_used"])
 
@@ -494,6 +527,42 @@ def apply_specific_offcut_sources(
     return result
 
 
+def apply_manual_cut_selection(
+    db: Session,
+    product: Product,
+    variant: Optional[Variant],
+    selected_sources: list,
+    required_total_length: float,
+    full_length: float,
+) -> list:
+    """
+    Consume cashier-specified offcuts for a cut at order-creation time.
+    selected_sources may fall short of required_total_length — any shortfall
+    is fulfilled the same way as the automatic path (_fulfill_one_cut_via_best_fit):
+    an existing offcut that fits the shortfall (exact or larger) is used first;
+    only if none fits does it fall back to a fresh full bar.
+
+    selected_sources: list of {"offcut_id": int, "length_used": float}
+    Returns: list of recorded source dicts (same shape as offcut_sources).
+    Raises ValueError if over-selected, an offcut is unavailable, or the
+    shortfall can't be covered by a single fresh bar.
+    """
+    selected_total = sum(float(s["length_used"]) for s in selected_sources)
+    if selected_total > required_total_length + 0.02:
+        raise ValueError(
+            f"Selected offcut lengths ({selected_total:.2f} ft) exceed "
+            f"the required cut ({required_total_length:.2f} ft)"
+        )
+
+    result = _consume_offcut_sources(db, product, variant, selected_sources)
+
+    shortfall = round(required_total_length - selected_total, 4)
+    if shortfall > 0.01:
+        result.append(_fulfill_one_cut_via_best_fit(db, product, variant, shortfall, full_length))
+
+    return result
+
+
 def _upsert_offcut(
     db: Session,
     product: Product,
@@ -508,7 +577,7 @@ def _upsert_offcut(
         Offcut.product_id == product.productId,
         Offcut.length >= length - 0.001,
         Offcut.length <= length + 0.001,
-    )
+    ).with_for_update()
     if variant:
         stmt = stmt.where(Offcut.variant_id == variant.variantId)
     else:

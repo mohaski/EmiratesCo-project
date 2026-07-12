@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
+import OffcutSelectorModal from './OffcutSelectorModal';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -47,6 +48,8 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
     });
     const [fullLengtherror, setfullLengtherror] = useState(null);
     const [cuterror, setcuterror] = useState(null);
+    const [offcutSelection, setOffcutSelection] = useState(initialDetails?.offcutSelection || null);
+    const [showOffcutModal, setShowOffcutModal] = useState(false);
 
     useEffect(() => {
         setExtraSelections(prev => {
@@ -81,6 +84,16 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
         return { priceFull: product.priceFull || 0, priceHalf: product.priceHalf || 0, priceFoot: product.priceFoot || 0, availableStock: product.stock || 0 };
     }, [product, color, extraSelections]);
 
+    // Clear a stale offcut selection if the required length or variant it was picked for changes
+    const prevCutKey = useRef(`${feet}|${pricing.variantId}`);
+    useEffect(() => {
+        const key = `${feet}|${pricing.variantId}`;
+        if (prevCutKey.current !== key) {
+            prevCutKey.current = key;
+            setOffcutSelection(null);
+        }
+    }, [feet, pricing.variantId]);
+
     useEffect(() => {
         let isValid = true;
         if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setfullLengtherror(`Only ${pricing.availableStock} full lengths available`); isValid = false; }
@@ -91,13 +104,17 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
         const lineItems = [];
         if (fullQty > 0) lineItems.push({ type: 'profile-full', label: 'Full Length', qty: fullQty, rate: pricing.priceFull, total: fullQty * pricing.priceFull, meta: { length: extraSelections['Length'] } });
         if (halfQty > 0) lineItems.push({ type: 'profile-half', label: 'Half Length', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { length: extraSelections['Length'] } });
-        if (feet > 0) lineItems.push({ type: 'profile-cut', label: `Custom Cut (${feet}ft)`, qty: 1, rate: pricing.priceFoot, total: feet * pricing.priceFoot, meta: { length: feet, unit: 'ft' } });
+        if (feet > 0) {
+            const cutLine = { type: 'profile-cut', label: `Custom Cut (${feet}ft)`, qty: 1, rate: pricing.priceFoot, total: feet * pricing.priceFoot, meta: { length: feet, unit: 'ft' } };
+            if (offcutSelection && offcutSelection.length > 0) cutLine.offcut_selection = offcutSelection;
+            lineItems.push(cutLine);
+        }
         const attributes = [];
         if (color) attributes.push({ label: 'Color', value: color });
         if (extraSelections['Length']) attributes.push({ label: 'Length', value: extraSelections['Length'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Length' && key !== 'Color') attributes.push({ label: key, value: val }); });
-        onUpdate(total, { lineItems, attributes, full: fullQty, half: halfQty, feet, color: color || 'White', extras: extraSelections, variantId: pricing.variantId, isValid });
-    }, [fullQty, halfQty, feet, pricing, color, extraSelections, onUpdate]);
+        onUpdate(total, { lineItems, attributes, full: fullQty, half: halfQty, feet, color: color || 'White', extras: extraSelections, variantId: pricing.variantId, offcutSelection, isValid });
+    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, onUpdate]);
 
     const handleExtraChange = (key, val) => setExtraSelections(prev => ({ ...prev, [key]: val }));
     const chipBtn = (active) => ({
@@ -172,8 +189,40 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
                     </div>
                     <p style={{ fontSize: '0.68rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', margin: '0.375rem 0 0', textAlign: 'right' }}>KSH{pricing.priceFoot}/ft</p>
                     {cuterror && <p style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700, margin: '4px 0 0', animation: 'pulse 1.5s ease-in-out infinite' }}>{cuterror}</p>}
+
+                    {product.trackOffcuts && feet > 0 && (
+                        <div style={{ marginTop: '0.625rem', paddingTop: '0.625rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                            {offcutSelection && offcutSelection.length > 0 ? (
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                    <span style={{ fontSize: '0.68rem', color: '#4ade80', fontFamily: 'var(--font-mono)' }}>
+                                        {offcutSelection.map(s => `${parseFloat(s.length_used).toFixed(1)}ft`).join(' + ')}
+                                        {offcutSelection.reduce((s, o) => s + (parseFloat(o.length_used) || 0), 0) < feet - 0.01 ? ' + auto-fill rest' : ' ✓'}
+                                    </span>
+                                    <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+                                        <button onClick={() => setShowOffcutModal(true)} style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '0.68rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Edit</button>
+                                        <button onClick={() => setOffcutSelection(null)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '0.68rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Clear</button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <button onClick={() => setShowOffcutModal(true)} style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+                                    🔍 Choose offcuts for this cut
+                                </button>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
+
+            {showOffcutModal && (
+                <OffcutSelectorModal
+                    productId={product.id}
+                    variantId={pricing.variantId ?? null}
+                    requiredLength={feet}
+                    initialSelection={offcutSelection}
+                    onConfirm={setOffcutSelection}
+                    onClose={() => setShowOffcutModal(false)}
+                />
+            )}
         </div>
     );
 });

@@ -11,3 +11,4 @@ build/
 uploads/
 .pytest_cache/
 .mypy_cache/
+backups/

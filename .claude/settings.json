@@ -6,7 +6,19 @@
       "Bash(python -c \"import secrets; print\\(secrets.token_hex\\(32\\)\\)\")",
       "PowerShell(& \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\.venv\\\\Scripts\\\\python.exe\" -c \"import websockets; print\\(websockets.__version__\\)\" 2>&1)",
       "PowerShell(& \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\.venv\\\\Scripts\\\\pip.exe\" list 2>&1)",
-      "PowerShell(findstr -i \"websocket\\\\|uvicorn\\\\|starlette\\\\|fastapi\")"
+      "PowerShell(findstr -i \"websocket\\\\|uvicorn\\\\|starlette\\\\|fastapi\")",
+      "Bash(npx eslint *)",
+      "Bash(npx vite *)",
+      "Bash(python migrate_variant_unit_quantity.py)",
+      "Bash(python -c ' *)",
+      "Bash(python migrate_product_variant_attributes.py)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), f\\) for f in ['entities/products.py','core/inventory/products/model.py','core/inventory/products/service.py','core/inventory/products/controller.py','migrate_product_variant_attributes.py']]; print\\('OK'\\)\")",
+      "Bash(python migrate_add_product_unit.py)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\)\\) for f in ['entities/products.py','core/inventory/products/model.py','core/inventory/products/service.py']]; print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('core/ordering/controller.py'\\).read\\(\\)\\)\")",
+      "Bash(node -e \"require\\('@babel/core'\\)\")",
+      "Bash(python migrate_rename_roles.py)",
+      "Bash(python migrate_create_settings.py)"
     ]
   }
 }

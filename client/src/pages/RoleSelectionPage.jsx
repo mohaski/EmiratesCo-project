@@ -13,8 +13,8 @@ const roles = [
         gradient: 'linear-gradient(135deg, #f59e0b, #d97706)',
     },
     {
-        id: 'senior',
-        title: 'Senior Cashier',
+        id: 'manager',
+        title: 'Manager',
         description: 'Manage sales, inventory, orders, and view full reports.',
         icon: '💼',
         accent: '#3b82f6',
@@ -22,23 +22,14 @@ const roles = [
         gradient: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
     },
     {
-        id: 'junior',
-        title: 'Junior Cashier',
+        id: 'cashier',
+        title: 'Cashier',
         description: 'Process sales transactions and view basic dashboard.',
         icon: '🧾',
         accent: '#22c55e',
         accentRgb: '34,197,94',
         gradient: 'linear-gradient(135deg, #22c55e, #16a34a)',
     },
-    {
-        id: 'store_manager',
-        title: 'Store Manager',
-        description: 'Oversee active orders and manage workshop preparation.',
-        icon: '🏭',
-        accent: '#a855f7',
-        accentRgb: '168,85,247',
-        gradient: 'linear-gradient(135deg, #a855f7, #7c3aed)',
-    }
 ];
 
 export default function RoleSelectionPage() {
@@ -128,7 +119,7 @@ export default function RoleSelectionPage() {
                 </div>
 
                 <p style={{ textAlign: 'center', marginTop: '2.5rem', fontSize: '0.72rem', color: '#1e293b', fontWeight: 500 }}>
-                    © 2025 EmiratesCo Aluminium & Glass · Dubai, UAE
+                    © 2025 EmiratesCo Aluminium & Glass
                 </p>
             </div>
         </div>

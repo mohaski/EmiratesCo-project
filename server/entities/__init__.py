@@ -2,6 +2,7 @@ from .users import User
 from .customers import Customer
 from .products import Product
 from .variants import Variant
+from .attributes import AttributeClass, AttributeValue
 from .invoices import Invoice      # Must be before Order (Order has FK → invoices)
 from .orders import Order
 from .orderItems import OrderItem
@@ -10,12 +11,15 @@ from .payments import Payment
 from .credits import Credit
 from .messages import Message, MessageRecipient
 from .editHistory import EditHistory
+from .settings import SystemSetting
 
 __all__ = [
     "User",
     "Customer",
     "Product",
     "Variant",
+    "AttributeClass",
+    "AttributeValue",
     "Invoice",
     "Order",
     "OrderItem",
@@ -25,4 +29,5 @@ __all__ = [
     "Message",
     "MessageRecipient",
     "EditHistory",
+    "SystemSetting",
 ]

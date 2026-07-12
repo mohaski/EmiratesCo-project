@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
 import AddStockModal from '../components/inventory/AddStockModal';
 
-const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Bronze', 'Grey', 'Matt Black'];
+const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Brown', 'Grey', 'Matt Black'];
 const GLASS_THICKNESSES = ['4mm', '6mm', '8mm', '10mm', '12mm'];
 
 export default function InventoryPage() {

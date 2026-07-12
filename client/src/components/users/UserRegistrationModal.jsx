@@ -3,7 +3,7 @@ import api from '../../services/api';
 
 const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
     const [formData, setFormData] = useState({
-        firstName: '', secondName: '', username: '', role: 'juniorCashier', email: '', phoneNumber: ''
+        firstName: '', secondName: '', username: '', role: 'cashier', email: '', phoneNumber: ''
     });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -20,7 +20,7 @@ const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
             await api.userService.register({ ...formData, password: '1234', firstLogin: false });
             setSuccess('User registered! Default password is "1234".');
             if (onSuccess) onSuccess();
-            setFormData({ firstName: '', secondName: '', username: '', role: 'juniorCashier', email: '', phoneNumber: '' });
+            setFormData({ firstName: '', secondName: '', username: '', role: 'cashier', email: '', phoneNumber: '' });
             setTimeout(() => { onClose(); setSuccess(''); }, 2000);
         } catch (err) {
             setError(err.response?.data?.detail || 'Registration failed. Please try again.');
@@ -92,21 +92,20 @@ const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
 
                         <div>
                             <label style={labelStyle}>Email Address</label>
-                            <input type="email" name="email" required value={formData.email} onChange={handleChange} placeholder="john.doe@emirates.co" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
+                            <input type="email" name="email" required value={formData.email} onChange={handleChange} placeholder="john.doe@example.com" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
                         </div>
 
                         <div>
                             <label style={labelStyle}>Phone Number</label>
-                            <input type="tel" name="phoneNumber" required value={formData.phoneNumber} onChange={handleChange} placeholder="+971 50 000 0000" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
+                            <input type="tel" name="phoneNumber" required value={formData.phoneNumber} onChange={handleChange} placeholder="+1 555 000 0000" style={inputStyle} onFocus={onFocus} onBlur={onBlur} />
                         </div>
 
                         <div>
                             <label style={labelStyle}>Assign Role</label>
                             <select name="role" value={formData.role} onChange={handleChange}
                                 style={{ ...inputStyle, cursor: 'pointer', appearance: 'none', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpath d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 0.875rem center' }}>
-                                <option value="juniorCashier">Junior Cashier</option>
-                                <option value="seniorCashier">Senior Cashier</option>
-                                <option value="storeManager">Store Manager</option>
+                                <option value="cashier">Cashier</option>
+                                <option value="manager">Manager</option>
                                 <option value="admin">Admin</option>
                                 <option value="ceo">CEO</option>
                             </select>

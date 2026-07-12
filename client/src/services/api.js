@@ -1,8 +1,13 @@
 import axios from 'axios';
 import { showToast, extractErrorMessage } from '../utils/toast';
 
-// Base URL configuration (Vite proxy or direct)
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// Base URL configuration.
+// - VITE_API_URL explicitly set (e.g. split deployment) always wins.
+// - Dev server (`npm run dev`) falls back to localhost:8000.
+// - Production build falls back to '' (same-origin) since the API is served
+//   from the same FastAPI process as the built frontend — this makes the
+//   build work unchanged from any LAN client, no IP baked in.
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '');
 
 // Create Axios Instance
 const api = axios.create({
@@ -82,12 +87,8 @@ export const OrderService = {
         const response = await api.get(`/orders/audit/history?${params}`);
         return response.data;
     },
-    getStoreOrders: async (status = 'confirmed', skip = 0, limit = 50) => {
-        const response = await api.get(`/orders/store-view?status=${status}&skip=${skip}&limit=${limit}`);
-        return response.data;
-    },
-    reassignOffcut: async (orderId, itemId, data) => {
-        const response = await api.put(`/orders/${orderId}/items/${itemId}/reassign-offcut`, data);
+    cancelOrder: async (id, pin) => {
+        const response = await api.put(`/orders/${id}/cancel`, { pin });
         return response.data;
     },
 };
@@ -129,6 +130,10 @@ export const ProductService = {
         const response = await api.post(`/products/${productId}/variants`, variantData);
         return response.data;
     },
+    addVariantsBulk: async (productId, variantsData) => {
+        const response = await api.post(`/products/${productId}/variants/bulk`, variantsData);
+        return response.data;
+    },
     updateVariant: async (variantId, updateData) => {
         const response = await api.put(`/products/variants/${variantId}`, updateData);
         return response.data;
@@ -143,6 +148,37 @@ export const ProductService = {
         const params = new URLSearchParams({ skip, limit });
         if (productId) params.append('product_id', productId);
         const response = await api.get(`/products/restock-history?${params}`);
+        return response.data;
+    },
+};
+
+export const AttributeService = {
+    getAll: async () => {
+        const response = await api.get('/attributes/');
+        return response.data;
+    },
+    createClass: async (name, type = 'list') => {
+        const response = await api.post('/attributes/', { name, type });
+        return response.data;
+    },
+    renameClass: async (classId, name) => {
+        const response = await api.put(`/attributes/${classId}`, { name });
+        return response.data;
+    },
+    deleteClass: async (classId) => {
+        const response = await api.delete(`/attributes/${classId}`);
+        return response.data;
+    },
+    addValue: async (classId, value) => {
+        const response = await api.post(`/attributes/${classId}/values`, { value });
+        return response.data;
+    },
+    renameValue: async (valueId, value) => {
+        const response = await api.put(`/attributes/values/${valueId}`, { value });
+        return response.data;
+    },
+    deleteValue: async (valueId) => {
+        const response = await api.delete(`/attributes/values/${valueId}`);
         return response.data;
     },
 };
@@ -274,12 +310,25 @@ export const MessagingService = {
     }
 };
 
+export const SettingsService = {
+    setCancelPin: async (pin) => {
+        const response = await api.put('/settings/cancel-pin', { pin });
+        return response.data;
+    },
+    getCancelPinStatus: async () => {
+        const response = await api.get('/settings/cancel-pin/status');
+        return response.data;
+    },
+};
+
 // Attach services to api instance for convenience
 api.orderService = OrderService;
 api.invoiceService = InvoiceService;
 api.productService = ProductService;
+api.attributeService = AttributeService;
 api.financialService = FinancialService;
 api.userService = UserService;
 api.messagingService = MessagingService;
+api.settingsService = SettingsService;
 
 export default api;

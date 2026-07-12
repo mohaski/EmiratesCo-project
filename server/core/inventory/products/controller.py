@@ -89,6 +89,18 @@ async def add_product_variant(
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result
 
+@router.post("/{product_id}/variants/bulk", response_model=List[model.VariantResponse])
+async def add_product_variants_bulk(
+    product_id: int,
+    variants_data: List[model.VariantCreate],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    result = service.add_variants_bulk(product_id, variants_data, db)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
 @router.put("/variants/{variant_id}", response_model=model.VariantResponse)
 async def update_variant(
     variant_id: int,
@@ -126,7 +138,7 @@ def get_restock_history(
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
-    """Restock audit log — accessible to seniorCashier, ceo, and admin."""
+    """Restock audit log — accessible to manager, ceo, and admin."""
     return service.get_restock_history(db, skip, limit, product_id)
 
 @router.get("/{product_id}/offcuts", response_model=List[model.OffcutResponse])

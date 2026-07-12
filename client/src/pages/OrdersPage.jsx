@@ -1,15 +1,33 @@
 import { useOrders } from '../context/OrderContext';
-import { useNavigate } from 'react-router-dom';
-import { useState, useCallback, useMemo, useDeferredValue } from 'react';
+import { useAuth } from '../context/AuthContext';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect, useCallback, useMemo, useDeferredValue } from 'react';
 import OrderCard from '../components/orders/OrderCard';
 import InvoiceCard from '../components/orders/InvoiceCard';
+import CancelOrderModal from '../components/orders/CancelOrderModal';
+import SetCancelPinModal from '../components/orders/SetCancelPinModal';
 
 export default function OrdersPage() {
     const navigate = useNavigate();
-    const { orders, invoices, loading, error, convertInvoiceToOrder, deleteOrder, deleteInvoice } = useOrders();
-    const [activeTab, setActiveTab] = useState('orders');
+    const location = useLocation();
+    const { user } = useAuth();
+    const { orders, invoices, loading, error, convertInvoiceToOrder, cancelOrder, deleteInvoice } = useOrders();
+    // Returning from View/Convert can ask to land back on the Invoices tab, on the
+    // exact card that was clicked — both come in via navigation state.
+    const [activeTab, setActiveTab] = useState(() => location.state?.activeTab || 'orders');
+    const [highlightId, setHighlightId] = useState(() => location.state?.highlightId ?? null);
     const [searchQuery, setSearchQuery] = useState('');
     const deferredQuery = useDeferredValue(searchQuery);
+    const [orderToCancel, setOrderToCancel] = useState(null);
+    const [showSetPin, setShowSetPin] = useState(false);
+    const canSetPin = user?.role === 'ceo' || user?.role === 'admin';
+
+    // Clear the highlight after a moment so it doesn't linger forever
+    useEffect(() => {
+        if (!highlightId) return;
+        const t = setTimeout(() => setHighlightId(null), 3000);
+        return () => clearTimeout(t);
+    }, [highlightId]);
 
     const groupItemsByDate = useCallback((items) => {
         const groups = {};
@@ -53,6 +71,22 @@ export default function OrdersPage() {
             navigate('/sales', { state: { mode: 'edit', orderData: order } });
         }
     }, [navigate]);
+    const handleCancelConfirm = useCallback(async (pin) => {
+        await cancelOrder(orderToCancel.id, pin);
+        setOrderToCancel(null);
+    }, [cancelOrder, orderToCancel]);
+
+    const handleViewOrder = useCallback(async (order) => {
+        try {
+            // List endpoint returns items=[]; fetch the full order for the summary view
+            const full = await import('../services/api').then(m => m.default.orderService.getOrder(order.id));
+            navigate('/orders/review', { state: { order: { ...full, id: full.orderId, customer: order.customer } } });
+        } catch (err) {
+            console.error('Failed to fetch order for summary view', err);
+            navigate('/orders/review', { state: { order } });
+        }
+    }, [navigate]);
+
     const handleViewInvoice = useCallback((invoice) => navigate('/invoice/review', { state: { invoice } }), [navigate]);
     const handleConvertInvoice = useCallback((invoice) => navigate('/checkout', {
         state: {
@@ -101,6 +135,15 @@ export default function OrdersPage() {
                     </div>
                     <p style={{ fontSize: '0.78rem', color: '#475569', margin: 0, marginLeft: '1.25rem', fontWeight: 500 }}>Track sales & manage quotations</p>
                 </div>
+
+                {canSetPin && (
+                    <button onClick={() => setShowSetPin(true)} style={{
+                        padding: '0.625rem 1rem', borderRadius: '0.75rem',
+                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                        color: '#94a3b8', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: '0.375rem', whiteSpace: 'nowrap',
+                    }}>🔐 Set Cancel PIN</button>
+                )}
 
                 <div style={{ position: 'relative', minWidth: '280px' }}>
                     <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: '#475569', fontSize: '0.875rem' }}>🔍</span>
@@ -160,7 +203,7 @@ export default function OrdersPage() {
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                                     {group.items.map(order => (
-                                        <OrderCard key={order.id} order={order} onAddTo={handleAddTo} onEdit={handleEdit} />
+                                        <OrderCard key={order.id} order={order} onAddTo={handleAddTo} onEdit={handleEdit} onCancel={setOrderToCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} />
                                     ))}
                                 </div>
                             </div>
@@ -183,7 +226,7 @@ export default function OrdersPage() {
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                                     {group.items.map(inv => (
-                                        <InvoiceCard key={inv.id} invoice={inv} onView={handleViewInvoice} onConvert={handleConvertInvoice} />
+                                        <InvoiceCard key={inv.id} invoice={inv} onView={handleViewInvoice} onConvert={handleConvertInvoice} highlighted={String(inv.id) === String(highlightId)} />
                                     ))}
                                 </div>
                             </div>
@@ -197,6 +240,17 @@ export default function OrdersPage() {
                     </div>
                 )}
             </div>
+
+            {orderToCancel && (
+                <CancelOrderModal
+                    order={orderToCancel}
+                    onClose={() => setOrderToCancel(null)}
+                    onConfirm={handleCancelConfirm}
+                />
+            )}
+            {showSetPin && (
+                <SetCancelPinModal onClose={() => setShowSetPin(false)} />
+            )}
         </div>
     );
 }

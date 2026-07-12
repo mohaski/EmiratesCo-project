@@ -51,13 +51,27 @@ export const CartProvider = ({ children }) => {
         }
     });
 
+    // What this cart is tied to, if anything — { type: 'convert', id: invoiceId } when
+    // converting a saved invoice, or { type: 'link', id: parentOrderId } when adding to an
+    // existing order. Persisted so the connection survives a Sales <-> Checkout round trip
+    // (each is a fresh page mount, so plain component state would lose it).
+    const [linkedRef, setLinkedRef] = useState(() => {
+        try {
+            const saved = localStorage.getItem('emirates_pos_linked_ref');
+            return saved ? JSON.parse(saved) : null;
+        } catch (e) {
+            return null;
+        }
+    });
+
     // 2. Auto-save to LocalStorage whenever state changes
     useEffect(() => {
         localStorage.setItem('emirates_pos_cart', JSON.stringify(cartItems));
         localStorage.setItem('emirates_pos_customer', JSON.stringify(customer));
         localStorage.setItem('emirates_pos_tax_enabled', JSON.stringify(taxEnabled));
         localStorage.setItem('emirates_pos_session_type', sessionType);
-    }, [cartItems, customer, taxEnabled, sessionType]);
+        localStorage.setItem('emirates_pos_linked_ref', JSON.stringify(linkedRef));
+    }, [cartItems, customer, taxEnabled, sessionType, linkedRef]);
 
     // Clear in-memory state when user logs out
     useEffect(() => {
@@ -65,6 +79,7 @@ export const CartProvider = ({ children }) => {
             setCartItems([]);
             setCustomer(null);
             setSessionType('sales');
+            setLinkedRef(null);
         };
         window.addEventListener('pos:logout', handleLogout);
         return () => window.removeEventListener('pos:logout', handleLogout);
@@ -91,6 +106,7 @@ export const CartProvider = ({ children }) => {
     const clearCart = useCallback(() => {
         setCartItems([]);
         setCustomer(null);
+        setLinkedRef(null);
         // We typically keep tax settings even after clearing
     }, []);
 
@@ -108,6 +124,8 @@ export const CartProvider = ({ children }) => {
         setTaxEnabled,
         sessionType,
         setSessionType,
+        linkedRef,
+        setLinkedRef,
         addToCart,
         updateCartItem,
         removeFromCart,

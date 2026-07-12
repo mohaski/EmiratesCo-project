@@ -30,7 +30,10 @@ echo.
 %NSSM% remove %SERVICE_NAME% confirm 2>nul
 
 :: Install service
-%NSSM% install %SERVICE_NAME% "%PYTHON%" "-m" "uvicorn" "main:app" "--host" "0.0.0.0" "--port" "8000" "--workers" "2"
+:: Single worker: the WebSocket broadcast manager (ws/manager.py) keeps
+:: connections in an in-process list, not shared across workers — with
+:: workers > 1, live-update pushes would miss clients on other workers.
+%NSSM% install %SERVICE_NAME% "%PYTHON%" "-m" "uvicorn" "main:app" "--host" "0.0.0.0" "--port" "8000" "--workers" "1"
 %NSSM% set %SERVICE_NAME% AppDirectory "%SERVER_DIR%"
 %NSSM% set %SERVICE_NAME% DisplayName "EmiratesCo API Server"
 %NSSM% set %SERVICE_NAME% Description "FastAPI backend for EmiratesCo Management System"

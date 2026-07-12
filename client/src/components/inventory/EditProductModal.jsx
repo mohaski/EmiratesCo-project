@@ -3,13 +3,13 @@ import { useProducts } from '../../context/ProductContext';
 
 export default function EditProductModal({ isOpen, onClose, product }) {
     const { updateProduct } = useProducts();
-    const [form, setForm] = useState({ name: '', length: '', trackOffcuts: false });
+    const [form, setForm] = useState({ name: '', trackOffcuts: false, unit: 'ft' });
 
     useEffect(() => {
         if (product) setForm({
             name: product.name || '',
-            length: product.length ?? '',
             trackOffcuts: product.trackOffcuts || false,
+            unit: product.unit || 'ft',
         });
     }, [product]);
 
@@ -17,8 +17,7 @@ export default function EditProductModal({ isOpen, onClose, product }) {
 
     const handleSave = () => {
         if (!product) return;
-        const payload = { ...product, name: form.name, trackOffcuts: form.trackOffcuts };
-        if (form.length !== '') payload.length = parseFloat(form.length);
+        const payload = { ...product, name: form.name, trackOffcuts: form.trackOffcuts, unit: form.unit };
         updateProduct(payload);
         onClose();
     };
@@ -62,14 +61,14 @@ export default function EditProductModal({ isOpen, onClose, product }) {
                     </div>
 
                     <div>
-                        <label style={labelStyle}>Full Bar Length (ft) — for offcut tracking</label>
-                        <input type="number" min="0" step="0.1" value={form.length}
-                            onChange={e => set('length', e.target.value)}
-                            placeholder="e.g. 21"
-                            style={inputStyle}
+                        <label style={labelStyle}>Measurement Unit</label>
+                        <select value={form.unit} onChange={e => set('unit', e.target.value)}
+                            style={{ ...inputStyle, width: '140px' }}
                             onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
                             onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
-                        />
+                        >
+                            {['ft', 'mm', 'cm', 'm', 'in', 'pcs'].map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1rem', borderRadius: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', cursor: 'pointer' }}

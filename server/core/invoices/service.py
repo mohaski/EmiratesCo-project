@@ -186,6 +186,7 @@ def convert_invoice_to_order(
 
         is_paid = balance <= Decimal("0.10")
         payment_status = "Paid" if is_paid else ("Partial" if amount_paid > 0 else "Unpaid")
+        balance = Decimal("0.00") if is_paid else balance
 
         new_order = Order(
             customerid=inv.customer_id,

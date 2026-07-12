@@ -211,9 +211,12 @@ export const OrderProvider = ({ children }) => {
         console.warn('deleteInvoice not implemented on backend');
     }, []);
 
-    const deleteOrder = useCallback(() => {
-        console.warn('deleteOrder not implemented on backend');
-    }, []);
+    // Cancelling requires the CEO-configured PIN; throws on wrong/missing PIN
+    // so the caller (the cancel modal) can show an inline error.
+    const cancelOrder = useCallback(async (orderId, pin) => {
+        await api.orderService.cancelOrder(orderId, pin);
+        await fetchOrders();
+    }, [fetchOrders]);
 
     const value = {
         orders,
@@ -225,7 +228,7 @@ export const OrderProvider = ({ children }) => {
         updateOrder,
         convertInvoiceToOrder,
         deleteInvoice,
-        deleteOrder,
+        cancelOrder,
         updateOrderStatus,
         refreshOrders: fetchOrders,
     };

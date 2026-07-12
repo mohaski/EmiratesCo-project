@@ -102,6 +102,10 @@ class OrderItemStatusUpdateResponse(BaseModel):
 class OrderStatusUpdateResponse(BaseModel):
     message: str
 
+class OrderCancelRequest(BaseModel):
+    """Payload for cancelling an order — requires the CEO-configured PIN."""
+    pin: str
+
 class OrderEditRequest(BaseModel):
     """Payload for editing an existing order (replaces items + recalculates)."""
     customerId: Optional[int] = None
@@ -129,56 +133,4 @@ class EditHistoryResponse(BaseModel):
     class Config:
         from_attributes = True
 
-
-# ── Store-manager view models ──────────────────────────────────────────────────
-
-class OffcutInfo(BaseModel):
-    """An available offcut piece shown to the store manager."""
-    offcutId: int
-    length: float
-    quantity: int
-
-
-class StoreItemResponse(BaseModel):
-    """Order item enriched with category + offcut data for the store manager."""
-    item_id: int
-    product_id: int
-    product_name: str
-    variant_id: Optional[int] = None
-    variant_name: Optional[str] = None
-    category: str           # "profile" | "glass"
-    details: Optional[Dict[str, Any]] = None
-    available_offcuts: List[OffcutInfo] = []
-    has_cuts: bool = False
-    track_offcuts: bool = False
-
-
-class StoreOrderResponse(BaseModel):
-    """Order header + its profile/glass items for the store manager view."""
-    order: OrderResponse
-    store_items: List[StoreItemResponse] = []
-
-
-# ── Offcut reassignment models ─────────────────────────────────────────────────
-
-class OffcutReassignSource(BaseModel):
-    """One offcut piece the manager wants to use to fulfill (part of) a cut."""
-    offcut_id: int
-    length_used: float
-
-
-class OffcutReassignRequest(BaseModel):
-    """
-    Reassign which offcuts fulfill a specific cut line in an order item.
-    cut_line_index: index in lineItems[] that is a cut type.
-    new_sources: the offcuts the manager wants to use (must sum to the cut length × qty).
-    """
-    cut_line_index: int = 0
-    new_sources: List[OffcutReassignSource]
-    notes: Optional[str] = None
-
-
-class OffcutReassignResponse(BaseModel):
-    message: str
-    new_sources: List[Dict[str, Any]]
 

@@ -36,6 +36,7 @@ class VariantCreate(BaseModel):
     length: Optional[float] = None
     width: Optional[float] = None
     height: Optional[float] = None
+    unit_quantity: Optional[float] = None
 
 class VariantUpdate(BaseModel):
     price: Optional[float] = None
@@ -44,8 +45,9 @@ class VariantUpdate(BaseModel):
     length: Optional[float] = None
     width: Optional[float] = None
     height: Optional[float] = None
+    unit_quantity: Optional[float] = None
     stock_change: Optional[int] = None
-    
+
 class VariantResponse(BaseModel):
     variantId: int
     name: Optional[str]
@@ -57,6 +59,7 @@ class VariantResponse(BaseModel):
     length: Optional[float] = None
     width: Optional[float] = None
     height: Optional[float] = None
+    unit_quantity: Optional[float] = None
 
 class ProductCreate(BaseModel):
     name: str
@@ -65,20 +68,13 @@ class ProductCreate(BaseModel):
     sub_category: Optional[str] = None
     description: Optional[str] = None
     image_url: Optional[str] = None
-    
-    price_full: float = 0.0
-    price_half: Optional[float] = None
-    price_unit: Optional[float] = None
-    length: Optional[float] = None
-    
+
     trackOffcuts: bool = False
     alarm_quantity: int = 0
+    unit: str = "ft"
 
-    width: Optional[float] = None
-    height: Optional[float] = None
-
-    # Simple Product Support
-    stock: Optional[int] = 0
+    applicable_attributes: List[str] = []
+    has_dimensions: bool = False
 
     variants: List[VariantCreate] = []
 
@@ -93,15 +89,13 @@ class ProductUpdateRequest(BaseModel):
     sub_category: Optional[str] = None
     description: Optional[str] = None
     image_url: Optional[str] = None
-    price_full: Optional[float] = None
-    price_half: Optional[float] = None
-    price_unit: Optional[float] = None
-    length: Optional[float] = None
-    
+
     trackOffcuts: Optional[bool] = None
     alarm_quantity: Optional[int] = None
-    width: Optional[float] = None
-    height: Optional[float] = None
+    unit: Optional[str] = None
+
+    applicable_attributes: Optional[List[str]] = None
+    has_dimensions: Optional[bool] = None
 
 class ProductUpdateResponse(BaseModel):
     message: str
@@ -118,15 +112,12 @@ class ProductResponse(BaseModel):
     
     has_variants: bool
     stock_quantity: int
-    
-    price_full: Optional[float]
-    price_half: Optional[float]
-    price_unit: Optional[float] = None
-    length: Optional[float] = None
-    width: Optional[float] = None
-    height: Optional[float] = None
 
     track_offcuts: bool = False
+    unit: str = "ft"
+
+    applicable_attributes: List[str] = []
+    has_dimensions: bool = False
 
     # Computed or Relation
     variants: List[VariantResponse] = []

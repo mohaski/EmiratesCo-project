@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import CeoDashboard from '../components/dashboards/CeoDashboard';
 import CashierDashboard from '../components/dashboards/CashierDashboard';
-import StockManagerDashboard from '../components/dashboards/StockManagerDashboard';
 
 const GREETING = () => {
     const h = new Date().getHours();
@@ -12,13 +11,13 @@ const GREETING = () => {
     return 'Good evening';
 };
 
+// Keys are lower-cased to match the lower-cased `role` lookup below (and the
+// lower-case comparisons in renderDashboard) — mixed-case keys here would never match.
 const ROLE_META = {
     ceo:          { label: 'Executive Dashboard',  sub: 'Strategic overview of operations and revenue.' },
     admin:        { label: 'Admin Dashboard',       sub: 'Full system control and configuration.' },
-    seniorCashier:{ label: 'Sales Dashboard',       sub: 'POS terminal and transaction management.' },
-    juniorCashier:{ label: 'Sales Dashboard',       sub: 'Process sales and view your orders.' },
-    storeManager: { label: 'Inventory Dashboard',   sub: 'Stock levels, alerts, and order fulfillment.' },
-    stockmanager: { label: 'Inventory Dashboard',   sub: 'Stock levels, alerts, and order fulfillment.' },
+    manager:      { label: 'Sales Dashboard',       sub: 'POS terminal and transaction management.' },
+    cashier:      { label: 'Sales Dashboard',       sub: 'Process sales and view your orders.' },
 };
 
 export default function DashboardPage() {
@@ -31,7 +30,6 @@ export default function DashboardPage() {
 
     const renderDashboard = () => {
         if (role === 'ceo' || role === 'admin') return <CeoDashboard />;
-        if (role === 'storemanager' || role === 'stockmanager') return <StockManagerDashboard />;
         return <CashierDashboard />;
     };
 

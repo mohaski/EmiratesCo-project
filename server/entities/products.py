@@ -24,18 +24,21 @@ class Product(SQLModel, table=True):
     
     track_offcuts: bool = Field(default=False)
     alarm_quantity: Optional[int] = Field(default=0)
+
+    # Measurement unit used to label this product's dimensions & per-unit pricing (e.g. "ft", "mm", "pcs")
+    unit: str = Field(default="ft")
     
     # Simple vs Variable Logic
     has_variants: bool = Field(default=False)
     stock_quantity: int = Field(default=0)
-    
-    price_full: Optional[float] = Field(default=0.0)
-    price_half: Optional[float] = Field(default=0.0)
-    price_unit: Optional[float] = Field(default=0.0)
-    
-    length: Optional[float] = Field(default=None)
-    width: Optional[float] = Field(default=None)
-    height: Optional[float] = Field(default=None)
+
+    # Price and dimensions live on Variant only — every product has >=1 variant.
+
+    # Attribute classes (e.g. ["Color", "Length"]) used to describe this product's variants —
+    # fixed at creation time so "Add Variant" always offers the same attributes to choose from.
+    applicable_attributes: List[str] = Field(default=[], sa_column=Column(JSON))
+    # Whether Length x Width "Dimensions" is a generating attribute for this product's variants.
+    has_dimensions: bool = Field(default=False)
 
     # Relationships
     category: Optional["Category"] = Relationship(back_populates="products")

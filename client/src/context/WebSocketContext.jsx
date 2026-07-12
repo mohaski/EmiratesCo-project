@@ -2,7 +2,11 @@ import { createContext, useContext, useEffect, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { wsEvents } from '../utils/wsEvents';
 
-const WS_URL = 'ws://localhost:8000/ws';
+// Same rule as api.js: explicit override wins, dev falls back to localhost,
+// production derives ws(s)://<current-host>/ws so it works from any LAN client.
+const WS_URL = import.meta.env.VITE_WS_URL || (import.meta.env.DEV
+    ? 'ws://localhost:8000/ws'
+    : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`);
 const INITIAL_RETRY_MS = 1500;
 const MAX_RETRY_MS = 30000;
 
