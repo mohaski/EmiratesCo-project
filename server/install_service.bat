@@ -10,6 +10,11 @@ cd /d "%~dp0"
 set NSSM=C:\nssm\win64\nssm.exe
 set SERVICE_NAME=EmiratesCoAPI
 set SERVER_DIR=%~dp0
+:: %~dp0 always ends with a trailing backslash. Passed quoted to an external
+:: .exe (like nssm.exe below), "...\server\" corrupts — a backslash right
+:: before a closing quote is parsed as an escaped quote, not the string end,
+:: so the literal path gets a stray " appended. Strip it for that use.
+set SERVER_DIR_NOSLASH=%SERVER_DIR:~0,-1%
 set PYTHON=
 
 :: Detect Python path — project-root .venv first (matches start.bat), then a
@@ -38,7 +43,7 @@ echo.
 :: workers > 1, live-update pushes would miss clients on other workers.
 :: 127.0.0.1: this laptop is standalone (no other device needs to reach it).
 %NSSM% install %SERVICE_NAME% "%PYTHON%" "-m" "uvicorn" "main:app" "--host" "127.0.0.1" "--port" "8000" "--workers" "1"
-%NSSM% set %SERVICE_NAME% AppDirectory "%SERVER_DIR%"
+%NSSM% set %SERVICE_NAME% AppDirectory "%SERVER_DIR_NOSLASH%"
 %NSSM% set %SERVICE_NAME% DisplayName "EmiratesCo API Server"
 %NSSM% set %SERVICE_NAME% Description "FastAPI backend for EmiratesCo Management System"
 %NSSM% set %SERVICE_NAME% Start SERVICE_AUTO_START
