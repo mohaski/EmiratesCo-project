@@ -1,4 +1,5 @@
 from sqlmodel import Session, select
+from sqlalchemy.orm.attributes import flag_modified
 from typing import Optional
 from entities.products import Product
 from entities.variants import Variant
@@ -33,8 +34,14 @@ def deduct_stock_for_order_item(db: Session, item: OrderItem) -> None:
 
     if line_items and isinstance(line_items, list):
         _process_line_items(db, product, variant, line_items)
-        # Persist offcut_sources mutations back to the JSON column
+        # Persist offcut_sources mutations back to the JSON column.
+        # flag_modified is required: the offcut lookups inside _process_line_items
+        # trigger a premature autoflush that INSERTs this item before offcut_sources
+        # is attached, then mutates the same lineItems list in place — so by the time
+        # this reassignment runs, old and new `details` are value-equal and SQLAlchemy
+        # skips the UPDATE unless explicitly told the attribute changed.
         item.details = {**details, "lineItems": line_items}
+        flag_modified(item, "details")
         db.add(item)
     else:
         qty = float(details.get("quantity", 0))

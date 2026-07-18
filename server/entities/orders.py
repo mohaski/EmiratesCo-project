@@ -39,7 +39,13 @@ class Order(SQLModel, table=True):
     source_invoice_id: Optional[int] = Field(default=None, foreign_key="invoices.invoiceId")
 
     # Relationships
-    orderItems: List["OrderItem"] = Relationship(back_populates="order")
+    # order_by pins item order to insertion (item_id) order — orderService creates
+    # OrderItem rows in the same sequence as the incoming cart/items array, and
+    # callers (e.g. the receipt) match items back to that array positionally.
+    orderItems: List["OrderItem"] = Relationship(
+        back_populates="order",
+        sa_relationship_kwargs={"order_by": "OrderItem.item_id"},
+    )
     customer: Optional["Customer"] = Relationship(back_populates="orders")
     user: "User" = Relationship(back_populates="orders")
     credits: List["Credit"] = Relationship(back_populates="order")

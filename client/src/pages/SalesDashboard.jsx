@@ -665,6 +665,8 @@ export default function SalesDashboard() {
                 color={initialModalDetails?.color || profileColor}
                 initialDetails={initialModalDetails}
                 source="sales"
+                cart={cart}
+                cartIndex={editingIndex}
             />
 
             {/* ── Customer Selection Overlay ── */}

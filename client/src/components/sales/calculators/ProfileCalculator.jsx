@@ -10,7 +10,7 @@ const inputStyle = {
 const sectionStyle = { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem', padding: '1rem', marginBottom: '0.75rem' };
 const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' };
 
-const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) => {
+const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart = [], cartIndex = null }) => {
 
     const extraAttributes = useMemo(() => {
         const extras = {};
@@ -219,6 +219,8 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate }) =>
                     variantId={pricing.variantId ?? null}
                     requiredLength={feet}
                     initialSelection={offcutSelection}
+                    cart={cart}
+                    cartIndex={cartIndex}
                     onConfirm={setOffcutSelection}
                     onClose={() => setShowOffcutModal(false)}
                 />

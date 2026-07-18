@@ -19,6 +19,7 @@ import Layout from './components/Layout';
 // Lazy: every other page is code-split into its own chunk
 const SalesDashboard      = lazy(() => import('./pages/SalesDashboard'));
 const CheckoutPage        = lazy(() => import('./pages/CheckoutPage'));
+const ReceiptPage         = lazy(() => import('./pages/ReceiptPage'));
 const DashboardPage       = lazy(() => import('./pages/DashboardPage'));
 const InventoryPage       = lazy(() => import('./pages/InventoryPage'));
 const AddProductPage      = lazy(() => import('./pages/AddProductPage'));
@@ -74,6 +75,9 @@ function App() {
                   {/* Standalone protected */}
                   <Route path="/checkout" element={
                     <ProtectedRoute roles={ROUTE_ROLES['/checkout']}><CheckoutPage /></ProtectedRoute>
+                  } />
+                  <Route path="/checkout/receipt" element={
+                    <ProtectedRoute roles={ROUTE_ROLES['/checkout/receipt']}><ReceiptPage /></ProtectedRoute>
                   } />
                   <Route path="/select-role" element={
                     <ProtectedRoute><RoleSelectionPage /></ProtectedRoute>

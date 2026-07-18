@@ -4,6 +4,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
 import { useCartTotals } from '../hooks/useCartTotals';
+import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 
 /* ── Review Item Card ── */
 const ReviewItemCard = memo(({ item, index, onRemove }) => (
@@ -84,6 +85,30 @@ const ReviewItemCard = memo(({ item, index, onRemove }) => (
     </div>
 ));
 
+/* ── Department Category Toggle ── */
+const CategoryToggle = ({ bucket, label, icon, color, checked, disabled, onToggle }) => (
+    <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onToggle(bucket)}
+        title={disabled ? `No ${label.toLowerCase()} items in this order` : undefined}
+        style={{
+            display: 'flex', alignItems: 'center', gap: '0.5rem',
+            padding: '0.625rem 0.875rem',
+            background: disabled ? 'rgba(255,255,255,0.02)' : checked ? `${color}15` : 'rgba(255,255,255,0.03)',
+            border: disabled ? '1px solid rgba(255,255,255,0.05)' : checked ? `1px solid ${color}50` : '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '0.75rem',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            opacity: disabled ? 0.4 : 1,
+            transition: 'all 0.2s ease',
+            flex: 1,
+        }}
+    >
+        <span style={{ fontSize: '1rem' }}>{icon}</span>
+        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: disabled ? '#475569' : checked ? color : '#64748b' }}>{label}</span>
+    </button>
+);
+
 /* ── Payment Method Button ── */
 const PaymentMethodBtn = ({ method, label, icon, selected, color, onClick }) => (
     <button
@@ -138,6 +163,21 @@ export default function CheckoutPage() {
     const [amountPaid, setAmountPaid] = useState('');
     const [cashAmount, setCashAmount] = useState('');
 
+    // Which departments actually have items in this order — buckets with none stay disabled
+    const presentBuckets = useMemo(() => {
+        const present = { profile: false, glass: false, accessory: false };
+        cartItems.forEach(item => {
+            const bucket = bucketOf(item.category);
+            if (bucket) present[bucket] = true;
+        });
+        return present;
+    }, [cartItems]);
+
+    const [receiptCategories, setReceiptCategories] = useState(() => ({ ...presentBuckets }));
+    const toggleReceiptCategory = useCallback((bucket) => {
+        setReceiptCategories(prev => ({ ...prev, [bucket]: !prev[bucket] }));
+    }, []);
+
     const isRegistered = useMemo(() => {
         if (!customer?.id) return false;
         return ['individual', 'cooperate', 'corporate', 'registered', 'frequent'].includes(customer.type);
@@ -189,20 +229,29 @@ export default function CheckoutPage() {
                 mode: mode || 'new'
             };
 
-            if (editOrderId) {
-                await updateOrder(editOrderId, orderData);
-            } else {
-                await addOrder(orderData);
-            }
+            const response = editOrderId
+                ? await updateOrder(editOrderId, orderData)
+                : await addOrder(orderData);
+
             clearCart();
-            navigate('/orders');
+            navigate('/checkout/receipt', {
+                state: {
+                    orderId: response?.orderId,
+                    cartItems,
+                    customer,
+                    categories: receiptCategories,
+                    totals: { subtotal, tax, total, discount: discountValue },
+                    enableTax,
+                    mode: mode || 'new',
+                },
+            });
         } catch (err) {
             console.error('Payment failed', err);
             setPaymentError('Failed to process payment. Please try again.');
         } finally {
             setLoading(false);
         }
-    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, currentPayable, balance, paymentMethod, isPartial, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId]);
+    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, currentPayable, balance, paymentMethod, isPartial, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories]);
 
     if (cartItems.length === 0) {
         return (
@@ -396,6 +445,27 @@ export default function CheckoutPage() {
                                 Registered
                             </div>
                         )}
+                    </div>
+
+                    {/* Receipt departments */}
+                    <div>
+                        <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                            Receipt Departments
+                        </label>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            {BUCKET_ORDER.map(bucket => (
+                                <CategoryToggle
+                                    key={bucket}
+                                    bucket={bucket}
+                                    label={BUCKET_META[bucket].label.replace(/ (Cutting|Prep)$/, '')}
+                                    icon={BUCKET_META[bucket].icon}
+                                    color={BUCKET_META[bucket].color}
+                                    checked={receiptCategories[bucket]}
+                                    disabled={!presentBuckets[bucket]}
+                                    onToggle={toggleReceiptCategory}
+                                />
+                            ))}
+                        </div>
                     </div>
 
                     {/* Discount */}

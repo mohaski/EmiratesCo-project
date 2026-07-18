@@ -9,10 +9,15 @@ import api from '../../../services/api';
  *   productId, variantId  – identify which offcuts to fetch
  *   requiredLength        – total feet the cut needs
  *   initialSelection      – previously chosen [{offcut_id, length_used}] to restore
+ *   cart, cartIndex       – current pending cart + the index being edited (or null when
+ *                           adding a new line). Used to discount offcuts already claimed
+ *                           by OTHER cart lines that haven't been submitted yet — nothing
+ *                           is actually deducted from stock until the order is created, so
+ *                           without this the same offcut could be picked twice in one order.
  *   onConfirm(selection)  – called with the chosen [{offcut_id, length_used}]
  *   onClose               – close callback
  */
-export default function OffcutSelectorModal({ productId, variantId, requiredLength, initialSelection, onConfirm, onClose }) {
+export default function OffcutSelectorModal({ productId, variantId, requiredLength, initialSelection, cart = [], cartIndex = null, onConfirm, onClose }) {
     const [offcuts, setOffcuts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -24,15 +29,36 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
         return init;
     });
 
+    // How many units of each offcut are already spoken for by other cart lines
+    // (each offcut_selection entry consumes exactly one unit of that offcut).
+    const claimedElsewhere = useMemo(() => {
+        const claims = {};
+        cart.forEach((item, idx) => {
+            if (idx === cartIndex) return;
+            (item.details?.lineItems || []).forEach(line => {
+                (line.offcut_selection || []).forEach(s => {
+                    claims[s.offcut_id] = (claims[s.offcut_id] || 0) + 1;
+                });
+            });
+        });
+        return claims;
+    }, [cart, cartIndex]);
+
     useEffect(() => {
         let cancelled = false;
         setLoading(true);
         api.productService.getOffcuts(productId, variantId)
-            .then(data => { if (!cancelled) setOffcuts(data || []); })
+            .then(data => {
+                if (cancelled) return;
+                const adjusted = (data || [])
+                    .map(oc => ({ ...oc, quantity: oc.quantity - (claimedElsewhere[oc.offcutId] || 0) }))
+                    .filter(oc => oc.quantity > 0);
+                setOffcuts(adjusted);
+            })
             .catch(() => { if (!cancelled) setError('Failed to load offcuts — please try again.'); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [productId, variantId]);
+    }, [productId, variantId, claimedElsewhere]);
 
     const toggle = (oc) => {
         setSelected(prev => {

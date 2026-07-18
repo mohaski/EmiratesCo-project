@@ -5,7 +5,7 @@ import AccessoryCalculator from './calculators/AccessoryCalculator';
 import DynamicCalculator from './calculators/DynamicCalculator';
 import StandardCalculator from './calculators/StandardCalculator';
 
-export default function ProductModal({ product, isOpen, onClose, onAddToOrder, color, initialDetails, source = 'sales' }) {
+export default function ProductModal({ product, isOpen, onClose, onAddToOrder, color, initialDetails, source = 'sales', cart = [], cartIndex = null }) {
     const [total, setTotal] = useState(0);
     const [details, setDetails] = useState(null);
 
@@ -86,7 +86,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
 
                 {/* Calculator content */}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar">
-                    {isProfile ? <ProfileCalculator key={product.id} product={product} color={color} initialDetails={initialDetails} onUpdate={handleUpdate} />
+                    {isProfile ? <ProfileCalculator key={product.id} product={product} color={color} initialDetails={initialDetails} onUpdate={handleUpdate} cart={cart} cartIndex={cartIndex} />
                         : isGlass ? <GlassCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />
                             : isAccessory ? <AccessoryCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />
                                 : isDynamic ? <DynamicCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />

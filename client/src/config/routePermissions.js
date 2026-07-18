@@ -5,6 +5,7 @@ export const ROUTE_ROLES = {
     '/':                    ['admin', 'ceo', 'manager', 'cashier'],
     '/sales':               ['manager', 'cashier'],
     '/checkout':            ['manager', 'cashier'],
+    '/checkout/receipt':    ['manager', 'cashier'],
     '/invoice':             ['manager', 'cashier'],
     '/invoice/review':      ['manager', 'cashier'],
     '/orders':              ['manager', 'ceo', 'admin'],
