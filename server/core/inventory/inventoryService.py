@@ -5,6 +5,7 @@ from entities.products import Product
 from entities.variants import Variant
 from entities.offcuts import Offcut
 from entities.orderItems import OrderItem
+from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines
 from loggiing import logger
 
 
@@ -60,10 +61,23 @@ def _process_line_items(
     track = product.track_offcuts
     full_len = _get_full_length(product, variant)
 
+    # 2D glass cuts are resolved as one batch across all glass-cut lines in this
+    # item (see glassOffcutService.resolve_glass_cut_lines) rather than line-by-line,
+    # so the largest cut doesn't get starved of the best offcut by smaller cuts.
+    glass_cut_lines = [l for l in line_items if l.get("type", "") == "glass-cut" and int(l.get("qty", 0)) > 0]
+    if glass_cut_lines and track:
+        resolve_glass_cut_lines(db, product, variant, glass_cut_lines)
+
     for line in line_items:
         l_type = line.get("type", "")
         qty = int(line.get("qty", 0))
         if qty <= 0:
+            continue
+
+        if l_type == "glass-cut":
+            if not track:
+                _deduct_full_stock(db, product, variant, qty)
+            # else: already resolved above via resolve_glass_cut_lines
             continue
 
         if "full" in l_type:
@@ -365,10 +379,20 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
     track = product.track_offcuts
     full_len = _get_full_length(product, variant)
 
+    glass_cut_lines = [l for l in line_items if l.get("type", "") == "glass-cut" and int(l.get("qty", 0)) > 0]
+    if glass_cut_lines and track:
+        restore_glass_cut_lines(db, product, variant, glass_cut_lines)
+
     for line in line_items:
         l_type = line.get("type", "")
         qty = int(line.get("qty", 0))
         if qty <= 0:
+            continue
+
+        if l_type == "glass-cut":
+            if not track:
+                _restore_simple_stock(db, product, variant, qty)
+            # else: already restored above via restore_glass_cut_lines
             continue
 
         if "full" in l_type:

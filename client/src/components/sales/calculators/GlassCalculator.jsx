@@ -1,5 +1,6 @@
 import { memo, useState, useMemo, useEffect } from 'react';
 import { mmToSquareFeet, inchesToSquareFeet, roundToHalfWithRule } from '../../../utils/calculations';
+import CutPreviewModal from './CutPreviewModal';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -59,6 +60,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [cutQty, setCutQty] = useState('');
     const [unit, setUnit] = useState('ft');
     const [error, setError] = useState(null);
+    const [showCutPreview, setShowCutPreview] = useState(false);
 
     useEffect(() => {
         setExtraSelections(prev => {
@@ -188,10 +190,20 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             <div style={sectionStyle}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
                     <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#e2e8f0' }}>📐 Cut Pieces</span>
-                    <div style={{ display: 'flex', gap: '2px', background: 'rgba(255,255,255,0.06)', borderRadius: '6px', padding: '2px' }}>
-                        {['ft', 'inch', 'mm'].map(u => (
-                            <button key={u} onClick={() => setUnit(u)} style={{ ...chipBtn(unit === u), borderRadius: '4px', padding: '2px 8px', fontSize: '0.65rem' }}>{u}</button>
-                        ))}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        {product.trackOffcuts && cutPieces.length > 0 && (
+                            <button onClick={() => setShowCutPreview(true)} style={{
+                                padding: '3px 10px', borderRadius: '6px', border: '1px solid rgba(34,211,238,0.3)',
+                                background: 'rgba(6,182,212,0.1)', color: '#22d3ee', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer',
+                            }}>
+                                Preview Cuts
+                            </button>
+                        )}
+                        <div style={{ display: 'flex', gap: '2px', background: 'rgba(255,255,255,0.06)', borderRadius: '6px', padding: '2px' }}>
+                            {['ft', 'inch', 'mm'].map(u => (
+                                <button key={u} onClick={() => setUnit(u)} style={{ ...chipBtn(unit === u), borderRadius: '4px', padding: '2px 8px', fontSize: '0.65rem' }}>{u}</button>
+                            ))}
+                        </div>
                     </div>
                 </div>
 
@@ -237,6 +249,15 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                         ))}
                     </div>
                 </div>
+            )}
+
+            {showCutPreview && (
+                <CutPreviewModal
+                    productId={product.id}
+                    variantId={pricing.variantId}
+                    cutPieces={cutPieces}
+                    onClose={() => setShowCutPreview(false)}
+                />
             )}
         </div>
     );

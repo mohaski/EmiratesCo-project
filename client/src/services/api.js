@@ -144,6 +144,17 @@ export const ProductService = {
         const response = await api.get(`/products/${productId}/offcuts${params}`);
         return response.data;
     },
+    /**
+     * Dry-run preview of how the 2D glass offcut engine would fulfil a set of
+     * cuts — same scoring/batching as a real sale, nothing is persisted.
+     * cuts: [{ l, w, qty, u }]. Returns { groups, optimization } — groups is one
+     * merged entry per physical sheet/offcut touched; optimization summarizes the
+     * multi-strategy search (which packing heuristics were tried and which won).
+     */
+    previewGlassCuts: async (productId, variantId, cuts) => {
+        const response = await api.post(`/products/${productId}/glass-cut-preview`, { variant_id: variantId, cuts });
+        return response.data;
+    },
     getRestockHistory: async (skip = 0, limit = 100, productId = null) => {
         const params = new URLSearchParams({ skip, limit });
         if (productId) params.append('product_id', productId);

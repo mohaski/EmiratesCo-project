@@ -442,16 +442,141 @@ def get_offcuts_for_product(
     db: Session,
     variant_id: Optional[int] = None,
 ):
-    """Return all available offcut pieces for a product, sorted longest first."""
+    """Return all available (non-scrap) offcut pieces for a product, largest first."""
     from entities.offcuts import Offcut
     stmt = (
         select(Offcut)
-        .where(Offcut.product_id == product_id, Offcut.quantity > 0)
-        .order_by(Offcut.length.desc())
+        .where(Offcut.product_id == product_id, Offcut.quantity > 0, Offcut.status == "available")
+        .order_by(Offcut.length.desc(), (Offcut.width * Offcut.height).desc())
     )
     if variant_id is not None:
         stmt = stmt.where(Offcut.variant_id == variant_id)
     return db.exec(stmt).all()
+
+
+def _consolidate_preview_events(all_events: List[dict], pre_existing_offcut_ids: set) -> List[dict]:
+    """
+    Merges consumption events that represent the same physical sheet/offcut, for
+    two distinct reasons a preview can end up with more "sources" than physically
+    exist:
+
+    1. Joint packing (glassOffcutService._pack_rect_multi) can place pieces from
+       several different order lines into ONE physical source in a single
+       operation; that gets split into one "owner" event (which records the real
+       stock/offcut consumption) plus "shared" events per other line purely for
+       restore-on-cancel bookkeeping (see _apply_candidate). They all carry the
+       same `group_id` — merge those first.
+    2. A later piece can end up consuming an offcut that only exists because this
+       same dry-run created it moments earlier (a remainder from one piece reused
+       by another, across separate packing rounds). Since nothing is persisted in
+       a preview, showing that as two separate "sources" is misleading — there's
+       only ONE physical item involved.
+
+    Returns one merged group per physical source genuinely touched (a real
+    pre-existing offcut, or a fresh sheet), each with every cut pooled together
+    and only the truly-final remainders — ones never reused later in this preview.
+    """
+    combined_by_group: dict = {}
+    group_order: list = []
+    for e in all_events:
+        gid = e.get("group_id")
+        if gid not in combined_by_group:
+            combined_by_group[gid] = {
+                "source": e["source"], "offcut_id": e["offcut_id"],
+                "offcut_width": e["offcut_width"], "offcut_height": e["offcut_height"],
+                "cuts": [], "remainders_created": [],
+            }
+            group_order.append(gid)
+        combined_by_group[gid]["cuts"].extend(e["cuts"])
+        if e.get("remainders_created"):
+            combined_by_group[gid]["remainders_created"] = e["remainders_created"]
+    all_events = [combined_by_group[gid] for gid in group_order]
+
+    creates = {}   # offcut_id -> event that created it as a remainder
+    consumed_ids = set()
+    for e in all_events:
+        if e["source"] == "offcut":
+            consumed_ids.add(e["offcut_id"])
+        for r in e.get("remainders_created", []):
+            if r.get("offcut_id") is not None:
+                creates[r["offcut_id"]] = e
+
+    def find_root(e: dict):
+        """Returns (root_event, dx, dy) — dx/dy is the cumulative offset needed to
+        translate e's own local (x, y) coordinates into the root event's source's
+        coordinate space, since a chained event's cuts/remainders are positioned
+        relative to the synthetic offcut it was cut from, not the original sheet."""
+        if e["source"] == "offcut" and e["offcut_id"] not in pre_existing_offcut_ids and e["offcut_id"] in creates:
+            creator = creates[e["offcut_id"]]
+            remainder_entry = next(r for r in creator["remainders_created"] if r.get("offcut_id") == e["offcut_id"])
+            root, dx, dy = find_root(creator)
+            return root, dx + remainder_entry["x"], dy + remainder_entry["y"]
+        return e, 0.0, 0.0
+
+    groups: dict = {}  # id(root_event) -> merged group
+    order: list = []
+    for e in all_events:
+        root, dx, dy = find_root(e)
+        key = id(root)
+        if key not in groups:
+            groups[key] = {
+                "source": root["source"], "offcut_id": root["offcut_id"],
+                "offcut_width": root["offcut_width"], "offcut_height": root["offcut_height"],
+                "cuts": [], "remainders_created": [],
+            }
+            order.append(key)
+        groups[key]["cuts"].extend({**c, "x": c["x"] + dx, "y": c["y"] + dy} for c in e["cuts"])
+        for r in e.get("remainders_created", []):
+            if r.get("offcut_id") not in consumed_ids:
+                groups[key]["remainders_created"].append({**r, "x": r["x"] + dx, "y": r["y"] + dy})
+
+    return [groups[key] for key in order]
+
+
+def preview_glass_cuts(
+    product_id: int,
+    cuts: List["model.GlassCutPreviewCut"],
+    db: Session,
+    variant_id: Optional[int] = None,
+):
+    """
+    Dry-run the 2D glass offcut decision engine for a hypothetical set of cuts —
+    runs the exact same batching/scoring logic a real sale would (so the preview
+    matches production behavior exactly), but never commits: the DB transaction is
+    always rolled back, so no stock is deducted and no offcuts are created/consumed.
+
+    Returns {"groups": [...], "optimization": {...}}. `groups` is one merged
+    entry per physical sheet/offcut actually touched — see
+    _consolidate_preview_events for why this isn't just the raw per-line events.
+    `optimization` is resolve_glass_cut_lines' summary of the multi-strategy
+    search (which heuristics were tried, their outcomes, and which won) — surfaced
+    so the preview can show that search actually happened, not just its result.
+    """
+    from entities.offcuts import Offcut
+    from core.inventory.glassOffcutService import resolve_glass_cut_lines
+
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    variant = db.get(Variant, variant_id) if variant_id else None
+
+    pre_existing_stmt = select(Offcut.offcutId).where(Offcut.product_id == product_id)
+    pre_existing_stmt = pre_existing_stmt.where(Offcut.variant_id == variant_id) if variant_id else pre_existing_stmt.where(Offcut.variant_id == None)  # noqa: E711
+    pre_existing_ids = set(db.exec(pre_existing_stmt).all())
+
+    lines = [
+        {"type": "glass-cut", "qty": c.qty, "meta": {"l": c.l, "w": c.w, "u": c.u}}
+        for c in cuts
+    ]
+    try:
+        optimization = resolve_glass_cut_lines(db, product, variant, lines)
+        all_events = [e for line in lines for e in line.get("offcut_sources", [])]
+        groups = _consolidate_preview_events(all_events, pre_existing_ids)
+        return {"groups": groups, "optimization": optimization}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        db.rollback()  # dry run only — never persist
 
 
 def check_stock_availability(product_id: int, qty: int, db: Session = Depends(get_session), variant_id: Optional[int] = None):

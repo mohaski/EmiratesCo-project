@@ -18,7 +18,13 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('core/ordering/controller.py'\\).read\\(\\)\\)\")",
       "Bash(node -e \"require\\('@babel/core'\\)\")",
       "Bash(python migrate_rename_roles.py)",
-      "Bash(python migrate_create_settings.py)"
+      "Bash(python migrate_create_settings.py)",
+      "Bash(python migrate_offcuts_2d.py)",
+      "Bash(python test_glass_offcut_logic.py)",
+      "Bash(python \"C:\\\\Users\\\\mohas\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-mohas-Desktop-EmiratesCo-project\\\\fce17368-b8e4-419b-bd32-b5cee951c5ef\\\\scratchpad\\\\verify_glass_wiring.py\")",
+      "Bash(python -c \"import core.inventory.glassOffcutService as gos; print\\('import OK'\\)\")",
+      "Bash(python -c \"import core.inventory.glassOffcutService as gos; print\\('import OK'\\); print\\([s['name'] for s in gos.STRATEGIES]\\)\")",
+      "Bash(python -c \"import core.inventory.glassOffcutService as gos; print\\('OK'\\)\")"
     ]
   }
 }

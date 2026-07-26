@@ -40,6 +40,16 @@ class Product(SQLModel, table=True):
     # Whether Length x Width "Dimensions" is a generating attribute for this product's variants.
     has_dimensions: bool = Field(default=False)
 
+    # ── 2D (glass) offcut tuning — only meaningful when track_offcuts is True and
+    # has_dimensions is True (2D length x width cuts, as opposed to 1D length-only) ──
+    # Below this size in mm on either side, a remainder is scrap, not a usable offcut.
+    # Sheet/offcut dimensions are always tracked in mm regardless of `unit` (a display/
+    # pricing label only — see glassOffcutService.py module docstring for why).
+    min_usable_dimension: float = Field(default=150.0)
+    # Whether a cut piece may be rotated 90° to fit a source sheet/offcut (false for
+    # directional/patterned/coated glass where orientation matters).
+    allow_rotation: bool = Field(default=True)
+
     # Relationships
     category: Optional["Category"] = Relationship(back_populates="products")
     orderItems: List["OrderItem"] = Relationship(back_populates="product")

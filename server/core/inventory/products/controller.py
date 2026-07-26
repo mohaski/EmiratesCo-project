@@ -150,6 +150,20 @@ def get_product_offcuts(
 ):
     return service.get_offcuts_for_product(product_id, db, variant_id)
 
+@router.post("/{product_id}/glass-cut-preview")
+def preview_glass_cuts(
+    product_id: int,
+    payload: model.GlassCutPreviewRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """
+    Dry-run preview of how the 2D offcut engine would fulfil a set of cuts —
+    same scoring/batching as a real sale, but nothing is persisted. Lets a cashier
+    or manager check the optimization before committing to an order.
+    """
+    return service.preview_glass_cuts(product_id, payload.cuts, db, payload.variant_id)
+
 @router.get("/{product_id}/availability", response_model=model.StockAvailabilityResponse)
 def check_availability(
     product_id: int,

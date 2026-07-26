@@ -14,8 +14,74 @@ const fmtLen = (n) => {
     return `${(Math.round(num * 100) / 100).toString()}ft`;
 };
 
+const fmtMm = (n) => {
+    const num = parseFloat(n);
+    if (isNaN(num)) return '0mm';
+    return `${Math.round(num)}mm`;
+};
+
+// One 1D (bar/profile) offcut_sources entry — {source, offcut_id, length_used, offcut_length, remainder_created}
+const CuttingInstructionLine1D = ({ src }) => (
+    <div style={{ fontSize: '10.5px', lineHeight: 1.4 }}>
+        {src.source === 'offcut'
+            ? <div>Cut <strong>{fmtLen(src.length_used)}</strong> from <strong>Offcut #{src.offcut_id}</strong> ({fmtLen(src.offcut_length)} available)</div>
+            : <div>Cut <strong>{fmtLen(src.length_used)}</strong> from a <strong>new bar</strong></div>
+        }
+        {src.remainder_created > 0 && (
+            <div style={{ fontSize: '9.5px', color: '#333', marginTop: '2px' }}>
+                &gt;&gt; {fmtLen(src.remainder_created)} remainder saved to stock
+            </div>
+        )}
+    </div>
+);
+
+// Groups pieces within one event by identical (width, height, rotated) — a
+// recursively-packed event can mix orientations (e.g. 3 pieces one way + 1
+// rotated into the leftover space), so it's no longer safe to assume every
+// cut in an event shares the same size.
+const groupCuts = (cuts) => {
+    const groups = [];
+    (cuts || []).forEach(c => {
+        const existing = groups.find(g => g.width === c.width && g.height === c.height && g.rotated === c.rotated);
+        if (existing) existing.count += 1;
+        else groups.push({ width: c.width, height: c.height, rotated: c.rotated, count: 1 });
+    });
+    return groups;
+};
+
+// One 2D (glass) offcut_sources entry — a consumption EVENT, which may cover several
+// physical pieces (possibly in mixed orientations) cut from the same source in one
+// packing operation: {source, offcut_id, offcut_width, offcut_height,
+//  cuts: [{width, height, rotated}, ...], remainders_created: [{width, height, status}, ...]}
+const CuttingInstructionLine2D = ({ src }) => {
+    const groups = groupCuts(src.cuts);
+    return (
+        <div style={{ fontSize: '10.5px', lineHeight: 1.4 }}>
+            <div>
+                From <strong>{src.source === 'offcut' ? `Offcut #${src.offcut_id}` : 'a new sheet'}</strong>{' '}
+                ({fmtMm(src.offcut_width)} x {fmtMm(src.offcut_height)} available)
+            </div>
+            {groups.map((g, i) => (
+                <div key={i}>
+                    Cut <strong>{g.count > 1 ? `${g.count} x ` : ''}{fmtMm(g.width)} x {fmtMm(g.height)}</strong>
+                    {g.rotated && <span style={{ color: '#333' }}> (rotated to fit)</span>}
+                </div>
+            ))}
+            {(src.remainders_created || []).map((r, i) => (
+                <div key={i} style={{ fontSize: '9.5px', color: '#333', marginTop: '2px' }}>
+                    {r.status === 'scrap'
+                        ? <>&gt;&gt; {fmtMm(r.width)} x {fmtMm(r.height)} offcut too small to keep — scrap</>
+                        : <>&gt;&gt; {fmtMm(r.width)} x {fmtMm(r.height)} remainder saved to stock{r.is_popular ? ' ★ popular size' : ''}</>
+                    }
+                </div>
+            ))}
+        </div>
+    );
+};
+
 // Describes exactly what a floor worker should cut and where the material comes from —
 // only present on lines the backend actually deducted via the offcut/best-fit algorithm.
+// Handles both the 1D (bar/profile, length-based) and 2D (glass, width x height) source shapes.
 const CuttingInstructions = ({ sources }) => {
     if (!sources || sources.length === 0) return null;
     return (
@@ -24,17 +90,9 @@ const CuttingInstructions = ({ sources }) => {
                 Cutting Instruction
             </div>
             {sources.map((src, idx) => (
-                <div key={idx} style={{ fontSize: '10.5px', lineHeight: 1.4 }}>
-                    {src.source === 'offcut'
-                        ? <div>Cut <strong>{fmtLen(src.length_used)}</strong> from <strong>Offcut #{src.offcut_id}</strong> ({fmtLen(src.offcut_length)} available)</div>
-                        : <div>Cut <strong>{fmtLen(src.length_used)}</strong> from a <strong>new bar</strong></div>
-                    }
-                    {src.remainder_created > 0 && (
-                        <div style={{ fontSize: '9.5px', color: '#333', marginTop: '2px' }}>
-                            &gt;&gt; {fmtLen(src.remainder_created)} remainder saved to stock
-                        </div>
-                    )}
-                </div>
+                'cuts' in src
+                    ? <CuttingInstructionLine2D key={idx} src={src} />
+                    : <CuttingInstructionLine1D key={idx} src={src} />
             ))}
         </div>
     );

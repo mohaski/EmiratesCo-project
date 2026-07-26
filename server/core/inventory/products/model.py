@@ -134,9 +134,24 @@ class OffcutResponse(BaseModel):
     product_id: int
     variant_id: Optional[int]
     length: float
+    width: Optional[float] = None
+    height: Optional[float] = None
+    status: str = "available"
     quantity: int
 
     class Config:
         from_attributes = True
+
+
+class GlassCutPreviewCut(BaseModel):
+    l: float
+    w: float
+    qty: int = 1
+    u: str = "mm"  # 'ft' | 'inch' | 'mm' — matches GlassCalculator's per-cut unit dropdown
+
+
+class GlassCutPreviewRequest(BaseModel):
+    variant_id: Optional[int] = None
+    cuts: List[GlassCutPreviewCut]
     
     

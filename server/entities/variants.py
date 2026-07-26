@@ -24,9 +24,13 @@ class Variant(SQLModel, table=True):
     price_half: Optional[float] = Field(default=None)
     price_unit: Optional[float] = Field(default=None)
     
+    # For has_dimensions=True products (2D sheets — glass, perspex, etc.), the sheet's
+    # two dimensions are `length` x `width`, always in mm regardless of Product.unit
+    # (a display/pricing label only). `height` is unused/dead — kept for backward
+    # compatibility with existing rows/migrations, not written by any current code path.
     length: Optional[float] = Field(default=None)
-    width: Optional[float] = Field(default=None)   # Sheet width (glass)
-    height: Optional[float] = Field(default=None)  # Sheet height (glass)
+    width: Optional[float] = Field(default=None)
+    height: Optional[float] = Field(default=None)
 
     # Numeric quantity carried by a "custom" attribute value (e.g. 1000 for "1000pcs")
     unit_quantity: Optional[float] = Field(default=None)
