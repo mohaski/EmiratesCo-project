@@ -44,6 +44,11 @@ const NAV_ICONS = {
       <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
     </svg>
   ),
+  tools: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
+    </svg>
+  ),
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
@@ -126,6 +131,8 @@ export default function Layout() {
     { path: '/inventory', label: 'Stock Control', iconKey: 'inventory' },
     { path: '/add-product', label: 'Add Product', iconKey: 'addProduct' },
     { path: '/manage-products', label: 'Manage Products', iconKey: 'manageProducts' },
+    { path: '/tools', label: 'Tool Checkout', iconKey: 'tools' },
+    { path: '/tools/manage', label: 'Tool Tracking', iconKey: 'tools' },
   ];
 
   const filteredItems = menuItems.filter(item => (ROUTE_ROLES[item.path] || []).includes(user?.role));

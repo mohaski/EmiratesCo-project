@@ -22,6 +22,7 @@ from core.userManagement.controller import router as users_router
 from core.messaging.controller import router as messaging_router
 from core.invoices.controller import router as invoices_router
 from core.settings.controller import router as settings_router
+from core.tools.controller import router as tools_router
 from ws.router import router as ws_router
 
 # ── Logging Setup ────────────────────────────────────────────────────────────
@@ -111,6 +112,7 @@ app.include_router(financials_router)
 app.include_router(users_router)
 app.include_router(messaging_router)
 app.include_router(settings_router)
+app.include_router(tools_router)
 app.include_router(ws_router)
 
 # ── Utility Endpoints ─────────────────────────────────────────────────────────

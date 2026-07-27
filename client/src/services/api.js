@@ -321,6 +321,40 @@ export const MessagingService = {
     }
 };
 
+export const ToolService = {
+    /** Tool catalog. Pass status to filter: 'available'|'taken'|'non_functional' */
+    getAll: async (status = null) => {
+        const params = status ? `?status=${status}` : '';
+        const response = await api.get(`/tools/${params}`);
+        return response.data;
+    },
+    create: async (toolData) => {
+        const response = await api.post('/tools/', toolData);
+        return response.data;
+    },
+    update: async (toolId, toolData) => {
+        const response = await api.put(`/tools/${toolId}`, toolData);
+        return response.data;
+    },
+    /** Loans (checkouts). params: { status, worker, skip, limit } */
+    getLoans: async (params = {}) => {
+        const query = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => { if (v !== null && v !== undefined && v !== '') query.append(k, v); });
+        const response = await api.get(`/tools/loans?${query}`);
+        return response.data;
+    },
+    /** data: { workerName, toolIds, notes } */
+    createLoan: async (data) => {
+        const response = await api.post('/tools/loans', data);
+        return response.data;
+    },
+    /** data: { items: [{ toolId, defectNote, markNonFunctional }] } */
+    returnLoan: async (loanId, data) => {
+        const response = await api.put(`/tools/loans/${loanId}/return`, data);
+        return response.data;
+    },
+};
+
 export const SettingsService = {
     setCancelPin: async (pin) => {
         const response = await api.put('/settings/cancel-pin', { pin });
@@ -341,5 +375,6 @@ api.financialService = FinancialService;
 api.userService = UserService;
 api.messagingService = MessagingService;
 api.settingsService = SettingsService;
+api.toolService = ToolService;
 
 export default api;

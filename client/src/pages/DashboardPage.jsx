@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import CeoDashboard from '../components/dashboards/CeoDashboard';
+import ManagerDashboard from '../components/dashboards/ManagerDashboard';
 import CashierDashboard from '../components/dashboards/CashierDashboard';
 
 const GREETING = () => {
@@ -30,6 +31,7 @@ export default function DashboardPage() {
 
     const renderDashboard = () => {
         if (role === 'ceo' || role === 'admin') return <CeoDashboard />;
+        if (role === 'manager') return <ManagerDashboard />;
         return <CashierDashboard />;
     };
 

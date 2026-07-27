@@ -12,6 +12,7 @@ from .credits import Credit
 from .messages import Message, MessageRecipient
 from .editHistory import EditHistory
 from .settings import SystemSetting
+from .tools import Tool, ToolLoan, ToolLoanItem
 
 __all__ = [
     "User",
@@ -30,4 +31,7 @@ __all__ = [
     "MessageRecipient",
     "EditHistory",
     "SystemSetting",
+    "Tool",
+    "ToolLoan",
+    "ToolLoanItem",
 ]

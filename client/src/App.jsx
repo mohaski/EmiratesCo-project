@@ -29,6 +29,8 @@ const InvoiceGenPage      = lazy(() => import('./pages/InvoiceGenPage'));
 const InvoiceReviewPage   = lazy(() => import('./pages/InvoiceReviewPage'));
 const OrdersPage          = lazy(() => import('./pages/OrdersPage'));
 const OrderSummaryPage    = lazy(() => import('./pages/OrderSummaryPage'));
+const ToolCheckoutPage    = lazy(() => import('./pages/ToolCheckoutPage'));
+const ManagerToolsPage    = lazy(() => import('./pages/ManagerToolsPage'));
 
 // Minimal spinner shown during lazy-load transitions
 const PageLoader = () => (
@@ -94,6 +96,8 @@ function App() {
                     <Route path="/orders/review"       element={<OrderSummaryPage />} />
                     <Route path="/invoice"             element={<InvoiceGenPage />} />
                     <Route path="/invoice/review"      element={<InvoiceReviewPage />} />
+                    <Route path="/tools"               element={<ToolCheckoutPage />} />
+                    <Route path="/tools/manage"        element={<ManagerToolsPage />} />
                   </Route>
                 </Routes>
               </Suspense>
