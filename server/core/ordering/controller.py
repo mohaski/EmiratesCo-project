@@ -33,7 +33,7 @@ def get_orders(
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    require_role(["manager", "ceo", "admin"], current_user)
+    require_role(["manager", "cashier", "ceo", "admin"], current_user)
     return orderService.get_all_orders(db, skip, limit)
 
 
@@ -86,6 +86,23 @@ async def edit_order(
     background_tasks.add_task(manager.broadcast, "orders_updated")
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result
+
+
+@router.put("/{order_id}/correct-offcut", response_model=model.CorrectOffcutResponse)
+async def correct_offcut(
+    order_id: int,
+    body: model.CorrectOffcutRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Manager-only: correct the remainder(s) a past cutting event recorded."""
+    result = orderService.correct_offcut_for_order_item(
+        order_id, body.item_id, body.line_idx, body.event_idx,
+        body.new_remainders, body.notes, db, current_user,
+    )
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return model.CorrectOffcutResponse(message="Offcut corrected", before=result["before"], after=result["after"])
 
 
 @router.put("/{order_id}/payment-status", response_model=model.OrderStatusUpdateResponse)

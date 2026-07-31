@@ -8,7 +8,7 @@ const isToday = (dateStr) => {
            d.getDate() === now.getDate();
 };
 
-const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, highlighted }) => {
+const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, highlighted, canManage = true }) => {
     const isCancelled = order.status === 'cancelled';
     const orderIsToday = isToday(order.date);
     const cardRef = useRef(null);
@@ -103,7 +103,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, highlighted 
                 onMouseLeave={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.1)'; }}
                 >➕ Add To</button>
             )}
-            {!isCancelled && (
+            {!isCancelled && canManage && (
                 <button onClick={() => onEdit(order)} style={{
                     padding: '0.5rem 1rem', borderRadius: '0.625rem',
                     background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', border: 'none',
@@ -115,7 +115,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, highlighted 
                 onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
                 >✏️ Edit</button>
             )}
-            {!isCancelled && onCancel && (
+            {!isCancelled && canManage && onCancel && (
                 <button onClick={() => onCancel(order)} style={{
                     padding: '0.5rem 1rem', borderRadius: '0.625rem',
                     background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',

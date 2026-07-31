@@ -91,6 +91,10 @@ export const OrderService = {
         const response = await api.put(`/orders/${id}/cancel`, { pin });
         return response.data;
     },
+    correctOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainders, notes }) => {
+        const response = await api.put(`/orders/${orderId}/correct-offcut`, { item_id, line_idx, event_idx, new_remainders, notes });
+        return response.data;
+    },
 };
 
 export const ProductService = {
@@ -153,6 +157,21 @@ export const ProductService = {
      */
     previewGlassCuts: async (productId, variantId, cuts) => {
         const response = await api.post(`/products/${productId}/glass-cut-preview`, { variant_id: variantId, cuts });
+        return response.data;
+    },
+    /**
+     * Dry-run whether the given line items — profile full/half/custom-cut,
+     * glass sheet-full/sheet-half/glass-cut, etc. — can be fulfilled from
+     * current stock — reuses the same deduction logic a real checkout would
+     * run, but nothing is persisted. Returns { ok: boolean, message:
+     * string|null }. Unlike previewGlassCuts, an "insufficient stock" result
+     * is a normal 200 (not a 422): this is called automatically on every
+     * debounced keystroke via ProfileCalculator/GlassCalculator, and a
+     * routine "not enough stock yet" state shouldn't trigger the global
+     * error-toast interceptor above.
+     */
+    checkCutFeasibility: async (productId, variantId, lineItems) => {
+        const response = await api.post(`/products/${productId}/cut-feasibility`, { variant_id: variantId, line_items: lineItems });
         return response.data;
     },
     getRestockHistory: async (skip = 0, limit = 100, productId = null) => {

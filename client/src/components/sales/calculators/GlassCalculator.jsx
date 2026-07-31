@@ -1,6 +1,7 @@
-import { memo, useState, useMemo, useEffect } from 'react';
+import { memo, useState, useMemo, useEffect, useRef } from 'react';
 import { mmToSquareFeet, inchesToSquareFeet, roundToHalfWithRule } from '../../../utils/calculations';
 import CutPreviewModal from './CutPreviewModal';
+import api from '../../../services/api';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -58,9 +59,11 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [cutL, setCutL] = useState('');
     const [cutW, setCutW] = useState('');
     const [cutQty, setCutQty] = useState('');
-    const [unit, setUnit] = useState('ft');
+    const [unit, setUnit] = useState('mm');
     const [error, setError] = useState(null);
+    const [cutSizeError, setCutSizeError] = useState(null);
     const [showCutPreview, setShowCutPreview] = useState(false);
+    const [feasibility, setFeasibility] = useState({ checking: false, ok: true, message: null });
 
     useEffect(() => {
         setExtraSelections(prev => {
@@ -80,32 +83,86 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             priceHalf: match.priceHalf ?? 0,
             priceSqFt: match.priceUnit ?? match.priceSqFt ?? match.priceFoot ?? 0,
             availableStock: match.stock ?? product.stock ?? 0,
-            variantId: match.variantId
+            variantId: match.variantId,
+            // Sheet's own physical size, always in mm (see server-side glassOffcutService
+            // docstring) — used to reject a cut piece that can't possibly fit this sheet.
+            sheetLengthMm: match.length ?? 0,
+            sheetWidthMm: match.width ?? 0,
         };
         return {
             priceFull: product.priceFull ?? product.priceFullSheet ?? 0,
             priceHalf: product.priceHalf ?? product.priceHalfSheet ?? 0,
             priceSqFt: product.priceFoot ?? product.priceSqFt ?? 0,
-            availableStock: product.stock ?? 0
+            availableStock: product.stock ?? 0,
+            sheetLengthMm: 0,
+            sheetWidthMm: 0,
         };
     }, [product, extraSelections]);
 
+    const lineItems = useMemo(() => {
+        const items = [];
+        if (fullQty > 0) items.push({ type: 'sheet-full', label: 'Full Sheet', qty: fullQty, rate: pricing.priceFull, total: fullQty * pricing.priceFull, meta: {} });
+        if (halfQty > 0) items.push({ type: 'sheet-half', label: 'Half Sheet', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: {} });
+        cutPieces.forEach(cut => items.push({ type: 'glass-cut', label: cut.label, qty: cut.q, rate: cut.area * pricing.priceSqFt, total: cut.area * cut.q * pricing.priceSqFt, meta: { l: cut.l, w: cut.w, u: cut.u, area: cut.area, rateSqFt: pricing.priceSqFt } }));
+        return items;
+    }, [fullQty, halfQty, cutPieces, pricing]);
+
     useEffect(() => {
-        let isValid = true;
-        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setError(`Only ${pricing.availableStock} Full Sheets available`); isValid = false; }
+        let syncValid = true;
+        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setError(`Only ${pricing.availableStock} Full Sheets available`); syncValid = false; }
         else setError(null);
+
+        const isValid = syncValid && !feasibility.checking && feasibility.ok;
+
         const fullTotal = fullQty * pricing.priceFull;
         const halfTotal = halfQty * pricing.priceHalf;
         const cutsCost = cutPieces.reduce((sum, cut) => sum + (cut.area * cut.q * pricing.priceSqFt), 0);
-        const lineItems = [];
-        if (fullQty > 0) lineItems.push({ type: 'sheet-full', label: 'Full Sheet', qty: fullQty, rate: pricing.priceFull, total: fullTotal, meta: {} });
-        if (halfQty > 0) lineItems.push({ type: 'sheet-half', label: 'Half Sheet', qty: halfQty, rate: pricing.priceHalf, total: halfTotal, meta: {} });
-        cutPieces.forEach(cut => lineItems.push({ type: 'glass-cut', label: cut.label, qty: cut.q, rate: cut.area * pricing.priceSqFt, total: cut.area * cut.q * pricing.priceSqFt, meta: { l: cut.l, w: cut.w, u: cut.u, area: cut.area, rateSqFt: pricing.priceSqFt } }));
         const attributes = [];
         if (extraSelections['Thickness']) attributes.push({ label: 'Thickness', value: extraSelections['Thickness'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Thickness') attributes.push({ label: key, value: val }); });
-        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid });
-    }, [fullQty, halfQty, cutPieces, pricing, extraSelections, onUpdate]);
+        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, checkingStock: feasibility.checking, stockError: feasibility.message });
+    }, [fullQty, halfQty, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility]);
+
+    // Debounced dry-run check: can these line items actually be fulfilled from
+    // current sheet stock/offcuts? Reuses the exact real checkout deduction
+    // logic on the backend (see checkCutFeasibility) — the same mechanism
+    // ProfileCalculator uses for bar cuts — rather than guessing client-side,
+    // since only the live DB knows what offcuts/stock actually exist.
+    const feasibilitySeqRef = useRef(0);
+    useEffect(() => {
+        if (fullQty <= 0 && halfQty <= 0 && cutPieces.length === 0) {
+            setFeasibility({ checking: false, ok: true, message: null });
+            return;
+        }
+        // The cheap synchronous check already flagged a problem — no need to
+        // hit the network for something the user already sees an error for.
+        if (error) {
+            setFeasibility({ checking: false, ok: true, message: null });
+            return;
+        }
+
+        const mySeq = ++feasibilitySeqRef.current;
+        // Flip to "checking" immediately so the Add-to-Order button disables
+        // the instant a relevant input changes, not after the debounce delay.
+        setFeasibility({ checking: true, ok: false, message: null });
+
+        const timer = setTimeout(() => {
+            api.productService
+                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems)
+                .then(res => {
+                    if (feasibilitySeqRef.current !== mySeq) return; // superseded by a newer check
+                    setFeasibility({ checking: false, ok: !!res.ok, message: res.ok ? null : (res.message || 'Insufficient stock for this configuration.') });
+                })
+                .catch(err => {
+                    if (feasibilitySeqRef.current !== mySeq) return;
+                    // Fail-open: a transient network/server error shouldn't block a sale.
+                    console.warn('Stock feasibility check failed; failing open (not blocking sale).', err);
+                    setFeasibility({ checking: false, ok: true, message: null });
+                });
+        }, 400);
+
+        return () => clearTimeout(timer);
+    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems]);
 
     const getArea = (l, w, u) => {
         if (u === 'ft') { const rl = roundToHalfWithRule(l), rw = roundToHalfWithRule(w); return rl * rw; }
@@ -114,8 +171,50 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         return 0;
     };
 
+    // Same conversion factors the backend uses (glassOffcutService.py's
+    // MM_PER_FOOT/MM_PER_INCH) — mm is the canonical unit sheet/offcut sizes
+    // are always stored in, regardless of what unit a cut was entered in.
+    const MM_PER_FOOT = 304.79999025;
+    const MM_PER_INCH = 25.4;
+    const toMm = (val, u) => u === 'ft' ? val * MM_PER_FOOT : u === 'inch' ? val * MM_PER_INCH : val;
+
+    // Live validation as the cashier types — doesn't wait for "Add" to be clicked.
+    useEffect(() => {
+        const { sheetLengthMm, sheetWidthMm } = pricing;
+        if (!(sheetLengthMm > 0 && sheetWidthMm > 0)) { setCutSizeError(null); return; }
+        const maxSide = Math.max(sheetLengthMm, sheetWidthMm);
+        const minSide = Math.min(sheetLengthMm, sheetWidthMm);
+
+        const lMm = cutL !== '' ? toMm(parseFloat(cutL), unit) : null;
+        const wMm = cutW !== '' ? toMm(parseFloat(cutW), unit) : null;
+
+        // A single dimension bigger than the sheet's LONGER side can never fit,
+        // in any orientation, no matter what the other dimension turns out to
+        // be — flag this the moment it's typed, without waiting for both fields.
+        if ((lMm !== null && lMm > maxSide) || (wMm !== null && wMm > maxSide)) {
+            const badVal = (lMm !== null && lMm > maxSide) ? cutL : cutW;
+            setCutSizeError(`${badVal}${unit} exceeds the sheet size (${sheetLengthMm}×${sheetWidthMm}mm)`);
+            return;
+        }
+
+        // Once both are filled, check the actual pair — piece may be rotated 90°
+        // (matches the backend's default allow_rotation behavior), so compare
+        // canonically rather than axis-by-axis, otherwise a physically-fitting
+        // cut could be rejected just because L/W were typed in the "wrong" order
+        // relative to the sheet's own L/W.
+        if (lMm !== null && wMm !== null) {
+            const fits = Math.max(lMm, wMm) <= maxSide && Math.min(lMm, wMm) <= minSide;
+            if (!fits) {
+                setCutSizeError(`${cutL}×${cutW}${unit} exceeds the sheet size (${sheetLengthMm}×${sheetWidthMm}mm)`);
+                return;
+            }
+        }
+
+        setCutSizeError(null);
+    }, [cutL, cutW, unit, pricing]);
+
     const addCut = () => {
-        if (!cutL || !cutW || !cutQty) return;
+        if (!cutL || !cutW || !cutQty || cutSizeError) return;
         const l = parseFloat(cutL), w = parseFloat(cutW), q = parseFloat(cutQty);
         const area = getArea(l, w, unit);
         setCutPieces(prev => [...prev, { l, w, q, u: unit, area, label: `Cut: ${l}×${w}${unit}` }]);
@@ -200,7 +299,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                             </button>
                         )}
                         <div style={{ display: 'flex', gap: '2px', background: 'rgba(255,255,255,0.06)', borderRadius: '6px', padding: '2px' }}>
-                            {['ft', 'inch', 'mm'].map(u => (
+                            {['mm', 'ft', 'inch'].map(u => (
                                 <button key={u} onClick={() => setUnit(u)} style={{ ...chipBtn(unit === u), borderRadius: '4px', padding: '2px 8px', fontSize: '0.65rem' }}>{u}</button>
                             ))}
                         </div>
@@ -211,8 +310,25 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                     <input type="number" placeholder={`L (${unit})`} value={cutL} onChange={e => setCutL(e.target.value)} style={inputStyle} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
                     <input type="number" placeholder={`W (${unit})`} value={cutW} onChange={e => setCutW(e.target.value)} style={inputStyle} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
                     <input type="number" placeholder="Qty" value={cutQty} onChange={e => setCutQty(e.target.value)} style={{ ...inputStyle, textAlign: 'center' }} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
-                    <button onClick={addCut} style={{ padding: '0.5rem', borderRadius: '0.5rem', border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: '#fff', fontWeight: 800, fontSize: '0.82rem' }}>Add</button>
+                    <button onClick={addCut} disabled={!!cutSizeError} style={{
+                        padding: '0.5rem', borderRadius: '0.5rem', border: 'none',
+                        cursor: cutSizeError ? 'not-allowed' : 'pointer',
+                        background: cutSizeError ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                        color: cutSizeError ? '#334155' : '#fff', fontWeight: 800, fontSize: '0.82rem',
+                    }}>Add</button>
                 </div>
+                {cutSizeError && <p style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700, margin: '0 0 0.5rem', animation: 'pulse 1.5s ease-in-out infinite' }}>{cutSizeError}</p>}
+
+                {feasibility.checking && (
+                    <p style={{ fontSize: '0.68rem', color: '#64748b', margin: '0.5rem 0 0', fontStyle: 'italic' }}>
+                        Checking stock…
+                    </p>
+                )}
+                {!feasibility.checking && feasibility.message && (
+                    <p style={{ fontSize: '0.68rem', color: '#f87171', fontWeight: 700, margin: '0.5rem 0 0', animation: 'pulse 1.5s ease-in-out infinite' }}>
+                        {feasibility.message}
+                    </p>
+                )}
             </div>
 
             {/* Summary */}

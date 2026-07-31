@@ -1,6 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from sqlmodel import Session, select, col, or_
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from entities.products import Product, Category
 from entities.variants import Variant
 from . import model
@@ -577,6 +577,33 @@ def preview_glass_cuts(
         raise HTTPException(status_code=422, detail=str(e))
     finally:
         db.rollback()  # dry run only — never persist
+
+
+def check_cut_feasibility(
+    product_id: int,
+    line_items: List[Dict[str, Any]],
+    db: Session,
+    variant_id: Optional[int] = None,
+) -> dict:
+    """
+    Dry-run whether the given line items — profile full/half/custom-cut
+    (optionally with a manual offcut_selection), glass sheet-full/sheet-half/
+    glass-cut, or any other type _process_line_items understands — can be
+    fulfilled from current stock. Delegates to
+    inventoryService.check_line_items_feasible, which reuses
+    _process_line_items, the exact dispatcher a real sale calls, so this stays
+    correct for every product family without duplicating any stock logic.
+    Nothing is persisted; see that function's docstring for the rollback
+    guarantee.
+    """
+    from core.inventory.inventoryService import check_line_items_feasible
+
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    variant = db.get(Variant, variant_id) if variant_id else None
+
+    return check_line_items_feasible(db, product, variant, line_items)
 
 
 def check_stock_availability(product_id: int, qty: int, db: Session = Depends(get_session), variant_id: Optional[int] = None):

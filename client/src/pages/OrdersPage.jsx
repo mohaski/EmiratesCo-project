@@ -21,6 +21,8 @@ export default function OrdersPage() {
     const [orderToCancel, setOrderToCancel] = useState(null);
     const [showSetPin, setShowSetPin] = useState(false);
     const canSetPin = user?.role === 'ceo' || user?.role === 'admin';
+    // Cashier gets Order History back, but read-only + Add To — no edit or cancel
+    const canManageOrders = ['manager', 'ceo', 'admin'].includes(user?.role);
 
     // Clear the highlight after a moment so it doesn't linger forever
     useEffect(() => {
@@ -203,7 +205,7 @@ export default function OrdersPage() {
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                                     {group.items.map(order => (
-                                        <OrderCard key={order.id} order={order} onAddTo={handleAddTo} onEdit={handleEdit} onCancel={setOrderToCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} />
+                                        <OrderCard key={order.id} order={order} onAddTo={handleAddTo} onEdit={handleEdit} onCancel={setOrderToCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} canManage={canManageOrders} />
                                     ))}
                                 </div>
                             </div>

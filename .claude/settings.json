@@ -24,7 +24,14 @@
       "Bash(python \"C:\\\\Users\\\\mohas\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-mohas-Desktop-EmiratesCo-project\\\\fce17368-b8e4-419b-bd32-b5cee951c5ef\\\\scratchpad\\\\verify_glass_wiring.py\")",
       "Bash(python -c \"import core.inventory.glassOffcutService as gos; print\\('import OK'\\)\")",
       "Bash(python -c \"import core.inventory.glassOffcutService as gos; print\\('import OK'\\); print\\([s['name'] for s in gos.STRATEGIES]\\)\")",
-      "Bash(python -c \"import core.inventory.glassOffcutService as gos; print\\('OK'\\)\")"
+      "Bash(python -c \"import core.inventory.glassOffcutService as gos; print\\('OK'\\)\")",
+      "Bash(python -m py_compile core/ordering/model.py core/ordering/orderService.py core/ordering/orderItemService.py)",
+      "Bash(python -m py_compile test_glass_offcut_logic.py)",
+      "Bash(python test_offcut_logic.py)",
+      "Bash(tasklist)",
+      "Bash(powershell -Command 'Get-Process | Where-Object {$_.ProcessName -match '\\\\''python|nssm|uvicorn'\\\\''} | Select-Object ProcessName,Id')",
+      "Bash(echo \"exit code: $?\")",
+      "Read(//tmp/**)"
     ]
   }
 }

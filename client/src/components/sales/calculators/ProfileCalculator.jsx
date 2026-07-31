@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import OffcutSelectorModal from './OffcutSelectorModal';
+import api from '../../../services/api';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -50,6 +51,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
     const [cuterror, setcuterror] = useState(null);
     const [offcutSelection, setOffcutSelection] = useState(initialDetails?.offcutSelection || null);
     const [showOffcutModal, setShowOffcutModal] = useState(false);
+    const [feasibility, setFeasibility] = useState({ checking: false, ok: true, message: null });
 
     useEffect(() => {
         setExtraSelections(prev => {
@@ -94,27 +96,74 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         }
     }, [feet, pricing.variantId]);
 
-    useEffect(() => {
-        let isValid = true;
-        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setfullLengtherror(`Only ${pricing.availableStock} full lengths available`); isValid = false; }
-        else if (pricing.availableStock !== undefined && feet > selectedLengthNum) { setcuterror(`Feet cannot exceed ${selectedLengthNum}`); isValid = false; }
-        else { setfullLengtherror(null); setcuterror(null); }
-
-        const total = (fullQty * pricing.priceFull) + (halfQty * pricing.priceHalf) + (feet * pricing.priceFoot);
-        const lineItems = [];
-        if (fullQty > 0) lineItems.push({ type: 'profile-full', label: 'Full Length', qty: fullQty, rate: pricing.priceFull, total: fullQty * pricing.priceFull, meta: { length: extraSelections['Length'] } });
-        if (halfQty > 0) lineItems.push({ type: 'profile-half', label: 'Half Length', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { length: extraSelections['Length'] } });
+    const lineItems = useMemo(() => {
+        const items = [];
+        if (fullQty > 0) items.push({ type: 'profile-full', label: 'Full Length', qty: fullQty, rate: pricing.priceFull, total: fullQty * pricing.priceFull, meta: { length: extraSelections['Length'] } });
+        if (halfQty > 0) items.push({ type: 'profile-half', label: 'Half Length', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { length: extraSelections['Length'] } });
         if (feet > 0) {
             const cutLine = { type: 'profile-cut', label: `Custom Cut (${feet}ft)`, qty: 1, rate: pricing.priceFoot, total: feet * pricing.priceFoot, meta: { length: feet, unit: 'ft' } };
             if (offcutSelection && offcutSelection.length > 0) cutLine.offcut_selection = offcutSelection;
-            lineItems.push(cutLine);
+            items.push(cutLine);
         }
+        return items;
+    }, [fullQty, halfQty, feet, pricing, extraSelections, offcutSelection]);
+
+    useEffect(() => {
+        let syncValid = true;
+        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setfullLengtherror(`Only ${pricing.availableStock} full lengths available`); syncValid = false; }
+        else if (pricing.availableStock !== undefined && feet > selectedLengthNum) { setcuterror(`Feet cannot exceed ${selectedLengthNum}`); syncValid = false; }
+        else { setfullLengtherror(null); setcuterror(null); }
+
+        const isValid = syncValid && !feasibility.checking && feasibility.ok;
+
+        const total = (fullQty * pricing.priceFull) + (halfQty * pricing.priceHalf) + (feet * pricing.priceFoot);
         const attributes = [];
         if (color) attributes.push({ label: 'Color', value: color });
         if (extraSelections['Length']) attributes.push({ label: 'Length', value: extraSelections['Length'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Length' && key !== 'Color') attributes.push({ label: key, value: val }); });
-        onUpdate(total, { lineItems, attributes, full: fullQty, half: halfQty, feet, color: color || 'White', extras: extraSelections, variantId: pricing.variantId, offcutSelection, isValid });
-    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, onUpdate]);
+        onUpdate(total, { lineItems, attributes, full: fullQty, half: halfQty, feet, color: color || 'White', extras: extraSelections, variantId: pricing.variantId, offcutSelection, isValid, checkingStock: feasibility.checking, stockError: feasibility.message });
+    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, onUpdate, lineItems, feasibility]);
+
+    // Debounced dry-run check: can these line items actually be fulfilled from
+    // current stock/offcuts? Reuses the real checkout deduction logic on the
+    // backend (see checkCutFeasibility) rather than guessing client-side,
+    // since that's the only way to know about offcuts/stock without risking
+    // the same staleness a locally-cached number could have.
+    const feasibilitySeqRef = useRef(0);
+    useEffect(() => {
+        if (fullQty <= 0 && halfQty <= 0 && feet <= 0) {
+            setFeasibility({ checking: false, ok: true, message: null });
+            return;
+        }
+        // The cheap synchronous checks already flagged a problem — no need to
+        // hit the network for something the user already sees an error for.
+        if (fullLengtherror || cuterror) {
+            setFeasibility({ checking: false, ok: true, message: null });
+            return;
+        }
+
+        const mySeq = ++feasibilitySeqRef.current;
+        // Flip to "checking" immediately so the Add-to-Order button disables
+        // the instant a relevant input changes, not after the debounce delay.
+        setFeasibility({ checking: true, ok: false, message: null });
+
+        const timer = setTimeout(() => {
+            api.productService
+                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems)
+                .then(res => {
+                    if (feasibilitySeqRef.current !== mySeq) return; // superseded by a newer check
+                    setFeasibility({ checking: false, ok: !!res.ok, message: res.ok ? null : (res.message || 'Insufficient stock for this configuration.') });
+                })
+                .catch(err => {
+                    if (feasibilitySeqRef.current !== mySeq) return;
+                    // Fail-open: a transient network/server error shouldn't block a sale.
+                    console.warn('Stock feasibility check failed; failing open (not blocking sale).', err);
+                    setFeasibility({ checking: false, ok: true, message: null });
+                });
+        }, 400);
+
+        return () => clearTimeout(timer);
+    }, [fullQty, halfQty, feet, pricing.variantId, offcutSelection, product.id, fullLengtherror, cuterror, lineItems]);
 
     const handleExtraChange = (key, val) => setExtraSelections(prev => ({ ...prev, [key]: val }));
     const chipBtn = (active) => ({
@@ -212,6 +261,17 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                     )}
                 </div>
             </div>
+
+            {feasibility.checking && (
+                <p style={{ fontSize: '0.68rem', color: '#64748b', margin: '0.625rem 0 0', fontStyle: 'italic' }}>
+                    Checking stock…
+                </p>
+            )}
+            {!feasibility.checking && feasibility.message && (
+                <p style={{ fontSize: '0.68rem', color: '#f87171', fontWeight: 700, margin: '0.625rem 0 0', animation: 'pulse 1.5s ease-in-out infinite' }}>
+                    {feasibility.message}
+                </p>
+            )}
 
             {showOffcutModal && (
                 <OffcutSelectorModal

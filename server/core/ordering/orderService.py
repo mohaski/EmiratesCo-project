@@ -60,6 +60,7 @@ def _order_to_response(order: Order) -> model.OrderResponse:
         source_invoice_id=order.source_invoice_id,
         items=[
             model.OrderItemResponse(
+                itemId=item.item_id,
                 productId=item.product_id,
                 orderId=item.order_id,
                 variantId=item.variant_id,
@@ -624,7 +625,7 @@ def update_order(
     from entities.products import Product
     from entities.variants import Variant
 
-    require_role(["manager", "cashier", "ceo", "admin"], current_user)
+    require_role(["manager", "ceo", "admin"], current_user)
 
     order = db.get(Order, order_id)
     if not order:
@@ -799,6 +800,85 @@ def update_order(
         raise HTTPException(status_code=500, detail="Something went wrong while updating the order. Please try again.")
 
 
+def correct_offcut_for_order_item(
+    order_id: int,
+    item_id: int,
+    line_idx: int,
+    event_idx: int,
+    new_remainders: list,
+    notes: str | None,
+    db: Session,
+    current_user,
+) -> dict:
+    """
+    Manager correction for a single cutting event on a past order: real-world
+    cutting sometimes produces a different remainder than what got recorded at
+    checkout. Reverses the remainder(s) that event recorded and applies the
+    manager-supplied replacement (see glassOffcutService.correct_glass_offcut_event
+    for the actual offcut inventory mutation), then writes an EditHistory row.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+    from core.inventory.glassOffcutService import correct_glass_offcut_event
+
+    require_role(["manager", "ceo", "admin"], current_user)
+
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    item = db.get(OrderItem, item_id)
+    if not item or item.order_id != order_id:
+        raise HTTPException(status_code=404, detail="Order item not found on this order")
+
+    details = item.details or {}
+    line_items = details.get("lineItems") or []
+    if not (0 <= line_idx < len(line_items)):
+        raise HTTPException(status_code=422, detail="Invalid line_idx for this order item")
+
+    offcut_sources = line_items[line_idx].get("offcut_sources") or []
+    if not (0 <= event_idx < len(offcut_sources)):
+        raise HTTPException(status_code=422, detail="Invalid event_idx for this cutting line")
+
+    event = offcut_sources[event_idx]
+
+    product = db.get(Product, item.product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    variant = db.get(Variant, item.variant_id) if item.variant_id else None
+
+    try:
+        result = correct_glass_offcut_event(db, product, variant, event, [r.model_dump() for r in new_remainders])
+
+        item.details = {**details, "lineItems": line_items}
+        flag_modified(item, "details")
+        db.add(item)
+
+        audit = EditHistory(
+            entity_type="offcut_correction",
+            entity_id=order_id,
+            edited_by=current_user.userId,
+            action="correct",
+            before_snapshot={"item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "remainders": result["before"]},
+            after_snapshot={"item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "remainders": result["after"]},
+            notes=notes,
+        )
+        db.add(audit)
+        db.commit()
+        db.refresh(item)
+
+        logger.info(f"Offcut corrected for order {order_id} item {item_id} by {current_user.userId}")
+        return result
+    except HTTPException:
+        raise
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error correcting offcut for order {order_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Something went wrong while correcting the offcut. Please try again.")
+
+
 def get_audit_history(
     entity_type: str | None,
     db: Session,
@@ -935,7 +1015,7 @@ def cancel_order_with_pin(
     from core.settings.service import verify_cancel_pin, cancel_pin_is_configured
 
     try:
-        require_role(["manager", "cashier", "ceo", "admin"], current_user)
+        require_role(["manager", "ceo", "admin"], current_user)
 
         if not cancel_pin_is_configured(db):
             raise HTTPException(

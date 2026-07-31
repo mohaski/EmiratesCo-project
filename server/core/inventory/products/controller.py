@@ -164,6 +164,25 @@ def preview_glass_cuts(
     """
     return service.preview_glass_cuts(product_id, payload.cuts, db, payload.variant_id)
 
+@router.post("/{product_id}/cut-feasibility", response_model=model.LineItemsFeasibilityResponse)
+def check_cut_feasibility(
+    product_id: int,
+    payload: model.LineItemsFeasibilityRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """
+    Dry-run whether the given line items — profile full/half/custom-cut, glass
+    sheet-full/sheet-half/glass-cut, etc. — can be fulfilled from current
+    stock — reuses the exact deduction dispatcher a real sale would call, but
+    always rolls back. Called automatically (debounced) by ProfileCalculator
+    and GlassCalculator to gate "Add to Order" before checkout; a business
+    "insufficient stock" outcome is a normal 200 response (ok: false), not an
+    error — this fires on every keystroke, unlike glass's user-triggered
+    preview (glass-cut-preview) which surfaces failures as 422.
+    """
+    return service.check_cut_feasibility(product_id, payload.line_items, db, payload.variant_id)
+
 @router.get("/{product_id}/availability", response_model=model.StockAvailabilityResponse)
 def check_availability(
     product_id: int,

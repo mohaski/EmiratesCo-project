@@ -68,7 +68,22 @@ def _process_line_items(
     if glass_cut_lines and track:
         resolve_glass_cut_lines(db, product, variant, glass_cut_lines)
 
-    for line in line_items:
+    # Manually-selected profile cut lines must be consumed before any automatic
+    # (best-fit) profile line in this same item — otherwise an earlier auto line
+    # can grab the very offcut the cashier reserved for a later manual line,
+    # deleting it and making the manual line fail with "no longer exists" even
+    # though nothing external touched it. Only applies to 1D "cut" lines
+    # (profile/bar products); glass-cut lines are already handled above via
+    # resolve_glass_cut_lines and skipped in this loop. Python's sort is
+    # stable, so this only pulls reserved lines to the front; relative order
+    # within each group is unchanged.
+    def _is_reserved_cut(line: dict) -> bool:
+        l_type = line.get("type", "")
+        return l_type != "glass-cut" and "cut" in l_type and bool(line.get("offcut_selection"))
+
+    ordered_lines = sorted(line_items, key=lambda l: 0 if _is_reserved_cut(l) else 1)
+
+    for line in ordered_lines:
         l_type = line.get("type", "")
         qty = int(line.get("qty", 0))
         if qty <= 0:
@@ -129,6 +144,33 @@ def _process_line_items(
         else:
             logger.warning(f"Unknown line item type '{l_type}'; performing simple deduction.")
             _deduct_simple_stock(db, product, variant, qty)
+
+
+def check_line_items_feasible(
+    db: Session,
+    product: Product,
+    variant: Optional[Variant],
+    line_items: list,
+) -> dict:
+    """
+    Dry-runs _process_line_items — the exact dispatcher a real checkout calls
+    via deduct_stock_for_order_item — against a shallow copy of line_items, to
+    check whether they can be fulfilled from current stock/offcuts without
+    committing anything. Mirrors how products/service.py's preview_glass_cuts
+    reuses glassOffcutService.resolve_glass_cut_lines: same real logic, always
+    rolled back in `finally`, so nothing is ever persisted by a dry run.
+
+    Returns {"ok": True, "message": None} if fulfillable, else
+    {"ok": False, "message": <human-readable reason, from the ValueError>}.
+    """
+    trial_lines = [dict(line) for line in line_items]  # don't mutate caller's lineItems
+    try:
+        _process_line_items(db, product, variant, trial_lines)
+        return {"ok": True, "message": None}
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+    finally:
+        db.rollback()  # dry run only — never persist
 
 
 # ── Stock deduction primitives ────────────────────────────────────────────────

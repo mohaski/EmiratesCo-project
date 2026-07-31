@@ -820,6 +820,146 @@ def test_19_small_offcut_before_large_offcut(db, p, v):
     print("PASS")
 
 
+def test_20_correct_offcut_event(db, p, v):
+    print("\n--- Test 20: Manager correction reverses the old remainder, applies the corrected one ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+
+    line = _mk_line(600, 300)  # forces a fresh sheet, leaves one big remainder
+    lines = [line]
+    gos.resolve_glass_cut_lines(db, p, v, lines)
+    db.commit()
+
+    event = next(e for e in line["offcut_sources"] if e.get("owns_consumption", True))
+    old_remainders = list(event["remainders_created"])
+    assert len(old_remainders) >= 1, "Expected at least one remainder to correct"
+
+    # Manager says: the sheet actually cracked and only a smaller piece was salvageable
+    new_remainders = [{"width": 400.0, "height": 250.0, "status": "available"}]
+    result = gos.correct_glass_offcut_event(db, p, v, event, new_remainders)
+    db.commit()
+    print(f"Before: {result['before']}")
+    print(f"After: {result['after']}")
+
+    remaining = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
+    print(f"Offcuts in DB after correction: {[(o.width, o.height, o.quantity, o.status) for o in remaining]}")
+
+    for r in old_remainders:
+        match = [
+            o for o in remaining
+            if o.status == r.get("status", "available")
+            and abs((o.width or 0) - r["width"]) < 1.0 and abs((o.height or 0) - r["height"]) < 1.0
+        ]
+        assert not match, f"Old remainder {r} should have been reversed, found {match}"
+
+    corrected = [
+        o for o in remaining
+        if o.status == "available" and abs((o.width or 0) - 400.0) < 1.0 and abs((o.height or 0) - 250.0) < 1.0
+    ]
+    assert corrected and corrected[0].quantity == 1, "Expected the corrected 400x250 offcut to exist with quantity 1"
+    assert event["remainders_created"] == result["after"], "Event should be mutated in place to the corrected remainders"
+    print("PASS")
+
+
+def test_21_correct_offcut_rejects_invalid_input(db, p, v):
+    print("\n--- Test 21: Correction rejects non-2D events, non-owner events, and bad dimensions ---")
+    _clear_offcuts(db, p)
+
+    try:
+        gos.correct_glass_offcut_event(db, p, v, {"remainders_created": []}, [{"width": 100, "height": 100}])
+        assert False, "Expected ValueError for a non-2D event (missing 'cuts')"
+    except ValueError:
+        pass
+
+    fake_event = {"cuts": [], "remainders_created": [{"width": 100, "height": 100, "status": "available"}], "owns_consumption": False}
+    try:
+        gos.correct_glass_offcut_event(db, p, v, fake_event, [{"width": 100, "height": 100}])
+        assert False, "Expected ValueError for a non-owning event"
+    except ValueError:
+        pass
+
+    owner_event = {"cuts": [], "remainders_created": [], "owns_consumption": True}
+    try:
+        gos.correct_glass_offcut_event(db, p, v, owner_event, [{"width": 0, "height": 100}])
+        assert False, "Expected ValueError for a non-positive dimension"
+    except ValueError:
+        pass
+
+    print("PASS")
+
+
+def test_22_no_forced_split_when_consolidating_leaves_scrap_anyway(db, p, v):
+    print("\n--- Test 22: A small offcut is NOT used just to protect a remainder that would be scrap anyway ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+
+    # Same two cuts as test 19 (400x1070 x2), but the "large" offcut is now only
+    # 900mm tall instead of 1020 -- just short enough that grid-packing BOTH
+    # pieces into it leaves a sub-150mm (scrap) sliver alongside the good
+    # remainder, whichever split direction is used. Since consolidating here
+    # would leave scrap regardless, there's nothing worth protecting by
+    # diverting one cut to the small offcut -- both cuts should still come from
+    # the large offcut, and the small offcut should be left untouched.
+    small = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=1120.0, length=0.0, quantity=1, status="available")
+    large = Offcut(product_id=p.productId, variant_id=v.variantId, width=1650.0, height=900.0, length=0.0, quantity=1, status="available")
+    db.add(small)
+    db.add(large)
+    db.commit()
+    db.refresh(small)
+    db.refresh(large)
+
+    line = _mk_line(400, 1070, qty=2)
+    lines = [line]
+    gos.resolve_glass_cut_lines(db, p, v, lines)
+    db.commit()
+
+    events = [e for e in line["offcut_sources"] if e.get("owns_consumption", True)]
+    print(f"Events: {events}")
+    assert len(events) == 1, f"Expected both cuts from ONE event (the large offcut), got {len(events)}"
+    assert events[0]["offcut_id"] == large.offcutId
+    assert len(events[0]["cuts"]) == 2
+
+    untouched = db.exec(select(Offcut).where(Offcut.offcutId == small.offcutId)).first()
+    print(f"Small offcut still in DB untouched: {untouched}")
+    assert untouched is not None and untouched.quantity == 1, "The small offcut should not have been used"
+    print("PASS")
+
+
+def test_23_no_forced_split_when_remainder_basically_same_as_cut(db, p, v):
+    print("\n--- Test 23: A small offcut is NOT used just to protect a remainder that's basically the cut itself ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+
+    # One 400x1070 cut. The 850x1070 offcut leaves a single non-scrap remainder
+    # (450x1070) after the cut -- but that remainder is within 100mm of the cut's
+    # own size on both sides, so there's no meaningfully distinct leftover to
+    # protect. A smaller, snug-fitting 420x1090 offcut also exists (and would
+    # itself be reduced to scrap slivers if used), but it should NOT be reached
+    # for -- the 850x1070 offcut should just be used directly.
+    small = Offcut(product_id=p.productId, variant_id=v.variantId, width=420.0, height=1090.0, length=0.0, quantity=1, status="available")
+    big = Offcut(product_id=p.productId, variant_id=v.variantId, width=850.0, height=1070.0, length=0.0, quantity=1, status="available")
+    db.add(small)
+    db.add(big)
+    db.commit()
+    db.refresh(small)
+    db.refresh(big)
+
+    line = _mk_line(400, 1070, qty=1)
+    lines = [line]
+    gos.resolve_glass_cut_lines(db, p, v, lines)
+    db.commit()
+
+    events = [e for e in line["offcut_sources"] if e.get("owns_consumption", True)]
+    print(f"Events: {events}")
+    assert len(events) == 1
+    assert events[0]["offcut_id"] == big.offcutId, f"Expected the cut from the 850x1070 offcut, got {events[0]['offcut_id']}"
+
+    untouched = db.exec(select(Offcut).where(Offcut.offcutId == small.offcutId)).first()
+    print(f"Small offcut still in DB untouched: {untouched}")
+    assert untouched is not None and untouched.quantity == 1, "The small offcut should not have been used"
+    print("PASS")
+
+
 def run():
     engine = create_engine(DATABASE_URL)
     with Session(engine) as db:
@@ -852,6 +992,10 @@ def run():
             ("test_17_multi_strategy_order_independent_of_lw_swap", lambda: test_17_multi_strategy_order_independent_of_lw_swap(db, p, v)),
             ("test_18_sellability_score_reflects_popular_remainders", lambda: test_18_sellability_score_reflects_popular_remainders(db, p, v)),
             ("test_19_small_offcut_before_large_offcut", lambda: test_19_small_offcut_before_large_offcut(db, p, v)),
+            ("test_20_correct_offcut_event", lambda: test_20_correct_offcut_event(db, p, v)),
+            ("test_21_correct_offcut_rejects_invalid_input", lambda: test_21_correct_offcut_rejects_invalid_input(db, p, v)),
+            ("test_22_no_forced_split_when_consolidating_leaves_scrap_anyway", lambda: test_22_no_forced_split_when_consolidating_leaves_scrap_anyway(db, p, v)),
+            ("test_23_no_forced_split_when_remainder_basically_same_as_cut", lambda: test_23_no_forced_split_when_remainder_basically_same_as_cut(db, p, v)),
         ]:
             try:
                 fn()

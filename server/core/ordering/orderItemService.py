@@ -98,6 +98,7 @@ def get_orderItems_by_orderId(order_id: int, db: Session = Depends(get_session))
         
         order_items = [
             model.OrderItemResponse(
+                itemId=item.item_id,
                 productId=item.product_id,
                 orderId=item.order_id,
                 quantity=item.quantity,

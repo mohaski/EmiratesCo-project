@@ -153,5 +153,18 @@ class GlassCutPreviewCut(BaseModel):
 class GlassCutPreviewRequest(BaseModel):
     variant_id: Optional[int] = None
     cuts: List[GlassCutPreviewCut]
-    
-    
+
+
+class LineItemsFeasibilityRequest(BaseModel):
+    """Generic across product families (profile bars, glass sheets, ...) —
+    line_items is whatever shape inventoryService._process_line_items already
+    knows how to dispatch (profile-full/half/cut, sheet-full/half, glass-cut, ...)."""
+    variant_id: Optional[int] = None
+    line_items: List[Dict[str, Any]]
+
+
+class LineItemsFeasibilityResponse(BaseModel):
+    ok: bool
+    message: Optional[str] = None
+
+

@@ -82,6 +82,7 @@ class OrderItemCreateResponse(BaseModel):
     orderItemId: List[int]
     
 class OrderItemResponse(BaseModel):
+    itemId: Optional[int] = None
     productId: int
     orderId: int
     variantId: Optional[int] = None
@@ -118,6 +119,28 @@ class OrderEditRequest(BaseModel):
     paymentDetails: Optional[Dict[str, Any]] = None
     items: List[OrderItemRequest] = []
     notes: Optional[str] = None
+
+class OffcutRemainderInput(BaseModel):
+    """One corrected remainder piece (width/height in mm). status defaults to
+    the product's own min-usable-dimension classification if omitted."""
+    width: float
+    height: float
+    status: Optional[str] = None
+
+class CorrectOffcutRequest(BaseModel):
+    """Payload for correcting a single owning offcut_sources event on an order
+    line — replaces the remainders that cutting event recorded with what the
+    manager says actually came out of it."""
+    item_id: int
+    line_idx: int
+    event_idx: int
+    new_remainders: List[OffcutRemainderInput]
+    notes: Optional[str] = None
+
+class CorrectOffcutResponse(BaseModel):
+    message: str
+    before: List[Dict[str, Any]]
+    after: List[Dict[str, Any]]
 
 class EditHistoryResponse(BaseModel):
     id: int

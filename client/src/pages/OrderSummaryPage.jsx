@@ -3,7 +3,12 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import api from '../services/api';
 import CancelOrderModal from '../components/orders/CancelOrderModal';
+import CorrectOffcutModal from '../components/orders/CorrectOffcutModal';
+import CuttingInstructions from '../components/orders/CuttingInstructions';
+import { REVIEW_THEME } from '../utils/cuttingInstructionFormat';
 
 const STATUS_COLORS = {
     pending:   { bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.25)', text: '#cbd5e1' },
@@ -30,37 +35,105 @@ const Row = ({ label, value, strong }) => (
     </div>
 );
 
-const ItemRow = ({ item }) => (
-    <div style={{
-        display: 'flex', alignItems: 'center', gap: '1rem',
-        padding: '1rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)',
-    }}>
-        <div style={{
-            width: '44px', height: '44px', borderRadius: '10px', flexShrink: 0,
-            background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
-            overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-            {item.image
-                ? <img src={item.image} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
-                : <span style={{ fontSize: '1.1rem' }}>📦</span>}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '0.7rem', color: '#475569' }}>{item.quantity} {item.unitType || 'pcs'} × KSH {item.unitPrice.toFixed(2)}</span>
-                {item.details?.color && (
-                    <span style={{ fontSize: '0.62rem', fontWeight: 600, padding: '1px 6px', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', color: '#94a3b8', textTransform: 'uppercase' }}>{item.details.color}</span>
-                )}
-                {item.details?.thickness && (
-                    <span style={{ fontSize: '0.62rem', fontWeight: 600, padding: '1px 6px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: '4px', color: '#60a5fa', textTransform: 'uppercase' }}>{item.details.thickness}</span>
-                )}
+const DetailBadge = ({ color, children }) => (
+    <span style={{ fontSize: '0.62rem', fontWeight: 600, padding: '1px 6px', background: `${color}15`, border: `1px solid ${color}30`, borderRadius: '4px', color, textTransform: 'uppercase' }}>{children}</span>
+);
+
+const ItemRow = ({ item, canCorrectOffcuts, onCorrect }) => {
+    const lineItems = item.details?.lineItems || [];
+    const attributes = item.details?.attributes;
+    const extras = item.details?.extras;
+
+    return (
+    <div style={{ padding: '1rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div style={{
+                width: '44px', height: '44px', borderRadius: '10px', flexShrink: 0,
+                background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
+                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+                {item.image
+                    ? <img src={item.image} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
+                    : <span style={{ fontSize: '1.1rem' }}>📦</span>}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.7rem', color: '#475569' }}>{item.quantity} {item.unitType || 'pcs'} × KSH {item.unitPrice.toFixed(2)}</span>
+                    {item.variantId && (
+                        <span style={{ fontSize: '0.65rem', color: '#334155', fontFamily: 'var(--font-mono)' }}>· Variant #{item.variantId}</span>
+                    )}
+                    {item.details?.description && <DetailBadge color="#94a3b8">{item.details.description}</DetailBadge>}
+                    {item.details?.color && <DetailBadge color="#94a3b8">{item.details.color}</DetailBadge>}
+                    {item.details?.thickness && <DetailBadge color="#60a5fa">{item.details.thickness}</DetailBadge>}
+                    {Array.isArray(attributes) && attributes.map((attr, i) => (
+                        <DetailBadge key={i} color="#93c5fd">{attr.label}: {attr.value}</DetailBadge>
+                    ))}
+                    {!attributes && extras && Object.entries(extras).map(([k, v]) => (
+                        k === 'Color' || k === 'Category' ? null : <DetailBadge key={k} color="#93c5fd">{k}: {v}{k === 'Length' && typeof v === 'number' ? 'ft' : ''}</DetailBadge>
+                    ))}
+                </div>
+            </div>
+            <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#f1f5f9', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
+                KSH {item.totalPrice.toFixed(2)}
             </div>
         </div>
-        <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#f1f5f9', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
-            KSH {item.totalPrice.toFixed(2)}
-        </div>
+
+        {/* Line-item breakdown — full/half sheets, individual cuts, etc. */}
+        {lineItems.length > 0 && (
+            <div style={{
+                marginLeft: '56px', marginTop: '0.625rem', background: 'rgba(255,255,255,0.02)',
+                border: '1px solid rgba(255,255,255,0.05)', borderRadius: '0.625rem', overflow: 'hidden',
+            }}>
+                {lineItems.map((li, i) => (
+                    <div key={i} style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem',
+                        padding: '0.5rem 0.75rem', borderBottom: i < lineItems.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                        fontSize: '0.75rem',
+                    }}>
+                        <span style={{ color: '#94a3b8', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {li.label || li.type}
+                            {li.meta?.length ? ` · ${li.meta.length}${li.meta.u || 'ft'}` : ''}
+                            {li.meta?.area ? ` · ${li.meta.area.toFixed(2)}sqft` : ''}
+                        </span>
+                        <span style={{ color: '#64748b', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>×{li.qty}</span>
+                        <span style={{ color: '#64748b', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>@KSH{(li.rate || 0).toFixed(2)}</span>
+                        <span style={{ color: '#cbd5e1', fontWeight: 700, fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', minWidth: '70px', textAlign: 'right' }}>KSH{(li.total || 0).toFixed(2)}</span>
+                    </div>
+                ))}
+            </div>
+        )}
+
+        {canCorrectOffcuts && lineItems.map((li, lineIdx) => {
+            const sources = li.offcut_sources;
+            if (!sources || sources.length === 0) return null;
+            return (
+                <div key={lineIdx} style={{ marginLeft: '56px', marginTop: '0.375rem' }}>
+                    <CuttingInstructions
+                        sources={sources}
+                        theme={REVIEW_THEME}
+                        renderActions={(src) => {
+                            const eventIdx = sources.indexOf(src);
+                            const correctable = src.owns_consumption !== false && (src.remainders_created || []).length > 0;
+                            if (!correctable) return null;
+                            return (
+                                <button
+                                    onClick={() => onCorrect({ itemId: item.itemId, lineIdx, eventIdx, event: src })}
+                                    style={{
+                                        flexShrink: 0, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
+                                        color: '#fbbf24', fontSize: '0.68rem', fontWeight: 700, padding: '2px 9px',
+                                        borderRadius: '100px', cursor: 'pointer', whiteSpace: 'nowrap',
+                                    }}
+                                >Correct</button>
+                            );
+                        }}
+                    />
+                </div>
+            );
+        })}
     </div>
-);
+    );
+};
 
 export default function OrderSummaryPage() {
     const location = useLocation();
@@ -68,9 +141,22 @@ export default function OrderSummaryPage() {
     const { user } = useAuth();
     const { products: PRODUCTS } = useProducts();
     const { cancelOrder } = useOrders();
+    const showToast = useToast();
     const [showCancel, setShowCancel] = useState(false);
+    const [correcting, setCorrecting] = useState(null); // {itemId, lineIdx, eventIdx, event}
 
-    const order = location.state?.order || null;
+    const [order, setOrder] = useState(location.state?.order || null);
+    const canCorrectOffcuts = ['manager', 'ceo', 'admin'].includes(user?.role);
+
+    const handleOffcutCorrected = async (newRemainders, notes) => {
+        await api.orderService.correctOffcutEvent(order.orderId, {
+            item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
+            new_remainders: newRemainders, notes,
+        });
+        const full = await api.orderService.getOrder(order.orderId);
+        setOrder({ ...full, id: full.orderId, customer: order.customer });
+        showToast('Offcut correction saved', 'success');
+    };
 
     const items = useMemo(() => {
         if (!order?.items) return [];
@@ -96,7 +182,8 @@ export default function OrderSummaryPage() {
     const isCancelled = order.status === 'cancelled';
     const statusColor = STATUS_COLORS[order.status] || STATUS_COLORS.pending;
     const vatAmount = order.VAT_status ? Math.max(0, order.total - (order.subtotal - (order.discount || 0))) : 0;
-    const canEditOrCancel = ['manager', 'cashier', 'ceo', 'admin'].includes(user?.role);
+    // Cashier can view the summary but not edit or cancel — read-only + Add To only
+    const canEditOrCancel = ['manager', 'ceo', 'admin'].includes(user?.role);
 
     const handleEdit = () => navigate('/sales', { state: { mode: 'edit', orderData: { ...order, id: order.orderId } } });
 
@@ -164,7 +251,9 @@ export default function OrderSummaryPage() {
                     {items.length === 0 ? (
                         <p style={{ color: '#334155', fontSize: '0.82rem', padding: '1.5rem 0' }}>No items on this order.</p>
                     ) : (
-                        items.map((item, idx) => <ItemRow key={idx} item={item} />)
+                        items.map((item, idx) => (
+                            <ItemRow key={idx} item={item} canCorrectOffcuts={canCorrectOffcuts} onCorrect={setCorrecting} />
+                        ))
                     )}
                 </div>
 
@@ -198,6 +287,14 @@ export default function OrderSummaryPage() {
                     order={{ id: order.orderId }}
                     onClose={() => setShowCancel(false)}
                     onConfirm={handleCancelConfirm}
+                />
+            )}
+
+            {correcting && (
+                <CorrectOffcutModal
+                    event={correcting.event}
+                    onClose={() => setCorrecting(null)}
+                    onConfirm={handleOffcutCorrected}
                 />
             )}
         </div>

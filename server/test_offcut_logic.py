@@ -3,20 +3,25 @@ from db.database import DATABASE_URL
 from entities.products import Product
 from entities.variants import Variant
 from entities.offcuts import Offcut
-from entities.orderItems import OrderItem # Simulated
+from entities.orders import Order
+from entities.orderItems import OrderItem
+from entities.users import User
 from core.inventory.inventoryService import deduct_stock_for_order_item, apply_manual_cut_selection
-
-# Mock OrderItem
-class MockItem:
-    def __init__(self, product_id, variant_id, details, quantity=1):
-        self.product_id = product_id
-        self.variant_id = variant_id
-        self.quantity = quantity
-        self.details = details
 
 def test_logic():
     engine = create_engine(DATABASE_URL)
     with Session(engine) as db:
+        # Select just the userId column (not full User rows) — some existing user
+        # rows carry a stale `role` value predating migrate_rename_roles.py that
+        # doesn't match the current enum, which would blow up a full-row fetch.
+        servedby = db.exec(select(User.userId)).first()
+        if not servedby:
+            raise RuntimeError("No users found in DB — need at least one user to seed a test order (Tests 1-3)")
+
+        order = Order(servedby=servedby, subtotal=0, total=0)
+        db.add(order)
+        db.commit()
+        db.refresh(order)
         # 1. Setup Test Product + Variant (length/price now live on the variant)
         p = db.exec(select(Product).where(Product.name == "Test Offcut Bar")).first()
         if not p:
@@ -47,55 +52,61 @@ def test_logic():
 
         # 2. Simulate Order for 3ft Cut
         # Should take from Full (10ft) -> Remaining 7ft Offcut
-        # NOTE: Tests 1-3 are pre-existing and rely on MockItem being accepted by
-        # db.add() inside deduct_stock_for_order_item, which currently raises
-        # "Class '__main__.MockItem' is not mapped" — pre-existing issue, unrelated
-        # to the manual-selection feature under test below. Wrapped so a failure
-        # here doesn't block Tests 4-6.
-        try:
-            print("\n--- Test 1: Order 3ft Cut ---")
-            item1 = MockItem(p.productId, v.variantId, {"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 3.0}}]})
-            deduct_stock_for_order_item(db, item1)
-            db.commit()
+        print("\n--- Test 1: Order 3ft Cut ---")
+        item1 = OrderItem(
+            order_id=order.orderId, product_id=p.productId, variant_id=v.variantId,
+            total_price=0, status="purchased",
+            details={"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 3.0}}]},
+        )
+        db.add(item1)
+        deduct_stock_for_order_item(db, item1)
+        db.commit()
 
-            # Check
-            db.refresh(v)
-            print(f"Stock after 3ft cut: {v.stock_quantity} (Expected 9)")
-            offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-            print(f"Offcuts: {[o.length for o in offcuts]} (Expected [7.0])")
+        # Check
+        db.refresh(v)
+        print(f"Stock after 3ft cut: {v.stock_quantity} (Expected 9)")
+        offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
+        print(f"Offcuts: {[o.length for o in offcuts]} (Expected [7.0])")
 
-            # 3. Simulate Order for 6ft Cut
-            # Should NOT fit in 7ft (if we assume best fit? Wait, 6ft DOES fit in 7ft. 7 >= 6)
-            # So it should take the 7ft offcut -> Remaining 1ft Offcut
-            print("\n--- Test 2: Order 6ft Cut ---")
-            item2 = MockItem(p.productId, v.variantId, {"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 6.0}}]})
-            deduct_stock_for_order_item(db, item2)
-            db.commit()
+        # 3. Simulate Order for 6ft Cut
+        # Should NOT fit in 7ft (if we assume best fit? Wait, 6ft DOES fit in 7ft. 7 >= 6)
+        # So it should take the 7ft offcut -> Remaining 1ft Offcut
+        print("\n--- Test 2: Order 6ft Cut ---")
+        item2 = OrderItem(
+            order_id=order.orderId, product_id=p.productId, variant_id=v.variantId,
+            total_price=0, status="purchased",
+            details={"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 6.0}}]},
+        )
+        db.add(item2)
+        deduct_stock_for_order_item(db, item2)
+        db.commit()
 
-            db.refresh(v)
-            print(f"Stock after 6ft cut: {v.stock_quantity} (Expected 9 - no change, used offcut)")
-            offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-            print(f"Offcuts: {[o.length for o in offcuts]} (Expected [1.0])")
+        db.refresh(v)
+        print(f"Stock after 6ft cut: {v.stock_quantity} (Expected 9 - no change, used offcut)")
+        offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
+        print(f"Offcuts: {[o.length for o in offcuts]} (Expected [1.0])")
 
-            # 4. Simulate Order for 5ft Cut
-            # Should NOT fit in 1ft. Should take Full (10ft) -> Reamining 5ft Offcut.
-            print("\n--- Test 3: Order 5ft Cut ---")
-            item3 = MockItem(p.productId, v.variantId, {"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 5.0}}]})
-            deduct_stock_for_order_item(db, item3)
-            db.commit()
+        # 4. Simulate Order for 5ft Cut
+        # Should NOT fit in 1ft. Should take Full (10ft) -> Reamining 5ft Offcut.
+        print("\n--- Test 3: Order 5ft Cut ---")
+        item3 = OrderItem(
+            order_id=order.orderId, product_id=p.productId, variant_id=v.variantId,
+            total_price=0, status="purchased",
+            details={"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 5.0}}]},
+        )
+        db.add(item3)
+        deduct_stock_for_order_item(db, item3)
+        db.commit()
 
-            db.refresh(v)
-            print(f"Stock after 5ft cut: {v.stock_quantity} (Expected 8)")
-            offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-            # Should have 1.0 (from before) and 5.0 (new)
-            print(f"Offcuts: sorted {[o.length for o in offcuts]} (Expected [1.0, 5.0])")
-        except Exception as e:
-            db.rollback()
-            print(f"Tests 1-3 FAILED (pre-existing, unrelated to manual-selection tests below): {e}")
+        db.refresh(v)
+        print(f"Stock after 5ft cut: {v.stock_quantity} (Expected 8)")
+        offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
+        # Should have 1.0 (from before) and 5.0 (new)
+        print(f"Offcuts: sorted {[o.length for o in offcuts]} (Expected [1.0, 5.0])")
 
         # 5. Manual cashier selection — partial offcut + auto top-up from a fresh bar
-        # Seed a known offcut state directly (independent of Tests 1-3 above, which
-        # rely on deduct_stock_for_order_item / MockItem and may not have run cleanly).
+        # Seed a known offcut state directly (independent of the exact offcuts left
+        # over by Tests 1-3 above).
         print("\n--- Test 4: Manual selection (partial offcut + top-up) — need 9ft ---")
         offs = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
         for o in offs: db.delete(o)
