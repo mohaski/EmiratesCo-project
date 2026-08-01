@@ -806,6 +806,8 @@ def correct_offcut_for_order_item(
     line_idx: int,
     event_idx: int,
     new_remainders: list,
+    failed_cut_indices: list,
+    forced_offcut_id: int | None,
     notes: str | None,
     db: Session,
     current_user,
@@ -813,9 +815,12 @@ def correct_offcut_for_order_item(
     """
     Manager correction for a single cutting event on a past order: real-world
     cutting sometimes produces a different remainder than what got recorded at
-    checkout. Reverses the remainder(s) that event recorded and applies the
-    manager-supplied replacement (see glassOffcutService.correct_glass_offcut_event
-    for the actual offcut inventory mutation), then writes an EditHistory row.
+    checkout, and/or one of the event's own delivered cuts never actually came
+    out of this source (the cutter missed). Reverses the remainder(s) that
+    event recorded and applies the manager-supplied replacement, and — for any
+    failed_cut_indices — pulls those cuts out and resolves a replacement source
+    for them (see glassOffcutService.correct_glass_offcut_event for the actual
+    offcut inventory mutation), then writes an EditHistory row.
     """
     from sqlalchemy.orm.attributes import flag_modified
     from core.inventory.glassOffcutService import correct_glass_offcut_event
@@ -847,7 +852,12 @@ def correct_offcut_for_order_item(
     variant = db.get(Variant, item.variant_id) if item.variant_id else None
 
     try:
-        result = correct_glass_offcut_event(db, product, variant, event, [r.model_dump() for r in new_remainders])
+        result = correct_glass_offcut_event(
+            db, product, variant, event, [r.model_dump() for r in new_remainders],
+            failed_cut_indices, forced_offcut_id,
+        )
+        if result["replacement_events"]:
+            offcut_sources.extend(result["replacement_events"])
 
         item.details = {**details, "lineItems": line_items}
         flag_modified(item, "details")
@@ -859,7 +869,10 @@ def correct_offcut_for_order_item(
             edited_by=current_user.userId,
             action="correct",
             before_snapshot={"item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "remainders": result["before"]},
-            after_snapshot={"item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "remainders": result["after"]},
+            after_snapshot={
+                "item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "remainders": result["after"],
+                "replacement_events": result["replacement_events"],
+            },
             notes=notes,
         )
         db.add(audit)

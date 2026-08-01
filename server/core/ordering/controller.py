@@ -96,13 +96,17 @@ async def correct_offcut(
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
-    """Manager-only: correct the remainder(s) a past cutting event recorded."""
+    """Manager-only: correct the remainder(s) a past cutting event recorded,
+    and/or replace any of its delivered cuts that never actually came out of it."""
     result = orderService.correct_offcut_for_order_item(
         order_id, body.item_id, body.line_idx, body.event_idx,
-        body.new_remainders, body.notes, db, current_user,
+        body.new_remainders, body.failed_cut_indices, body.forced_offcut_id, body.notes, db, current_user,
     )
     background_tasks.add_task(manager.broadcast, "products_updated")
-    return model.CorrectOffcutResponse(message="Offcut corrected", before=result["before"], after=result["after"])
+    return model.CorrectOffcutResponse(
+        message="Offcut corrected", before=result["before"], after=result["after"],
+        replacement_events=result["replacement_events"],
+    )
 
 
 @router.put("/{order_id}/payment-status", response_model=model.OrderStatusUpdateResponse)

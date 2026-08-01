@@ -960,6 +960,94 @@ def test_23_no_forced_split_when_remainder_basically_same_as_cut(db, p, v):
     print("PASS")
 
 
+def test_24_resolve_replacement_pieces_auto(db, p, v):
+    print("\n--- Test 24: resolve_replacement_pieces auto-resolves via _fulfill_pool, combining multiple pieces onto one source ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+    stock_before = v.stock_quantity
+
+    events = gos.resolve_replacement_pieces(db, p, v, [(600.0, 400.0), (500.0, 300.0)])
+    db.commit()
+    db.refresh(v)
+
+    total_cuts = sum(len(e["cuts"]) for e in events)
+    assert total_cuts == 2, f"Expected 2 replacement cuts placed, got {total_cuts}"
+    owners = [e for e in events if e.get("owns_consumption", True)]
+    assert len(owners) == 1, f"Expected exactly one physical source consumed for both pieces, got {len(owners)}"
+    assert v.stock_quantity == stock_before - 1, "Expected exactly one fresh sheet consumed (no offcuts existed)"
+    print("PASS")
+
+
+def test_25_resolve_replacement_pieces_forced_offcut(db, p, v):
+    print("\n--- Test 25: forced_offcut_id restricts resolution to a specific offcut, raises if it doesn't fit ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+
+    oc = Offcut(product_id=p.productId, variant_id=v.variantId, width=700.0, height=500.0, length=0.0, quantity=1, status="available")
+    db.add(oc)
+    db.commit()
+    db.refresh(oc)
+
+    events = gos.resolve_replacement_pieces(db, p, v, [(600.0, 400.0)], forced_offcut_id=oc.offcutId)
+    db.commit()
+    assert len(events) == 1
+    assert events[0]["source"] == "offcut" and events[0]["offcut_id"] == oc.offcutId, \
+        f"Expected the forced offcut #{oc.offcutId} to be used, got {events[0]}"
+    print(f"Forced replacement used offcut #{oc.offcutId} as expected")
+
+    _clear_offcuts(db, p)
+    small = Offcut(product_id=p.productId, variant_id=v.variantId, width=100.0, height=100.0, length=0.0, quantity=1, status="available")
+    db.add(small)
+    db.commit()
+    db.refresh(small)
+    try:
+        gos.resolve_replacement_pieces(db, p, v, [(600.0, 400.0)], forced_offcut_id=small.offcutId)
+        assert False, "Expected ValueError when the forced offcut doesn't fit any piece"
+    except ValueError:
+        pass
+    print("PASS")
+
+
+def test_26_correct_glass_offcut_event_with_failed_cuts(db, p, v):
+    print("\n--- Test 26: correct_glass_offcut_event trims a missed cut and resolves a replacement source for it ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+
+    line = _mk_line(400, 300, qty=2)  # two identical pieces, grid-packed onto one fresh sheet
+    lines = [line]
+    gos.resolve_glass_cut_lines(db, p, v, lines)
+    db.commit()
+
+    event = next(e for e in line["offcut_sources"] if e.get("owns_consumption", True))
+    assert len(event["cuts"]) == 2, f"Expected both pieces grid-packed into one event, got {len(event['cuts'])}"
+
+    result = gos.correct_glass_offcut_event(db, p, v, event, event["remainders_created"], failed_cut_indices=[0])
+    db.commit()
+
+    assert len(event["cuts"]) == 1, "The missed cut should have been removed from the original event"
+    assert result["replacement_events"], "Expected at least one replacement event for the missed cut"
+    replacement_cuts = [c for e in result["replacement_events"] for c in e["cuts"]]
+    assert len(replacement_cuts) == 1, f"Expected exactly 1 replacement cut, got {len(replacement_cuts)}"
+    c = replacement_cuts[0]
+    matches_missed_dims = (
+        (abs(c["width"] - 400.0) < 1.0 and abs(c["height"] - 300.0) < 1.0)
+        or (abs(c["width"] - 300.0) < 1.0 and abs(c["height"] - 400.0) < 1.0)
+    )
+    assert matches_missed_dims, f"Replacement cut should match the missed piece's dims, got {c}"
+    print("PASS")
+
+
+def test_27_correct_glass_offcut_event_rejects_bad_cut_index(db, p, v):
+    print("\n--- Test 27: correct_glass_offcut_event rejects an out-of-range failed_cut_indices entry ---")
+    event = {"cuts": [{"width": 100, "height": 100, "x": 0, "y": 0, "rotated": False}], "remainders_created": [], "owns_consumption": True}
+    try:
+        gos.correct_glass_offcut_event(db, p, v, event, [], failed_cut_indices=[5])
+        assert False, "Expected ValueError for an out-of-range cut index"
+    except ValueError:
+        pass
+    print("PASS")
+
+
 def run():
     engine = create_engine(DATABASE_URL)
     with Session(engine) as db:
@@ -996,6 +1084,10 @@ def run():
             ("test_21_correct_offcut_rejects_invalid_input", lambda: test_21_correct_offcut_rejects_invalid_input(db, p, v)),
             ("test_22_no_forced_split_when_consolidating_leaves_scrap_anyway", lambda: test_22_no_forced_split_when_consolidating_leaves_scrap_anyway(db, p, v)),
             ("test_23_no_forced_split_when_remainder_basically_same_as_cut", lambda: test_23_no_forced_split_when_remainder_basically_same_as_cut(db, p, v)),
+            ("test_24_resolve_replacement_pieces_auto", lambda: test_24_resolve_replacement_pieces_auto(db, p, v)),
+            ("test_25_resolve_replacement_pieces_forced_offcut", lambda: test_25_resolve_replacement_pieces_forced_offcut(db, p, v)),
+            ("test_26_correct_glass_offcut_event_with_failed_cuts", lambda: test_26_correct_glass_offcut_event_with_failed_cuts(db, p, v)),
+            ("test_27_correct_glass_offcut_event_rejects_bad_cut_index", lambda: test_27_correct_glass_offcut_event_rejects_bad_cut_index(db, p, v)),
         ]:
             try:
                 fn()

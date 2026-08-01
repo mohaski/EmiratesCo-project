@@ -118,7 +118,7 @@ const ItemRow = ({ item, canCorrectOffcuts, onCorrect }) => {
                             if (!correctable) return null;
                             return (
                                 <button
-                                    onClick={() => onCorrect({ itemId: item.itemId, lineIdx, eventIdx, event: src })}
+                                    onClick={() => onCorrect({ itemId: item.itemId, productId: item.productId, variantId: item.variantId, lineIdx, eventIdx, event: src })}
                                     style={{
                                         flexShrink: 0, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
                                         color: '#fbbf24', fontSize: '0.68rem', fontWeight: 700, padding: '2px 9px',
@@ -148,10 +148,10 @@ export default function OrderSummaryPage() {
     const [order, setOrder] = useState(location.state?.order || null);
     const canCorrectOffcuts = ['manager', 'ceo', 'admin'].includes(user?.role);
 
-    const handleOffcutCorrected = async (newRemainders, notes) => {
+    const handleOffcutCorrected = async (newRemainders, notes, failedCutIndices, forcedOffcutId) => {
         await api.orderService.correctOffcutEvent(order.orderId, {
             item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
-            new_remainders: newRemainders, notes,
+            new_remainders: newRemainders, failed_cut_indices: failedCutIndices, forced_offcut_id: forcedOffcutId, notes,
         });
         const full = await api.orderService.getOrder(order.orderId);
         setOrder({ ...full, id: full.orderId, customer: order.customer });
@@ -293,6 +293,8 @@ export default function OrderSummaryPage() {
             {correcting && (
                 <CorrectOffcutModal
                     event={correcting.event}
+                    productId={correcting.productId}
+                    variantId={correcting.variantId}
                     onClose={() => setCorrecting(null)}
                     onConfirm={handleOffcutCorrected}
                 />

@@ -91,8 +91,10 @@ export const OrderService = {
         const response = await api.put(`/orders/${id}/cancel`, { pin });
         return response.data;
     },
-    correctOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainders, notes }) => {
-        const response = await api.put(`/orders/${orderId}/correct-offcut`, { item_id, line_idx, event_idx, new_remainders, notes });
+    correctOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainders, failed_cut_indices, forced_offcut_id, notes }) => {
+        const response = await api.put(`/orders/${orderId}/correct-offcut`, {
+            item_id, line_idx, event_idx, new_remainders, failed_cut_indices, forced_offcut_id, notes,
+        });
         return response.data;
     },
 };
@@ -178,6 +180,19 @@ export const ProductService = {
         const params = new URLSearchParams({ skip, limit });
         if (productId) params.append('product_id', productId);
         const response = await api.get(`/products/restock-history?${params}`);
+        return response.data;
+    },
+    /**
+     * Dry-run: given cut pieces whose recorded source turned out to be wrong
+     * (the cutter missed), what replacement offcut/sheet would the engine use
+     * to supply them, and what would it leave behind? Nothing is persisted.
+     * pieces: [{ width, height }] (mm). forcedOffcutId overrides the
+     * auto-suggestion with a specific existing offcut. Returns { events }.
+     */
+    previewOffcutReplacement: async (productId, { variantId, pieces, forcedOffcutId } = {}) => {
+        const response = await api.post(`/products/${productId}/offcut-replacement-preview`, {
+            variant_id: variantId, pieces, forced_offcut_id: forcedOffcutId,
+        });
         return response.data;
     },
 };

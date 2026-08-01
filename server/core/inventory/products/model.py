@@ -155,6 +155,19 @@ class GlassCutPreviewRequest(BaseModel):
     cuts: List[GlassCutPreviewCut]
 
 
+class OffcutReplacementPreviewPiece(BaseModel):
+    width: float
+    height: float
+
+
+class OffcutReplacementPreviewRequest(BaseModel):
+    """Dry-run: given cut pieces whose recorded source turned out to be wrong
+    (the cutter missed), what replacement offcut/sheet would supply them?"""
+    variant_id: Optional[int] = None
+    pieces: List[OffcutReplacementPreviewPiece]
+    forced_offcut_id: Optional[int] = None
+
+
 class LineItemsFeasibilityRequest(BaseModel):
     """Generic across product families (profile bars, glass sheets, ...) —
     line_items is whatever shape inventoryService._process_line_items already

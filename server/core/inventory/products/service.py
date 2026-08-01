@@ -579,6 +579,40 @@ def preview_glass_cuts(
         db.rollback()  # dry run only — never persist
 
 
+def preview_offcut_replacement(
+    product_id: int,
+    pieces: List["model.OffcutReplacementPreviewPiece"],
+    db: Session,
+    variant_id: Optional[int] = None,
+    forced_offcut_id: Optional[int] = None,
+):
+    """
+    Dry-run: given cut pieces whose recorded source turned out to be wrong (the
+    cutter missed), what replacement offcut/sheet would the engine pick to
+    supply them, and what would it leave behind? Runs
+    glassOffcutService.resolve_replacement_pieces for real, then always rolls
+    back — same never-persist guarantee as preview_glass_cuts. Returns
+    {"events": [...]}, shaped identically to real offcut_sources entries, so
+    the frontend can render it with the same CuttingInstructions component
+    used for committed data.
+    """
+    from core.inventory.glassOffcutService import resolve_replacement_pieces
+
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    variant = db.get(Variant, variant_id) if variant_id else None
+
+    try:
+        piece_tuples = [(p.width, p.height) for p in pieces]
+        events = resolve_replacement_pieces(db, product, variant, piece_tuples, forced_offcut_id)
+        return {"events": events}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        db.rollback()  # dry run only — never persist
+
+
 def check_cut_feasibility(
     product_id: int,
     line_items: List[Dict[str, Any]],

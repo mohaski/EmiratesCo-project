@@ -1,17 +1,25 @@
-import { useState } from 'react';
-import { fmtMm } from '../../utils/cuttingInstructionFormat';
+import { useEffect, useRef, useState } from 'react';
+import api from '../../services/api';
+import { fmtMm, REVIEW_THEME } from '../../utils/cuttingInstructionFormat';
+import CuttingInstructions from './CuttingInstructions';
 
-// Manager-only correction for one owning offcut_sources event: real-world cutting
-// sometimes produces a different remainder than the system predicted at checkout
-// (a crack, a chip, a measurement error). Lets the manager replace the recorded
-// remainder(s) with what actually came off the sheet — the backend reverses the
-// old bucket(s) and applies the corrected one(s).
+// Manager-only correction for one owning offcut_sources event. Two independent
+// things can be wrong about a recorded cutting event, both fixed here in one
+// combined Save:
+//   1. The remainder(s) it left behind differ from what was predicted (a
+//      crack, a chip, a measurement error) — edited directly below.
+//   2. One or more of its own delivered cuts never actually came out of this
+//      source at all (the cutter missed) — checked off in "Cuts From This
+//      Source", which triggers a live dry-run preview of the replacement
+//      offcut/sheet the system would use to actually supply them (overridable
+//      via the picker). Nothing for #2 is persisted until Save.
 //
 // Props:
-//   event      – the offcut_sources event being corrected (has remainders_created)
-//   onConfirm(newRemainders, notes) – async, performs the API call
+//   event                 – the offcut_sources event being corrected
+//   productId, variantId  – identify which offcuts to preview/pick against
+//   onConfirm(newRemainders, notes, failedCutIndices, forcedOffcutId) – async, performs the API call
 //   onClose
-export default function CorrectOffcutModal({ event, onConfirm, onClose }) {
+export default function CorrectOffcutModal({ event, productId, variantId, onConfirm, onClose }) {
     const [rows, setRows] = useState(() =>
         (event.remainders_created || []).map(r => ({ width: String(r.width), height: String(r.height), status: r.status || 'available' }))
     );
@@ -24,7 +32,69 @@ export default function CorrectOffcutModal({ event, onConfirm, onClose }) {
     const addRow = () => setRows(prev => [...prev, { width: '', height: '', status: 'available' }]);
 
     const validRows = rows.filter(r => parseFloat(r.width) > 0 && parseFloat(r.height) > 0);
-    const canSubmit = !loading && validRows.length === rows.length;
+    const canSubmitRemainders = validRows.length === rows.length;
+
+    // ── Failed cuts + replacement preview ───────────────────────────────────
+    const cuts = event.cuts || [];
+    const [failedIndices, setFailedIndices] = useState(() => new Set());
+    const [forcedOffcutId, setForcedOffcutId] = useState('');
+    const [offcuts, setOffcuts] = useState([]);
+    const [preview, setPreview] = useState(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [previewError, setPreviewError] = useState('');
+
+    const toggleFailed = (idx) => setFailedIndices(prev => {
+        const next = new Set(prev);
+        if (next.has(idx)) next.delete(idx); else next.add(idx);
+        return next;
+    });
+
+    // Offcuts for the override picker — loaded once, only needed if there's
+    // something to possibly replace.
+    useEffect(() => {
+        if (!productId || cuts.length === 0) return;
+        let cancelled = false;
+        api.productService.getOffcuts(productId, variantId)
+            .then(data => { if (!cancelled) setOffcuts(data || []); })
+            .catch(() => { /* picker just stays empty — auto-suggestion still works */ });
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [productId, variantId]);
+
+    // Debounced dry-run preview of the replacement source, re-run whenever the
+    // checked failed cuts or the manager's override choice changes.
+    const previewSeqRef = useRef(0);
+    useEffect(() => {
+        if (failedIndices.size === 0) {
+            setPreview(null);
+            setPreviewError('');
+            return;
+        }
+        const mySeq = ++previewSeqRef.current;
+        setPreviewLoading(true);
+        setPreviewError('');
+        const timer = setTimeout(() => {
+            const pieces = Array.from(failedIndices).map(i => ({ width: cuts[i].width, height: cuts[i].height }));
+            api.productService.previewOffcutReplacement(productId, {
+                variantId, pieces, forcedOffcutId: forcedOffcutId || undefined,
+            })
+                .then(res => {
+                    if (previewSeqRef.current !== mySeq) return;
+                    setPreview(res);
+                    setPreviewLoading(false);
+                })
+                .catch(err => {
+                    if (previewSeqRef.current !== mySeq) return;
+                    setPreview(null);
+                    setPreviewLoading(false);
+                    setPreviewError(err.response?.data?.detail || 'Could not find a replacement offcut for these pieces.');
+                });
+        }, 400);
+        return () => clearTimeout(timer);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [failedIndices, forcedOffcutId, productId, variantId]);
+
+    const canSubmit = !loading && canSubmitRemainders && (failedIndices.size === 0 || (!previewLoading && preview && !previewError));
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -33,7 +103,7 @@ export default function CorrectOffcutModal({ event, onConfirm, onClose }) {
         setError('');
         try {
             const newRemainders = rows.map(r => ({ width: parseFloat(r.width), height: parseFloat(r.height), status: r.status }));
-            await onConfirm(newRemainders, notes);
+            await onConfirm(newRemainders, notes, Array.from(failedIndices), forcedOffcutId ? parseInt(forcedOffcutId) : null);
             onClose();
         } catch (err) {
             setError(err.response?.data?.detail || 'Failed to correct offcut. Please try again.');
@@ -48,7 +118,7 @@ export default function CorrectOffcutModal({ event, onConfirm, onClose }) {
             background: 'rgba(9,14,26,0.9)', backdropFilter: 'blur(16px)',
         }} onClick={onClose}>
             <div onClick={e => e.stopPropagation()} style={{
-                width: '100%', maxWidth: '520px', maxHeight: '90vh',
+                width: '100%', maxWidth: '560px', maxHeight: '90vh',
                 background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
                 border: '1px solid rgba(245,158,11,0.25)', borderRadius: '1.5rem', overflow: 'hidden',
                 boxShadow: '0 32px 80px rgba(0,0,0,0.7)', display: 'flex', flexDirection: 'column',
@@ -61,7 +131,7 @@ export default function CorrectOffcutModal({ event, onConfirm, onClose }) {
                             <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: '0 0 3px' }}>Correct Cutting Outcome</h3>
                             <p style={{ fontSize: '0.75rem', color: '#64748b', margin: 0 }}>
                                 From {event.source === 'offcut' ? `Offcut #${event.offcut_id}` : 'a new sheet'}{' '}
-                                ({fmtMm(event.offcut_width)} x {fmtMm(event.offcut_height)}) — enter what the sheet actually yielded
+                                ({fmtMm(event.offcut_width)} x {fmtMm(event.offcut_height)}) — enter what actually happened
                             </p>
                         </div>
                         <button onClick={onClose} style={{
@@ -118,6 +188,77 @@ export default function CorrectOffcutModal({ event, onConfirm, onClose }) {
                                 </p>
                             )}
                         </div>
+
+                        {cuts.length > 0 && (
+                            <div style={{ marginTop: '1.25rem' }}>
+                                <span style={{ fontSize: '0.7rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: '0.625rem' }}>
+                                    Cuts From This Source
+                                </span>
+                                <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0 0 0.625rem' }}>
+                                    Check any piece the cutter missed — it never actually came out of this source.
+                                </p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                    {cuts.map((c, idx) => {
+                                        const checked = failedIndices.has(idx);
+                                        return (
+                                            <label key={idx} style={{
+                                                display: 'flex', alignItems: 'center', gap: '0.625rem', cursor: 'pointer',
+                                                padding: '0.625rem 1rem', borderRadius: '0.875rem',
+                                                background: checked ? 'rgba(239,68,68,0.08)' : 'rgba(255,255,255,0.03)',
+                                                border: `1px solid ${checked ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)'}`,
+                                            }}>
+                                                <input type="checkbox" checked={checked} onChange={() => toggleFailed(idx)}
+                                                    style={{ width: '16px', height: '16px', flexShrink: 0, accentColor: '#ef4444' }} />
+                                                <span style={{ fontSize: '0.82rem', color: '#e2e8f0', fontWeight: 600 }}>
+                                                    {fmtMm(c.width)} x {fmtMm(c.height)}
+                                                </span>
+                                                {c.rotated && <span style={{ fontSize: '0.7rem', color: '#64748b' }}>(rotated to fit)</span>}
+                                                {checked && <span style={{ fontSize: '0.68rem', color: '#f87171', marginLeft: 'auto', fontWeight: 700 }}>MISSED</span>}
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {failedIndices.size > 0 && (
+                            <div style={{ marginTop: '1rem' }}>
+                                <label style={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.375rem' }}>
+                                    Replacement Offcut
+                                </label>
+                                <select value={forcedOffcutId} onChange={e => setForcedOffcutId(e.target.value)} style={{
+                                    width: '100%', boxSizing: 'border-box', padding: '0.625rem 0.75rem',
+                                    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '0.625rem',
+                                    color: '#e2e8f0', fontSize: '0.8rem', outline: 'none',
+                                }}>
+                                    <option value="">Let system choose (best fit)</option>
+                                    {offcuts.map(oc => (
+                                        <option key={oc.offcutId} value={oc.offcutId}>
+                                            Offcut #{oc.offcutId} — {fmtMm(oc.width)} x {fmtMm(oc.height)} (qty {oc.quantity})
+                                        </option>
+                                    ))}
+                                </select>
+
+                                <div style={{ marginTop: '0.75rem' }}>
+                                    {previewLoading && (
+                                        <p style={{ fontSize: '0.78rem', color: '#64748b' }}>Finding a replacement…</p>
+                                    )}
+                                    {previewError && (
+                                        <div style={{ padding: '0.625rem 0.875rem', borderRadius: '0.75rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171', fontSize: '0.78rem' }}>
+                                            {previewError}
+                                        </div>
+                                    )}
+                                    {!previewLoading && !previewError && preview && (
+                                        <div>
+                                            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fbbf24', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>
+                                                Preview — not yet saved
+                                            </div>
+                                            <CuttingInstructions sources={preview.events} theme={REVIEW_THEME} />
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
 
                         <div style={{ marginTop: '1.25rem' }}>
                             <label style={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.375rem' }}>

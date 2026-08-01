@@ -130,17 +130,23 @@ class OffcutRemainderInput(BaseModel):
 class CorrectOffcutRequest(BaseModel):
     """Payload for correcting a single owning offcut_sources event on an order
     line — replaces the remainders that cutting event recorded with what the
-    manager says actually came out of it."""
+    manager says actually came out of it. failed_cut_indices marks any of the
+    event's own delivered cuts (index into its `cuts` list) that never actually
+    came out of this source — those get pulled out and re-resolved against a
+    replacement offcut/sheet (forced_offcut_id overrides the auto-suggestion)."""
     item_id: int
     line_idx: int
     event_idx: int
     new_remainders: List[OffcutRemainderInput]
+    failed_cut_indices: List[int] = []
+    forced_offcut_id: Optional[int] = None
     notes: Optional[str] = None
 
 class CorrectOffcutResponse(BaseModel):
     message: str
     before: List[Dict[str, Any]]
     after: List[Dict[str, Any]]
+    replacement_events: List[Dict[str, Any]] = []
 
 class EditHistoryResponse(BaseModel):
     id: int

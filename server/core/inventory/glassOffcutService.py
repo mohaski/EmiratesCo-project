@@ -1085,16 +1085,90 @@ def apply_manual_glass_selection(db: Session, product: Product, variant: Optiona
     return _apply_candidate(db, product, variant, best)[0]
 
 
-def correct_glass_offcut_event(db: Session, product: Product, variant: Optional[Variant], event: dict, new_remainders: list) -> dict:
+def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[Variant], pieces: list, forced_offcut_id: Optional[int] = None) -> list:
+    """
+    Manager-facing correction for a "the cutter missed" scenario: one or more
+    delivered pieces never actually came out of their recorded source, so a
+    replacement source has to supply them instead. `pieces` is a flat list of
+    (width_mm, height_mm) tuples — already mm, taken straight from a cutting
+    event's own `cuts` entries, no unit conversion needed.
+
+    Groups identical dims into one pool and runs the exact same multi-source
+    loop resolve_glass_cut_lines/_resolve_with_strategy uses (repeatedly
+    calling _fulfill_pool until every piece is placed) — so if one replacement
+    can't hold everything, a second is opened automatically, and whatever THAT
+    leaves behind is handled by the same remainder-upsert path every other cut
+    already goes through. No bespoke recursion needed.
+
+    If forced_offcut_id is given, the first pass is restricted to that offcut
+    (raises if none of the pieces fit it); any pieces still unplaced after that
+    fall through to normal auto-resolution — same forced-then-fallback shape as
+    the 1D apply_manual_cut_selection. Uses DEFAULT_STRATEGY only (no 5-way
+    strategy search), consistent with apply_manual_glass_selection.
+
+    Performs real DB mutations (offcut decrement/sheet deduction, new remainder
+    upserts) via _apply_candidate — the caller controls whether this rides the
+    outer transaction (confirm) or gets rolled back (preview).
+    """
+    full_w, full_h = _get_full_dims(variant)
+
+    groups: dict = {}
+    for width, height in pieces:
+        key = (round(float(width), 3), round(float(height), 3))
+        groups[key] = groups.get(key, 0) + 1
+    needs = [
+        {"line_idx": idx, "piece_w": w, "piece_h": h, "remaining": qty}
+        for idx, ((w, h), qty) in enumerate(groups.items())
+    ]
+
+    events = []
+    forced_pending = forced_offcut_id is not None
+    while any(n["remaining"] > 0 for n in needs):
+        if forced_pending:
+            candidates = _generate_candidates(db, product, variant, needs, full_w, full_h)
+            candidates = [c for c in candidates if c["source_kind"] == "offcut" and c["source_id"] == forced_offcut_id]
+            if not candidates:
+                raise ValueError(f"Offcut #{forced_offcut_id} doesn't fit any of the corrected pieces")
+            popularity = _get_popularity_lookup(db, product, variant)
+            now = datetime.utcnow()
+            best = min(candidates, key=lambda c: _candidate_sort_key(c, product, popularity, now))
+            events_by_line = _apply_candidate(db, product, variant, best)
+            forced_pending = False
+        else:
+            events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h)
+
+        for event in events_by_line.values():
+            events.append(event)
+        for n in needs:
+            event = events_by_line.get(n["line_idx"])
+            if event:
+                n["remaining"] -= len(event["cuts"])
+
+    return events
+
+
+def correct_glass_offcut_event(
+    db: Session, product: Product, variant: Optional[Variant], event: dict, new_remainders: list,
+    failed_cut_indices: Optional[list] = None, forced_offcut_id: Optional[int] = None,
+) -> dict:
     """
     Manager-facing correction for a single owning offcut_sources event: physical
     cutting sometimes produces a different remainder than the system predicted
-    (a crack, a chip, a measurement error). This reverses exactly the remainders
-    this event recorded (same call _restore_one_source makes) and re-applies the
-    manager-supplied replacement list, leaving the event's own `cuts`/`source`/
-    `offcut_id` (what was actually consumed) untouched — only the remainder side
-    is in scope. Mutates `event["remainders_created"]` in place and returns
-    {"before": [...], "after": [...]} for the caller to write to EditHistory.
+    (a crack, a chip, a measurement error) — handled by reversing exactly the
+    remainders this event recorded (same call _restore_one_source makes) and
+    re-applying the manager-supplied replacement list.
+
+    Separately, one or more of this event's own delivered `cuts` may have been
+    missed entirely (the piece never actually came out of this source) — for
+    each index in failed_cut_indices, that cut is removed from `event["cuts"]`
+    and resolve_replacement_pieces finds (or is told, via forced_offcut_id) a
+    replacement source for it. The event's own `source`/`offcut_id` (what THIS
+    source actually consumed/left behind) is otherwise untouched.
+
+    Returns {"before", "after", "replacement_events"} — before/after describe
+    the remainder correction (as before), replacement_events is the (possibly
+    empty) list of new offcut_sources-shaped entries the caller should append
+    to the same lineItem's offcut_sources.
     """
     if "cuts" not in event or "remainders_created" not in event:
         raise ValueError("This cutting event isn't a correctable 2D glass-cut event")
@@ -1121,4 +1195,16 @@ def correct_glass_offcut_event(db: Session, product: Product, variant: Optional[
         after.append({"width": width, "height": height, "status": status, "offcut_id": offcut_id})
 
     event["remainders_created"] = after
-    return {"before": before, "after": after}
+
+    replacement_events = []
+    if failed_cut_indices:
+        cuts = event.get("cuts", [])
+        bad = [i for i in failed_cut_indices if not (0 <= i < len(cuts))]
+        if bad:
+            raise ValueError(f"Invalid cut index/indices for this event: {bad}")
+        failed_set = set(failed_cut_indices)
+        failed_pieces = [(cuts[i]["width"], cuts[i]["height"]) for i in failed_cut_indices]
+        event["cuts"] = [c for i, c in enumerate(cuts) if i not in failed_set]
+        replacement_events = resolve_replacement_pieces(db, product, variant, failed_pieces, forced_offcut_id)
+
+    return {"before": before, "after": after, "replacement_events": replacement_events}

@@ -31,7 +31,13 @@
       "Bash(tasklist)",
       "Bash(powershell -Command 'Get-Process | Where-Object {$_.ProcessName -match '\\\\''python|nssm|uvicorn'\\\\''} | Select-Object ProcessName,Id')",
       "Bash(echo \"exit code: $?\")",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(timeout 90 npx vite build --mode production)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8010/docs --max-time 5)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -X PUT http://127.0.0.1:8010/orders/1/correct-offcut -H \"Content-Type: application/json\" -d '{\"item_id\":1,\"line_idx\":0,\"event_idx\":0,\"new_remainders\":[]}')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -X POST http://127.0.0.1:8010/products/1/offcut-replacement-preview -H \"Content-Type: application/json\" -d '{\"pieces\":[{\"width\":100,\"height\":100}]}')",
+      "Bash(curl -s http://127.0.0.1:8010/openapi.json --max-time 5)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\([p for p in d['paths'] if 'correct-offcut' in p or 'offcut-replacement' in p]\\)\")"
     ]
   }
 }

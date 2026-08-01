@@ -164,6 +164,21 @@ def preview_glass_cuts(
     """
     return service.preview_glass_cuts(product_id, payload.cuts, db, payload.variant_id)
 
+@router.post("/{product_id}/offcut-replacement-preview")
+def preview_offcut_replacement(
+    product_id: int,
+    payload: model.OffcutReplacementPreviewRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """
+    Dry-run preview for a manager correcting a "cutter missed this piece" cut:
+    given the missed pieces (and an optional forced replacement offcut), shows
+    what the engine would use to replace them and what remainder(s) that would
+    leave — nothing is persisted.
+    """
+    return service.preview_offcut_replacement(product_id, payload.pieces, db, payload.variant_id, payload.forced_offcut_id)
+
 @router.post("/{product_id}/cut-feasibility", response_model=model.LineItemsFeasibilityResponse)
 def check_cut_feasibility(
     product_id: int,
