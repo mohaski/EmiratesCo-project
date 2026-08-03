@@ -61,6 +61,15 @@ class VariantResponse(BaseModel):
     height: Optional[float] = None
     unit_quantity: Optional[float] = None
 
+class PopularSizeRange(BaseModel):
+    """A CEO-defined "this size sells well" band, mm, canonical wide/narrow.
+    Drives glassOffcutService's offcut tiering — see _meets_popular_threshold."""
+    min_w: float
+    max_w: float
+    min_h: float
+    max_h: float
+
+
 class ProductCreate(BaseModel):
     name: str
     itemCode: Optional[str] = None
@@ -75,6 +84,12 @@ class ProductCreate(BaseModel):
 
     applicable_attributes: List[str] = []
     has_dimensions: bool = False
+
+    # 2D (glass) offcut tuning — required when has_dimensions=True (see
+    # service.create_product's validation); ignored for 1D/simple products.
+    min_usable_dimension: Optional[float] = None
+    allow_rotation: bool = True
+    popular_size_ranges: List[PopularSizeRange] = []
 
     variants: List[VariantCreate] = []
 
@@ -97,6 +112,10 @@ class ProductUpdateRequest(BaseModel):
     applicable_attributes: Optional[List[str]] = None
     has_dimensions: Optional[bool] = None
 
+    min_usable_dimension: Optional[float] = None
+    allow_rotation: Optional[bool] = None
+    popular_size_ranges: Optional[List[PopularSizeRange]] = None
+
 class ProductUpdateResponse(BaseModel):
     message: str
     id: int
@@ -118,6 +137,10 @@ class ProductResponse(BaseModel):
 
     applicable_attributes: List[str] = []
     has_dimensions: bool = False
+
+    min_usable_dimension: Optional[float] = None
+    allow_rotation: bool = True
+    popular_size_ranges: List[PopularSizeRange] = []
 
     # Computed or Relation
     variants: List[VariantResponse] = []

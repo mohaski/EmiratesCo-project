@@ -59,6 +59,31 @@ def get_orders_by_customer(
     return orderService.get_orders_by_customerId(customer_id, db, skip, limit)
 
 
+@router.get("/cutting-queue", response_model=List[model.PendingCuttingItem])
+def get_cutting_queue(
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Items still awaiting a cutting report, for the cutting-queue batch-report screen."""
+    return orderService.get_pending_cutting_items(db, current_user, skip, limit)
+
+
+@router.put("/cutting-queue/mark-done", response_model=model.MarkCuttingDoneResponse)
+async def mark_cutting_done(
+    body: model.MarkCuttingDoneRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Batch-report a set of items as cut — used by the cutting-queue page (multi-select)
+    and by OrderSummaryPage's single-item quick-mark (a 1-element list)."""
+    result = orderService.mark_cutting_complete_batch(body.item_ids, db, current_user)
+    background_tasks.add_task(manager.broadcast, "cutting_status_updated")
+    return model.MarkCuttingDoneResponse(updated=result["updated"])
+
+
 # ---------------------------------------------------------------------------
 # Parameterised routes (/{order_id} must come after static paths)
 # ---------------------------------------------------------------------------
@@ -107,6 +132,19 @@ async def correct_offcut(
         message="Offcut corrected", before=result["before"], after=result["after"],
         replacement_events=result["replacement_events"],
     )
+
+
+@router.put("/{order_id}/mark-cutting-done", response_model=model.MarkCuttingDoneResponse)
+async def mark_order_cutting_done(
+    order_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Whole-order report: marks every still-pending item on this order as cut in one call."""
+    result = orderService.mark_cutting_complete_for_order(order_id, db, current_user)
+    background_tasks.add_task(manager.broadcast, "cutting_status_updated")
+    return model.MarkCuttingDoneResponse(updated=result["updated"])
 
 
 @router.put("/{order_id}/payment-status", response_model=model.OrderStatusUpdateResponse)

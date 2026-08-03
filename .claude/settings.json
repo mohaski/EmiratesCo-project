@@ -37,7 +37,14 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -X PUT http://127.0.0.1:8010/orders/1/correct-offcut -H \"Content-Type: application/json\" -d '{\"item_id\":1,\"line_idx\":0,\"event_idx\":0,\"new_remainders\":[]}')",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -X POST http://127.0.0.1:8010/products/1/offcut-replacement-preview -H \"Content-Type: application/json\" -d '{\"pieces\":[{\"width\":100,\"height\":100}]}')",
       "Bash(curl -s http://127.0.0.1:8010/openapi.json --max-time 5)",
-      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\([p for p in d['paths'] if 'correct-offcut' in p or 'offcut-replacement' in p]\\)\")"
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\([p for p in d['paths'] if 'correct-offcut' in p or 'offcut-replacement' in p]\\)\")",
+      "Bash(python -m py_compile entities/orderItems.py entities/offcuts.py)",
+      "Bash(python -m py_compile migrate_add_cutting_status.py)",
+      "Bash(cd \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\server\" && python test_glass_offcut_logic.py 2>&1 | grep -v \"^DEBUG\" > /tmp/test_run.txt; tail -260 /tmp/test_run.txt)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('core/inventory/glassOffcutService.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('test_glass_offcut_logic.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(cd \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\server\" && python test_glass_offcut_logic.py 2>&1 | grep -v \"^DEBUG\" > /tmp/run3.txt; grep -iE \"FAIL|All tests\" /tmp/run3.txt)",
+      "Bash(cd \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\server\" && python test_glass_offcut_logic.py 2>&1 | grep -v \"^DEBUG\" > /tmp/run5.txt; grep -iE \"FAIL|All tests\" /tmp/run5.txt)"
     ]
   }
 }

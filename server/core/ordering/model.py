@@ -92,6 +92,8 @@ class OrderItemResponse(BaseModel):
     totalPrice: float
     details: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
+    cuttingCompleted: bool = True
+    cuttingCompletedAt: Optional[str] = None
     
 class totalPriceRequest(BaseModel):
     quantity: float
@@ -147,6 +149,22 @@ class CorrectOffcutResponse(BaseModel):
     before: List[Dict[str, Any]]
     after: List[Dict[str, Any]]
     replacement_events: List[Dict[str, Any]] = []
+
+class MarkCuttingDoneRequest(BaseModel):
+    """Batch report: floor staff report a batch of already-finished cutting jobs
+    at once, not one at a time."""
+    item_ids: List[int]
+
+class MarkCuttingDoneResponse(BaseModel):
+    updated: List[int]
+
+class PendingCuttingItem(BaseModel):
+    """One row on the cutting queue — an OrderItem still awaiting a cutting report."""
+    itemId: int
+    orderId: int
+    customerName: Optional[str] = None
+    productName: str
+    details: Optional[Dict[str, Any]] = None
 
 class EditHistoryResponse(BaseModel):
     id: int

@@ -10,6 +10,7 @@ export const ROUTE_ROLES = {
     '/invoice/review':      ['manager', 'cashier'],
     '/orders':              ['manager', 'cashier', 'ceo', 'admin'],
     '/orders/review':       ['manager', 'cashier', 'ceo', 'admin'],
+    '/cutting-queue':       ['manager', 'cashier', 'ceo', 'admin'],
     '/inventory':           ['cashier'],
     '/add-product':         ['admin', 'ceo'],
     '/manage-products':     ['admin', 'ceo'],

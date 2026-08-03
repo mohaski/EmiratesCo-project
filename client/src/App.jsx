@@ -31,6 +31,7 @@ const OrdersPage          = lazy(() => import('./pages/OrdersPage'));
 const OrderSummaryPage    = lazy(() => import('./pages/OrderSummaryPage'));
 const ToolCheckoutPage    = lazy(() => import('./pages/ToolCheckoutPage'));
 const ManagerToolsPage    = lazy(() => import('./pages/ManagerToolsPage'));
+const CuttingQueuePage    = lazy(() => import('./pages/CuttingQueuePage'));
 
 // Minimal spinner shown during lazy-load transitions
 const PageLoader = () => (
@@ -94,6 +95,7 @@ function App() {
                     <Route path="/manage-products"     element={<AdminProductsPage />} />
                     <Route path="/orders"              element={<OrdersPage />} />
                     <Route path="/orders/review"       element={<OrderSummaryPage />} />
+                    <Route path="/cutting-queue"       element={<CuttingQueuePage />} />
                     <Route path="/invoice"             element={<InvoiceGenPage />} />
                     <Route path="/invoice/review"      element={<InvoiceReviewPage />} />
                     <Route path="/tools"               element={<ToolCheckoutPage />} />

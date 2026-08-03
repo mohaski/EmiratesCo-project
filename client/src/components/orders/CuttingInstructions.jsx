@@ -6,6 +6,20 @@
 // shared formatters/themes that let one component serve both.
 import { RECEIPT_THEME, fmtLen, fmtMm, groupCuts, canonicalWH } from '../../utils/cuttingInstructionFormat';
 
+// Shown when the offcut this event consumed was itself produced by an order
+// whose cutting hasn't been reported done yet — advisory only (see
+// glassOffcutService._apply_candidate / inventoryService._pending_source_notice):
+// doesn't block anything, just tells the cutter to double-check with a colleague
+// (or themselves) before assuming the piece physically exists. Monochrome-safe
+// (bold + border only) so it still reads clearly on a plain thermal print.
+const PendingSourceNotice = ({ notice, theme }) => (
+    <div style={{ fontSize: '9.5px', fontWeight: 700, color: theme.border, border: `1px solid ${theme.border}`, borderRadius: '3px', padding: '2px 5px', margin: '3px 0' }}>
+        ⚠ Depends on an offcut from Order #{notice.order_id}
+        {notice.customer_name ? ` (${notice.customer_name})` : ''} — not yet confirmed cut.
+        Check with whoever's working that order, or if it was you, carry on.
+    </div>
+);
+
 // One 1D (bar/profile) offcut_sources entry — {source, offcut_id, length_used, offcut_length, remainder_created}
 const CuttingInstructionLine1D = ({ src, theme }) => (
     <div style={{ fontSize: '10.5px', lineHeight: 1.4 }}>
@@ -13,6 +27,7 @@ const CuttingInstructionLine1D = ({ src, theme }) => (
             ? <div>Cut <strong>{fmtLen(src.length_used)}</strong> from <strong>Offcut #{src.offcut_id}</strong> ({fmtLen(src.offcut_length)} available)</div>
             : <div>Cut <strong>{fmtLen(src.length_used)}</strong> from a <strong>new bar</strong></div>
         }
+        {src.pending_source_notice && <PendingSourceNotice notice={src.pending_source_notice} theme={theme} />}
         {src.remainder_created > 0 && (
             <div style={{ fontSize: '9.5px', color: theme.dim, marginTop: '2px' }}>
                 &gt;&gt; {fmtLen(src.remainder_created)} to stock
@@ -123,6 +138,7 @@ const CuttingInstructionLine2D = ({ src, theme, renderActions }) => {
                         {g.rotated && <span style={{ color: theme.dim }}> (rotated to fit)</span>}
                     </div>
                 ))}
+                {src.pending_source_notice && <PendingSourceNotice notice={src.pending_source_notice} theme={theme} />}
                 {(src.remainders_created || []).map((r, i) => (
                     <div key={i} style={{ fontSize: '9.5px', color: theme.dim, marginTop: '2px' }}>
                         {r.status === 'scrap'

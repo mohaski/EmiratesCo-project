@@ -21,6 +21,11 @@ class Offcut(SQLModel, table=True):
     # "available" (usable, in the pickable pool) or "scrap" (below min usable size — kept for waste reporting only)
     status: str = Field(default="available")
 
+    # Which OrderItem's cutting job produced this remainder — permanent provenance link,
+    # never cleared. Checked against that item's cutting_completed at consumption time to
+    # decide whether to attach a pending_source_notice (see glassOffcutService/inventoryService).
+    source_item_id: Optional[int] = Field(default=None, foreign_key="orderitems.item_id", index=True)
+
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
     

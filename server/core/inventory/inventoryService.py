@@ -5,8 +5,28 @@ from entities.products import Product
 from entities.variants import Variant
 from entities.offcuts import Offcut
 from entities.orderItems import OrderItem
+from entities.orders import Order
 from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines
 from loggiing import logger
+
+
+def _pending_source_notice(db: Session, source_item_id: Optional[int]) -> Optional[dict]:
+    """If `source_item_id` points to an OrderItem whose cutting isn't marked done yet,
+    returns the advisory notice dict to attach to a consuming event — see the 2D
+    equivalent in glassOffcutService._apply_candidate for the full rationale."""
+    if not source_item_id:
+        return None
+    producing_item = db.get(OrderItem, source_item_id)
+    if not producing_item or producing_item.cutting_completed:
+        return None
+    customer_name = None
+    order = db.get(Order, producing_item.order_id)
+    if order is not None:
+        try:
+            customer_name = order.customer.name if order.customer else None
+        except Exception:
+            customer_name = None
+    return {"order_id": producing_item.order_id, "item_id": producing_item.item_id, "customer_name": customer_name}
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -30,11 +50,20 @@ def deduct_stock_for_order_item(db: Session, item: OrderItem) -> None:
     if item.variant_id:
         variant = db.get(Variant, item.variant_id)
 
+    if item.item_id is None:
+        # Order-creation's call site adds the item but doesn't flush before calling
+        # here (order-edit's does) — flush now so item.item_id is always populated
+        # before it's threaded through as Offcut.source_item_id below.
+        db.flush()
+
     details = item.details or {}
     line_items = details.get("lineItems")
 
     if line_items and isinstance(line_items, list):
-        _process_line_items(db, product, variant, line_items)
+        cuttable = _process_line_items(db, product, variant, line_items, item.item_id)
+        if cuttable:
+            item.cutting_completed = False
+            item.cutting_completed_at = None
         # Persist offcut_sources mutations back to the JSON column.
         # flag_modified is required: the offcut lookups inside _process_line_items
         # trigger a premature autoflush that INSERTs this item before offcut_sources
@@ -57,16 +86,23 @@ def _process_line_items(
     product: Product,
     variant: Optional[Variant],
     line_items: list,
-) -> None:
+    item_id: Optional[int] = None,
+) -> bool:
+    """Returns True if any line actually went through a cut-resolution engine
+    (i.e. this item needs a cutting job) — see deduct_stock_for_order_item, which
+    uses this to decide whether to leave the item's cutting_completed at its
+    default True ("nothing to cut") or flip it False ("needs cutting")."""
     track = product.track_offcuts
     full_len = _get_full_length(product, variant)
+    cuttable = False
 
     # 2D glass cuts are resolved as one batch across all glass-cut lines in this
     # item (see glassOffcutService.resolve_glass_cut_lines) rather than line-by-line,
     # so the largest cut doesn't get starved of the best offcut by smaller cuts.
     glass_cut_lines = [l for l in line_items if l.get("type", "") == "glass-cut" and int(l.get("qty", 0)) > 0]
     if glass_cut_lines and track:
-        resolve_glass_cut_lines(db, product, variant, glass_cut_lines)
+        resolve_glass_cut_lines(db, product, variant, glass_cut_lines, item_id)
+        cuttable = True
 
     # Manually-selected profile cut lines must be consumed before any automatic
     # (best-fit) profile line in this same item — otherwise an earlier auto line
@@ -109,7 +145,8 @@ def _process_line_items(
                 _deduct_full_stock(db, product, variant, qty)
             elif track:
                 half_len = full_len / 2.0
-                _process_cut_with_offcuts(db, product, variant, half_len, qty, full_len, line)
+                _process_cut_with_offcuts(db, product, variant, half_len, qty, full_len, line, item_id)
+                cuttable = True
             else:
                 _deduct_full_stock(db, product, variant, qty)
 
@@ -128,10 +165,11 @@ def _process_line_items(
                 manual_selection = line.get("offcut_selection")
                 if manual_selection:
                     line["offcut_sources"] = apply_manual_cut_selection(
-                        db, product, variant, manual_selection, cut_len * qty, full_len
+                        db, product, variant, manual_selection, cut_len * qty, full_len, item_id
                     )
                 else:
-                    _process_cut_with_offcuts(db, product, variant, cut_len, qty, full_len, line)
+                    _process_cut_with_offcuts(db, product, variant, cut_len, qty, full_len, line, item_id)
+                cuttable = True
             else:
                 _deduct_full_stock(db, product, variant, qty)
 
@@ -144,6 +182,8 @@ def _process_line_items(
         else:
             logger.warning(f"Unknown line item type '{l_type}'; performing simple deduction.")
             _deduct_simple_stock(db, product, variant, qty)
+
+    return cuttable
 
 
 def check_line_items_feasible(
@@ -267,6 +307,7 @@ def _fulfill_one_cut_via_best_fit(
     variant: Optional[Variant],
     required_length: float,
     full_length: float,
+    item_id: Optional[int] = None,
 ) -> dict:
     """
     Fulfil a single cut of required_length:
@@ -276,11 +317,18 @@ def _fulfill_one_cut_via_best_fit(
 
     Returns a single source dict (same shape as an offcut_sources entry).
     Raises ValueError if required_length exceeds full_length and no offcut fits.
+
+    `item_id` identifies the OrderItem this cut belongs to — any remainder gets
+    tagged with it (Offcut.source_item_id), and if the offcut actually consumed
+    was itself still awaiting cutting confirmation, the returned dict carries a
+    `pending_source_notice` (advisory only — see the 2D equivalent in
+    glassOffcutService._apply_candidate).
     """
     stmt = (
         select(Offcut)
         .where(
             Offcut.product_id == product.productId,
+            Offcut.status == "available",
             Offcut.length >= required_length,
             Offcut.quantity > 0,
         )
@@ -298,6 +346,7 @@ def _fulfill_one_cut_via_best_fit(
         # ── Use the offcut ────────────────────────────────────────────────
         oc_id = best_offcut.offcutId
         oc_len = best_offcut.length
+        notice = _pending_source_notice(db, best_offcut.source_item_id)
         best_offcut.quantity -= 1
         remainder = round(oc_len - required_length, 4)
         if best_offcut.quantity == 0:
@@ -306,15 +355,18 @@ def _fulfill_one_cut_via_best_fit(
             db.add(best_offcut)
 
         if remainder > 0.01:
-            _upsert_offcut(db, product, variant, remainder)
+            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id)
 
-        return {
+        result = {
             "source": "offcut",
             "offcut_id": oc_id,
             "offcut_length": oc_len,
             "length_used": required_length,
             "remainder_created": remainder if remainder > 0.01 else 0,
         }
+        if notice is not None:
+            result["pending_source_notice"] = notice
+        return result
 
     # ── No offcut fits — fall back to consuming a whole bar ────────────────
     if full_length <= 0:
@@ -340,7 +392,7 @@ def _fulfill_one_cut_via_best_fit(
     _deduct_full_stock(db, product, variant, 1)
     remainder = round(full_length - required_length, 4)
     if remainder > 0.01:
-        _upsert_offcut(db, product, variant, remainder)
+        _upsert_offcut(db, product, variant, remainder, source_item_id=item_id)
 
     return {
         "source": "full_bar",
@@ -359,6 +411,7 @@ def _process_cut_with_offcuts(
     qty_cuts: int,
     full_length: float,
     line_item_dict: Optional[dict] = None,
+    item_id: Optional[int] = None,
 ) -> None:
     """
     Best-fit algorithm for cut-piece deduction (only called when track_offcuts=True).
@@ -371,7 +424,7 @@ def _process_cut_with_offcuts(
         return
 
     sources = [
-        _fulfill_one_cut_via_best_fit(db, product, variant, required_length, full_length)
+        _fulfill_one_cut_via_best_fit(db, product, variant, required_length, full_length, item_id)
         for _ in range(qty_cuts)
     ]
 
@@ -548,6 +601,7 @@ def _consume_offcut_sources(
     product: Product,
     variant: Optional[Variant],
     sources: list,
+    item_id: Optional[int] = None,
 ) -> list:
     """
     Consume a list of caller-specified offcuts.  Uses SELECT FOR UPDATE to
@@ -579,6 +633,7 @@ def _consume_offcut_sources(
                 f"for the requested {length_used:.2f} ft"
             )
 
+        notice = _pending_source_notice(db, locked.source_item_id)
         remainder = round(locked.length - length_used, 4)
         locked.quantity -= 1
         if locked.quantity == 0:
@@ -587,15 +642,18 @@ def _consume_offcut_sources(
             db.add(locked)
 
         if remainder > 0.01:
-            _upsert_offcut(db, product, variant, remainder)
+            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id)
 
-        result.append({
+        entry = {
             "source": "offcut",
             "offcut_id": oc_id,
             "offcut_length": locked.length,
             "length_used": length_used,
             "remainder_created": remainder if remainder > 0.01 else 0,
-        })
+        }
+        if notice is not None:
+            entry["pending_source_notice"] = notice
+        result.append(entry)
 
     return result
 
@@ -607,6 +665,7 @@ def apply_manual_cut_selection(
     selected_sources: list,
     required_total_length: float,
     full_length: float,
+    item_id: Optional[int] = None,
 ) -> list:
     """
     Consume cashier-specified offcuts for a cut at order-creation time.
@@ -627,11 +686,11 @@ def apply_manual_cut_selection(
             f"the required cut ({required_total_length:.2f} ft)"
         )
 
-    result = _consume_offcut_sources(db, product, variant, selected_sources)
+    result = _consume_offcut_sources(db, product, variant, selected_sources, item_id)
 
     shortfall = round(required_total_length - selected_total, 4)
     if shortfall > 0.01:
-        result.append(_fulfill_one_cut_via_best_fit(db, product, variant, shortfall, full_length))
+        result.append(_fulfill_one_cut_via_best_fit(db, product, variant, shortfall, full_length, item_id))
 
     return result
 
@@ -641,10 +700,15 @@ def _upsert_offcut(
     product: Product,
     variant: Optional[Variant],
     length: float,
+    source_item_id: Optional[int] = None,
 ) -> None:
     """
     Create a new offcut record or increment the quantity if one of the
     same length (±1mm tolerance) already exists.
+
+    `source_item_id` tags which OrderItem's cutting job produced this remainder
+    (see the 2D equivalent, glassOffcutService._upsert_glass_offcut, for the full
+    merge-policy rationale — overwritten on merge only when a real id is given).
     """
     stmt = select(Offcut).where(
         Offcut.product_id == product.productId,
@@ -659,6 +723,8 @@ def _upsert_offcut(
     existing = db.exec(stmt).first()
     if existing:
         existing.quantity += 1
+        if source_item_id is not None:
+            existing.source_item_id = source_item_id
         db.add(existing)
     else:
         db.add(Offcut(
@@ -666,4 +732,5 @@ def _upsert_offcut(
             variant_id=variant.variantId if variant else None,
             length=length,
             quantity=1,
+            source_item_id=source_item_id,
         ))

@@ -106,7 +106,9 @@ def get_orderItems_by_orderId(order_id: int, db: Session = Depends(get_session))
                 unitPrice=item.unit_price,
                 totalPrice=item.total_price,
                 details=item.details,
-                status=item.status
+                status=item.status,
+                cuttingCompleted=item.cutting_completed,
+                cuttingCompletedAt=item.cutting_completed_at.isoformat() if item.cutting_completed_at else None,
             ) for item in results
         ]
         

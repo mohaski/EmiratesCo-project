@@ -49,6 +49,12 @@ const NAV_ICONS = {
       <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
     </svg>
   ),
+  cuttingQueue: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" />
+      <line x1="20" y1="4" x2="8.12" y2="15.88" /><line x1="14.47" y1="14.48" x2="20" y2="20" /><line x1="8.12" y1="8.12" x2="12" y2="12" />
+    </svg>
+  ),
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
@@ -110,8 +116,13 @@ export default function Layout() {
   const [isSidebarExpanded, setSidebarExpanded] = useState(true);
   const [isMobileOpen, setMobileOpen] = useState(false);
 
-  // Close mobile menu on route change
-  useEffect(() => { setMobileOpen(false); }, [location.pathname]);
+  // Close mobile menu on route change — adjust state during render rather than
+  // in an effect (avoids an extra commit/cascading render for a same-render reset).
+  const [mobileMenuPathname, setMobileMenuPathname] = useState(location.pathname);
+  if (location.pathname !== mobileMenuPathname) {
+    setMobileMenuPathname(location.pathname);
+    setMobileOpen(false);
+  }
 
   // Prevent body scroll when mobile menu is open
   useEffect(() => {
@@ -128,6 +139,7 @@ export default function Layout() {
     { path: '/sales', label: 'Sales POS', iconKey: 'sales' },
     { path: '/invoice', label: 'Invoices', iconKey: 'invoice' },
     { path: '/orders', label: 'Order History', iconKey: 'orders' },
+    { path: '/cutting-queue', label: 'Cutting Queue', iconKey: 'cuttingQueue' },
     { path: '/inventory', label: 'Stock Control', iconKey: 'inventory' },
     { path: '/add-product', label: 'Add Product', iconKey: 'addProduct' },
     { path: '/manage-products', label: 'Manage Products', iconKey: 'manageProducts' },
@@ -155,7 +167,13 @@ export default function Layout() {
     if (isMobile) setMobileOpen(false);
   }, [navigate, isMobile]);
 
-  const SidebarContent = () => (
+  // A JSX expression, not a component — it closes over local render-scope
+  // variables (isMobile, isSidebarExpanded, filteredItems, ...) and is used
+  // twice below (mobile overlay vs. desktop/tablet). Defining it as `() => (...)`
+  // and rendering `<SidebarContent />` would redeclare a new component type on
+  // every render, resetting any internal state each time — using a plain JSX
+  // variable avoids that without losing the closures.
+  const sidebarContent = (
     <aside style={{
       width: sidebarWidth,
       height: '100%',
@@ -411,7 +429,7 @@ export default function Layout() {
             transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
             boxShadow: isMobileOpen ? '4px 0 40px rgba(0,0,0,0.6)' : 'none',
           }}>
-            <SidebarContent />
+            {sidebarContent}
           </div>
         ) : (
           <div style={{
@@ -420,7 +438,7 @@ export default function Layout() {
             flexShrink: 0,
             zIndex: 40,
           }}>
-            <SidebarContent />
+            {sidebarContent}
           </div>
         )}
 

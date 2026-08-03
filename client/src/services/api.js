@@ -97,6 +97,22 @@ export const OrderService = {
         });
         return response.data;
     },
+    /** Batch-report a set of OrderItems as cut. Used by both the cutting-queue
+     * multi-select page and OrderSummaryPage's single-item quick-mark. */
+    markCuttingDone: async (itemIds) => {
+        const response = await api.put('/orders/cutting-queue/mark-done', { item_ids: itemIds });
+        return response.data;
+    },
+    /** Marks every still-pending item on one order as cut, in one call. */
+    markOrderCuttingDone: async (orderId) => {
+        const response = await api.put(`/orders/${orderId}/mark-cutting-done`);
+        return response.data;
+    },
+    /** Items still awaiting a cutting report, for the cutting-queue page. */
+    getCuttingQueue: async (skip = 0, limit = 100) => {
+        const response = await api.get(`/orders/cutting-queue?skip=${skip}&limit=${limit}`);
+        return response.data;
+    },
 };
 
 export const ProductService = {

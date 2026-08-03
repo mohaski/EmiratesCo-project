@@ -39,6 +39,15 @@ def create_product(
             raise HTTPException(status_code=400, detail="Product must have at least one variant")
         initial_stock = sum(v.stock_quantity for v in product_data.variants)
 
+        # 2b. Glass (2D) products must have their offcut-tuning CEO inputs set at
+        # creation time — glassOffcutService's tiering can't make sensible
+        # decisions with an unset scrap threshold or no popular-size guidance.
+        if product_data.has_dimensions:
+            if product_data.min_usable_dimension is None:
+                raise HTTPException(status_code=400, detail="min_usable_dimension is required for a glass (has_dimensions) product")
+            if not product_data.popular_size_ranges:
+                raise HTTPException(status_code=400, detail="At least one popular_size_ranges entry is required for a glass (has_dimensions) product")
+
         # 3. Create Product Entity
         new_product = Product(
             name=product_data.name,
@@ -54,6 +63,10 @@ def create_product(
 
             applicable_attributes=product_data.applicable_attributes,
             has_dimensions=product_data.has_dimensions,
+
+            min_usable_dimension=product_data.min_usable_dimension if product_data.min_usable_dimension is not None else 150.0,
+            allow_rotation=product_data.allow_rotation,
+            popular_size_ranges=[r.dict() for r in product_data.popular_size_ranges],
 
             has_variants=True,
             stock_quantity=initial_stock

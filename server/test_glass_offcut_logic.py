@@ -31,7 +31,7 @@ def _reset_product(db: Session):
         p = Product(
             name="Test Glass Sheet", category_id=1, stock_quantity=10,
             track_offcuts=True, has_variants=True, has_dimensions=True, unit="mm",
-            min_usable_dimension=150.0, allow_rotation=True,
+            min_usable_dimension=150.0, allow_rotation=True, popular_size_ranges=[],
         )
         db.add(p)
         db.commit()
@@ -42,6 +42,7 @@ def _reset_product(db: Session):
         p.has_dimensions = True
         p.min_usable_dimension = 150.0
         p.allow_rotation = True
+        p.popular_size_ranges = []  # reset in case a prior interrupted run left this set
         db.add(p)
         db.commit()
 
@@ -60,7 +61,6 @@ def _reset_product(db: Session):
         db.commit()
 
     _clear_offcuts(db, p)
-    gos._popularity_cache.clear()
     db.refresh(p)
     db.refresh(v)
     return p, v
@@ -147,11 +147,15 @@ def test_3_scrap_classification(db, p, v):
     print("PASS")
 
 
-def test_4_protects_popular_sizes(db, p, v, servedby):
-    print("\n--- Test 4: ProtectPopularStockAgent avoids cutting into a popular-size offcut ---")
+def test_4_sales_history_no_longer_protects_offcuts(db, p, v, servedby):
+    print("\n--- Test 4: sales history alone no longer protects an offcut (ProtectPopularStockAgent removed) ---")
     _clear_offcuts(db, p)
 
-    # Seed purchase history: 400x300mm cuts have sold 5 times -> that size is "popular"
+    # Same setup that used to prove ProtectPopularStockAgent worked: seed
+    # purchase history so 400x300mm cuts have "sold" 5 times. With that agent
+    # removed, this history must NOT influence which offcut gets cut — CEO
+    # popular_size_ranges (see test_30/31) are the only thing that can protect
+    # an offcut now, and none are configured on this product for this test.
     order = Order(servedby=servedby, subtotal=0, total=0)
     db.add(order)
     db.commit()
@@ -163,15 +167,14 @@ def test_4_protects_popular_sizes(db, p, v, servedby):
     )
     db.add(seed_item)
     db.commit()
-    gos._popularity_cache.clear()
 
-    popular = Offcut(product_id=p.productId, variant_id=v.variantId, width=400.0, height=300.0, length=0.0, quantity=1, status="available")
-    unpopular = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=300.0, length=0.0, quantity=1, status="available")
-    db.add(popular)
-    db.add(unpopular)
+    formerly_popular = Offcut(product_id=p.productId, variant_id=v.variantId, width=400.0, height=300.0, length=0.0, quantity=1, status="available")
+    other = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=300.0, length=0.0, quantity=1, status="available")
+    db.add(formerly_popular)
+    db.add(other)
     db.commit()
-    db.refresh(popular)
-    db.refresh(unpopular)
+    db.refresh(formerly_popular)
+    db.refresh(other)
 
     line = _mk_line(200, 200)
     lines = [line]
@@ -180,10 +183,10 @@ def test_4_protects_popular_sizes(db, p, v, servedby):
 
     src = line["offcut_sources"][0]
     print(f"Source: {src}")
-    assert src["offcut_id"] == unpopular.offcutId, (
-        f"Expected the agent to pick the less-popular 450x300 offcut (id {unpopular.offcutId}), "
-        f"but it picked offcut #{src['offcut_id']} instead"
-    )
+    # No longer asserting avoidance of the historically-popular offcut — just
+    # confirming the resolution succeeds and picks SOME valid offcut, proving
+    # nothing crashes now that _score_protect_popular is gone.
+    assert src["offcut_id"] in (formerly_popular.offcutId, other.offcutId)
     print("PASS")
 
 
@@ -710,49 +713,44 @@ def test_17_multi_strategy_order_independent_of_lw_swap(db, p, v):
     print("PASS")
 
 
-def test_18_sellability_score_reflects_popular_remainders(db, p, v):
-    print("\n--- Test 18: total_sellability_score rewards remainders matching popular sizes ---")
+def test_18_sellability_score_reflects_ceo_popular_ranges(db, p, v):
+    print("\n--- Test 18: total_sellability_score/is_popular reflect CEO popular_size_ranges, not sales history ---")
     _clear_offcuts(db, p)
     v.length = 2440.0
     v.width = 1830.0
     v.stock_quantity = 10
+    p.popular_size_ranges = []
     db.add(v)
+    db.add(p)
     db.commit()
     db.refresh(v)
+    db.refresh(p)
 
-    # Baseline: no sales history at all -> sellability score must be exactly 0.
-    # Cutting 1200x800 from the 2440x1830 sheet leaves remainders (2440x1030) and (1240x800).
+    # Baseline: no CEO popular_size_ranges configured -> sellability score must
+    # be exactly 0. Cutting 1200x800 from the 2440x1830 sheet leaves remainders
+    # (2440x1030) and (1240x800).
     line = _mk_line(1200, 800, qty=1)
     metrics_before = gos._resolve_with_strategy(db, p, v, [dict(line)], gos.DEFAULT_STRATEGY)
     db.rollback()
-    print(f"No history: total_sellability_score={metrics_before['total_sellability_score']} (expected 0)")
+    print(f"No ranges configured: total_sellability_score={metrics_before['total_sellability_score']} (expected 0)")
     assert metrics_before["total_sellability_score"] == 0.0
 
-    # Seed history: a 1240x800mm cut has sold 5 times before — matches one of
-    # THIS cut's own remainders exactly.
-    servedby = db.exec(select(User.userId)).first()
-    order = Order(servedby=servedby, subtotal=0, total=0)
-    db.add(order)
+    # Configure a CEO range low enough that the 1240x800 remainder clears it
+    # (_meets_popular_threshold only checks the lower bound -- "popular-sized
+    # or larger", not a ceiling -- so this is a deliberately permissive range).
+    p.popular_size_ranges = [{"min_w": 1200, "max_w": 1300, "min_h": 750, "max_h": 850}]
+    db.add(p)
     db.commit()
-    db.refresh(order)
-    seed_item = OrderItem(
-        order_id=order.orderId, product_id=p.productId, variant_id=v.variantId,
-        total_price=0, status="purchased",
-        details={"lineItems": [{"type": "glass-cut", "qty": 5, "meta": {"l": 1240, "w": 800, "u": "mm"}}]},
-    )
-    db.add(seed_item)
-    db.commit()
-    gos._popularity_cache.clear()
+    db.refresh(p)
 
     line2 = _mk_line(1200, 800, qty=1)
     metrics_after = gos._resolve_with_strategy(db, p, v, [dict(line2)], gos.DEFAULT_STRATEGY)
     db.rollback()
-    print(f"With history: total_sellability_score={metrics_after['total_sellability_score']} (expected > 0)")
+    print(f"With CEO range configured: total_sellability_score={metrics_after['total_sellability_score']} (expected > 0)")
     assert metrics_after["total_sellability_score"] > 0.0
 
     # And the full resolve_glass_cut_lines path should also expose it per-trial
     # in the optimization summary, and tag the matching remainder is_popular=True.
-    gos._popularity_cache.clear()
     line3 = _mk_line(1200, 800, qty=1)
     lines = [line3]
     summary = gos.resolve_glass_cut_lines(db, p, v, lines)
@@ -763,12 +761,12 @@ def test_18_sellability_score_reflects_popular_remainders(db, p, v):
 
     popular_remainders = [r for e in line3["offcut_sources"] for r in e.get("remainders_created", []) if r.get("is_popular")]
     print(f"Remainders tagged is_popular: {popular_remainders}")
-    assert popular_remainders, "Expected the 1240x800 remainder to be tagged is_popular"
+    assert popular_remainders, "Expected at least one remainder tagged is_popular under the CEO range"
 
     gos.restore_glass_cut_lines(db, p, v, lines)
     db.commit()
-    db.delete(seed_item)
-    db.delete(order)
+    p.popular_size_ranges = []
+    db.add(p)
     db.commit()
     _clear_offcuts(db, p)
     print("PASS")
@@ -888,36 +886,36 @@ def test_21_correct_offcut_rejects_invalid_input(db, p, v):
     print("PASS")
 
 
-def test_22_no_forced_split_when_consolidating_leaves_scrap_anyway(db, p, v):
-    print("\n--- Test 22: A small offcut is NOT used just to protect a remainder that would be scrap anyway ---")
+def test_22_no_forced_split_when_neither_scrap_nor_big_waste_is_at_stake(db, p, v):
+    print("\n--- Test 22: A small offcut is NOT used when the big offcut's remainder is neither scrap nor a big-waste chunk ---")
     _clear_offcuts(db, p)
     db.refresh(v)
 
-    # Same two cuts as test 19 (400x1070 x2), but the "large" offcut is now only
-    # 900mm tall instead of 1020 -- just short enough that grid-packing BOTH
-    # pieces into it leaves a sub-150mm (scrap) sliver alongside the good
-    # remainder, whichever split direction is used. Since consolidating here
-    # would leave scrap regardless, there's nothing worth protecting by
-    # diverting one cut to the small offcut -- both cuts should still come from
-    # the large offcut, and the small offcut should be left untouched.
-    small = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=1120.0, length=0.0, quantity=1, status="available")
-    large = Offcut(product_id=p.productId, variant_id=v.variantId, width=1650.0, height=900.0, length=0.0, quantity=1, status="available")
+    # One 400x300 cut. The 450x850 offcut leaves a scrap sliver (50x300) plus a
+    # perfectly ordinary 450x550 remainder -- non-scrap, but ALSO under the
+    # SNUB_WASTE_HEIGHT_MM=600 threshold, so it doesn't count as a "big,
+    # mostly-unused chunk" either. Neither the original scrap-avoidance
+    # condition nor the newer snub-big-waste condition is triggered, so there's
+    # nothing worth protecting by going elsewhere -- the big offcut should just
+    # be used directly, and the smaller 410x310 offcut (which would itself be
+    # reduced entirely to scrap slivers if used) should be left untouched.
+    small = Offcut(product_id=p.productId, variant_id=v.variantId, width=410.0, height=310.0, length=0.0, quantity=1, status="available")
+    big = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=850.0, length=0.0, quantity=1, status="available")
     db.add(small)
-    db.add(large)
+    db.add(big)
     db.commit()
     db.refresh(small)
-    db.refresh(large)
+    db.refresh(big)
 
-    line = _mk_line(400, 1070, qty=2)
+    line = _mk_line(400, 300, qty=1)
     lines = [line]
     gos.resolve_glass_cut_lines(db, p, v, lines)
     db.commit()
 
     events = [e for e in line["offcut_sources"] if e.get("owns_consumption", True)]
     print(f"Events: {events}")
-    assert len(events) == 1, f"Expected both cuts from ONE event (the large offcut), got {len(events)}"
-    assert events[0]["offcut_id"] == large.offcutId
-    assert len(events[0]["cuts"]) == 2
+    assert len(events) == 1
+    assert events[0]["offcut_id"] == big.offcutId, f"Expected the cut from the 450x850 offcut, got {events[0]['offcut_id']}"
 
     untouched = db.exec(select(Offcut).where(Offcut.offcutId == small.offcutId)).first()
     print(f"Small offcut still in DB untouched: {untouched}")
@@ -925,17 +923,20 @@ def test_22_no_forced_split_when_consolidating_leaves_scrap_anyway(db, p, v):
     print("PASS")
 
 
-def test_23_no_forced_split_when_remainder_basically_same_as_cut(db, p, v):
-    print("\n--- Test 23: A small offcut is NOT used just to protect a remainder that's basically the cut itself ---")
+def test_23_big_waste_redirects_even_when_remainder_resembles_the_cut(db, p, v):
+    print("\n--- Test 23: big-waste still redirects to the closer offcut even when the big one's remainder resembles the cut ---")
     _clear_offcuts(db, p)
     db.refresh(v)
 
     # One 400x1070 cut. The 850x1070 offcut leaves a single non-scrap remainder
-    # (450x1070) after the cut -- but that remainder is within 100mm of the cut's
-    # own size on both sides, so there's no meaningfully distinct leftover to
-    # protect. A smaller, snug-fitting 420x1090 offcut also exists (and would
-    # itself be reduced to scrap slivers if used), but it should NOT be reached
-    # for -- the 850x1070 offcut should just be used directly.
+    # (450x1070) -- which happens to be within 100mm of the cut's own size on
+    # both sides (_remainder_basically_same_as_cut). That coincidence used to
+    # suppress the redirect entirely (as if there were nothing worth
+    # protecting), but the 850x1070 offcut is still using only ~47% of its own
+    # area for this cut (450mm of unused width, past SNUB_WASTE_WIDTH_MM=99) --
+    # a real excess that has nothing to do with what the leftover looks like.
+    # The closer, snug-fitting 420x1090 offcut should be used instead, even
+    # though it ends up fully reduced to scrap slivers doing it.
     small = Offcut(product_id=p.productId, variant_id=v.variantId, width=420.0, height=1090.0, length=0.0, quantity=1, status="available")
     big = Offcut(product_id=p.productId, variant_id=v.variantId, width=850.0, height=1070.0, length=0.0, quantity=1, status="available")
     db.add(small)
@@ -952,11 +953,11 @@ def test_23_no_forced_split_when_remainder_basically_same_as_cut(db, p, v):
     events = [e for e in line["offcut_sources"] if e.get("owns_consumption", True)]
     print(f"Events: {events}")
     assert len(events) == 1
-    assert events[0]["offcut_id"] == big.offcutId, f"Expected the cut from the 850x1070 offcut, got {events[0]['offcut_id']}"
+    assert events[0]["offcut_id"] == small.offcutId, f"Expected the cut from the closer 420x1090 offcut, got {events[0]['offcut_id']}"
 
-    untouched = db.exec(select(Offcut).where(Offcut.offcutId == small.offcutId)).first()
-    print(f"Small offcut still in DB untouched: {untouched}")
-    assert untouched is not None and untouched.quantity == 1, "The small offcut should not have been used"
+    untouched = db.exec(select(Offcut).where(Offcut.offcutId == big.offcutId)).first()
+    print(f"Big offcut still in DB untouched: {untouched}")
+    assert untouched is not None and untouched.quantity == 1, "The big offcut should not have been used"
     print("PASS")
 
 
@@ -1048,6 +1049,221 @@ def test_27_correct_glass_offcut_event_rejects_bad_cut_index(db, p, v):
     print("PASS")
 
 
+def test_28_pending_source_notice_on_cross_order_consumption(db, p, v, servedby):
+    print("\n--- Test 28: consuming another order's not-yet-cut offcut attaches a pending_source_notice ---")
+    _clear_offcuts(db, p)
+
+    # item_a: cutting NOT reported done yet — its predicted remainder is still "pending"
+    order_a = Order(servedby=servedby, subtotal=0, total=0)
+    db.add(order_a)
+    db.commit()
+    db.refresh(order_a)
+    item_a = OrderItem(
+        order_id=order_a.orderId, product_id=p.productId, variant_id=v.variantId,
+        total_price=0, status="purchased", cutting_completed=False,
+        details={"lineItems": [{"type": "glass-cut", "qty": 1, "meta": {"l": 2000, "w": 1500, "u": "mm"}}]},
+    )
+    db.add(item_a)
+    db.commit()
+    db.refresh(item_a)
+
+    # A remainder "produced by" item_a's (still pending) cutting job
+    pending_offcut = Offcut(
+        product_id=p.productId, variant_id=v.variantId, width=700.0, height=500.0, length=0.0,
+        quantity=1, status="available", source_item_id=item_a.item_id,
+    )
+    db.add(pending_offcut)
+    db.commit()
+
+    # item_b: a different order's cut that happens to fit inside item_a's still-pending offcut
+    order_b = Order(servedby=servedby, subtotal=0, total=0)
+    db.add(order_b)
+    db.commit()
+    db.refresh(order_b)
+    item_b = OrderItem(order_id=order_b.orderId, product_id=p.productId, variant_id=v.variantId, total_price=0, status="purchased")
+    db.add(item_b)
+    db.commit()
+    db.refresh(item_b)
+
+    line = _mk_line(600, 400)
+    gos.resolve_glass_cut_lines(db, p, v, [line], item_id=item_b.item_id)
+    db.commit()
+
+    event = line["offcut_sources"][0]
+    print(f"Event: {event}")
+    assert event["source"] == "offcut" and event["offcut_id"] == pending_offcut.offcutId, "Expected the cut to come from item_a's pending offcut"
+    notice = event.get("pending_source_notice")
+    assert notice is not None, "Expected a pending_source_notice since item_a hasn't reported cutting done"
+    assert notice["order_id"] == order_a.orderId and notice["item_id"] == item_a.item_id, f"Notice points at the wrong source: {notice}"
+
+    # The new remainder this consumption left behind should itself be tagged to item_b
+    remaining = db.exec(select(Offcut).where(Offcut.product_id == p.productId, Offcut.source_item_id == item_b.item_id)).all()
+    assert remaining, "Expected the new remainder to be tagged with item_b as its producer"
+    print("PASS")
+
+
+def test_29_no_notice_once_source_marked_done(db, p, v, servedby):
+    print("\n--- Test 29: no pending_source_notice once the producing item is marked cut ---")
+    _clear_offcuts(db, p)
+
+    order_a = Order(servedby=servedby, subtotal=0, total=0)
+    db.add(order_a)
+    db.commit()
+    db.refresh(order_a)
+    item_a = OrderItem(
+        order_id=order_a.orderId, product_id=p.productId, variant_id=v.variantId,
+        total_price=0, status="purchased", cutting_completed=True,  # already reported done
+        details={"lineItems": []},
+    )
+    db.add(item_a)
+    db.commit()
+    db.refresh(item_a)
+
+    offcut = Offcut(
+        product_id=p.productId, variant_id=v.variantId, width=700.0, height=500.0, length=0.0,
+        quantity=1, status="available", source_item_id=item_a.item_id,
+    )
+    db.add(offcut)
+    db.commit()
+
+    order_c = Order(servedby=servedby, subtotal=0, total=0)
+    db.add(order_c)
+    db.commit()
+    db.refresh(order_c)
+    item_c = OrderItem(order_id=order_c.orderId, product_id=p.productId, variant_id=v.variantId, total_price=0, status="purchased")
+    db.add(item_c)
+    db.commit()
+    db.refresh(item_c)
+
+    line = _mk_line(600, 400)
+    gos.resolve_glass_cut_lines(db, p, v, [line], item_id=item_c.item_id)
+    db.commit()
+
+    event = line["offcut_sources"][0]
+    assert event["source"] == "offcut" and event["offcut_id"] == offcut.offcutId
+    assert "pending_source_notice" not in event, f"Expected no notice once item_a is marked cut, got {event.get('pending_source_notice')}"
+    print("PASS")
+
+
+def test_30_ceo_popular_range_drives_tiering_without_sales_history(db, p, v):
+    print("\n--- Test 30: CEO popular_size_ranges alone (no sales history) still splits small/large ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+
+    # Same physical scenario as test_19, but this time NO sales history is
+    # seeded at all — the only thing making the 1650x1020 offcut "protected"
+    # is the CEO-configured range below. Proves the new range-based tier is
+    # actually driving the split, not the pre-existing sales-history signal.
+    p.popular_size_ranges = [{"min_w": 900, "max_w": 1700, "min_h": 900, "max_h": 1200}]
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+
+    small = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=1120.0, length=0.0, quantity=1, status="available")
+    large = Offcut(product_id=p.productId, variant_id=v.variantId, width=1650.0, height=1020.0, length=0.0, quantity=1, status="available")
+    db.add(small)
+    db.add(large)
+    db.commit()
+    db.refresh(small)
+    db.refresh(large)
+
+    line = _mk_line(400, 1070, qty=2)
+    gos.resolve_glass_cut_lines(db, p, v, [line])
+    db.commit()
+
+    events = [e for e in line["offcut_sources"] if e.get("owns_consumption", True)]
+    sources_used = {e["offcut_id"] for e in events}
+    print(f"Sources used: {sources_used}")
+    assert sources_used == {small.offcutId, large.offcutId}, (
+        f"Expected one event from each offcut ({small.offcutId}, {large.offcutId}), got sources {sources_used}"
+    )
+    large_event = next(e for e in events if e["offcut_id"] == large.offcutId)
+    assert len(large_event["cuts"]) == 1, f"Expected exactly 1 cut from the popular-range large offcut, got {len(large_event['cuts'])}"
+
+    p.popular_size_ranges = []
+    db.add(p)
+    db.commit()
+    print("PASS")
+
+
+def test_31_small_tier_consolidates_before_splitting(db, p, v):
+    print("\n--- Test 31: within the small/unpopular tier, one offcut serving both cuts wins over splitting ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+
+    # A high, unreachable popular threshold puts BOTH offcuts below it — i.e.
+    # both are "small/unpopular" tier. Offcut A fits only one 300x400 cut;
+    # offcut B fits both side by side. Desired: both cuts come from B in one
+    # event (maximize consolidation within the tier), A stays untouched —
+    # NOT one cut from each, even though A also technically fits one.
+    p.popular_size_ranges = [{"min_w": 2000, "max_w": 3000, "min_h": 2000, "max_h": 3000}]
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+
+    a = Offcut(product_id=p.productId, variant_id=v.variantId, width=300.0, height=400.0, length=0.0, quantity=1, status="available")
+    b = Offcut(product_id=p.productId, variant_id=v.variantId, width=620.0, height=400.0, length=0.0, quantity=1, status="available")
+    db.add(a)
+    db.add(b)
+    db.commit()
+    db.refresh(a)
+    db.refresh(b)
+
+    line = _mk_line(300, 400, qty=2)
+    gos.resolve_glass_cut_lines(db, p, v, [line])
+    db.commit()
+
+    events = [e for e in line["offcut_sources"] if e.get("owns_consumption", True)]
+    print(f"Events: {events}")
+    assert len(events) == 1, f"Expected both cuts consolidated into ONE event, got {len(events)}"
+    assert events[0]["offcut_id"] == b.offcutId, f"Expected the consolidating offcut B (#{b.offcutId}), got #{events[0]['offcut_id']}"
+    assert len(events[0]["cuts"]) == 2, f"Expected both cuts in the single event, got {len(events[0]['cuts'])}"
+
+    remaining_a = db.exec(select(Offcut).where(Offcut.offcutId == a.offcutId)).first()
+    assert remaining_a is not None and remaining_a.quantity == 1, "Offcut A should be untouched"
+
+    p.popular_size_ranges = []
+    db.add(p)
+    db.commit()
+    print("PASS")
+
+
+def test_32_snubs_big_waste_even_when_consolidating_makes_less_total_scrap(db, p, v):
+    print("\n--- Test 32: a source left with too much unused width/height for the cut is snubbed for a closer offcut ---")
+    _clear_offcuts(db, p)
+    db.refresh(v)
+
+    # Same two cuts and offcuts as the ORIGINAL test 22 scenario. Consolidating
+    # both cuts into the 1650x900 offcut only uses a 1070x800 footprint,
+    # leaving 580mm of unused width -- past SNUB_WASTE_WIDTH_MM (99mm) -- even
+    # though the resulting scrap area is technically less than splitting would
+    # produce. So it's snubbed anyway: one cut goes to the closer 450x1120
+    # offcut instead (even though that offcut ends up entirely reduced to
+    # scrap), and the big offcut keeps only the ONE cut it's asked for.
+    small = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=1120.0, length=0.0, quantity=1, status="available")
+    large = Offcut(product_id=p.productId, variant_id=v.variantId, width=1650.0, height=900.0, length=0.0, quantity=1, status="available")
+    db.add(small)
+    db.add(large)
+    db.commit()
+    db.refresh(small)
+    db.refresh(large)
+
+    line = _mk_line(400, 1070, qty=2)
+    lines = [line]
+    gos.resolve_glass_cut_lines(db, p, v, lines)
+    db.commit()
+
+    events = [e for e in line["offcut_sources"] if e.get("owns_consumption", True)]
+    print(f"Events: {events}")
+    sources_used = {e["offcut_id"] for e in events}
+    assert sources_used == {small.offcutId, large.offcutId}, (
+        f"Expected one event from each offcut ({small.offcutId}, {large.offcutId}), got sources {sources_used}"
+    )
+    large_event = next(e for e in events if e["offcut_id"] == large.offcutId)
+    assert len(large_event["cuts"]) == 1, f"Expected exactly 1 cut from the large offcut (snubbed for the second), got {len(large_event['cuts'])}"
+    print("PASS")
+
+
 def run():
     engine = create_engine(DATABASE_URL)
     with Session(engine) as db:
@@ -1064,7 +1280,7 @@ def run():
             ("test_1_uses_existing_offcut", lambda: test_1_uses_existing_offcut(db, p, v)),
             ("test_2_falls_back_to_fresh_sheet", lambda: test_2_falls_back_to_fresh_sheet(db, p, v)),
             ("test_3_scrap_classification", lambda: test_3_scrap_classification(db, p, v)),
-            ("test_4_protects_popular_sizes", lambda: test_4_protects_popular_sizes(db, p, v, servedby)),
+            ("test_4_sales_history_no_longer_protects_offcuts", lambda: test_4_sales_history_no_longer_protects_offcuts(db, p, v, servedby)),
             ("test_5_batches_largest_first", lambda: test_5_batches_largest_first(db, p, v)),
             ("test_6_restore", lambda: test_6_restore(db, p, v)),
             ("test_7_unit_conversion", lambda: test_7_unit_conversion(db, p, v)),
@@ -1078,16 +1294,21 @@ def run():
             ("test_15_savepoint_trials_leave_no_trace", lambda: test_15_savepoint_trials_leave_no_trace(db, p, v)),
             ("test_16_multi_strategy_timing_sanity", lambda: test_16_multi_strategy_timing_sanity(db, p, v)),
             ("test_17_multi_strategy_order_independent_of_lw_swap", lambda: test_17_multi_strategy_order_independent_of_lw_swap(db, p, v)),
-            ("test_18_sellability_score_reflects_popular_remainders", lambda: test_18_sellability_score_reflects_popular_remainders(db, p, v)),
+            ("test_18_sellability_score_reflects_ceo_popular_ranges", lambda: test_18_sellability_score_reflects_ceo_popular_ranges(db, p, v)),
             ("test_19_small_offcut_before_large_offcut", lambda: test_19_small_offcut_before_large_offcut(db, p, v)),
             ("test_20_correct_offcut_event", lambda: test_20_correct_offcut_event(db, p, v)),
             ("test_21_correct_offcut_rejects_invalid_input", lambda: test_21_correct_offcut_rejects_invalid_input(db, p, v)),
-            ("test_22_no_forced_split_when_consolidating_leaves_scrap_anyway", lambda: test_22_no_forced_split_when_consolidating_leaves_scrap_anyway(db, p, v)),
-            ("test_23_no_forced_split_when_remainder_basically_same_as_cut", lambda: test_23_no_forced_split_when_remainder_basically_same_as_cut(db, p, v)),
+            ("test_22_no_forced_split_when_neither_scrap_nor_big_waste_is_at_stake", lambda: test_22_no_forced_split_when_neither_scrap_nor_big_waste_is_at_stake(db, p, v)),
+            ("test_23_big_waste_redirects_even_when_remainder_resembles_the_cut", lambda: test_23_big_waste_redirects_even_when_remainder_resembles_the_cut(db, p, v)),
             ("test_24_resolve_replacement_pieces_auto", lambda: test_24_resolve_replacement_pieces_auto(db, p, v)),
             ("test_25_resolve_replacement_pieces_forced_offcut", lambda: test_25_resolve_replacement_pieces_forced_offcut(db, p, v)),
             ("test_26_correct_glass_offcut_event_with_failed_cuts", lambda: test_26_correct_glass_offcut_event_with_failed_cuts(db, p, v)),
             ("test_27_correct_glass_offcut_event_rejects_bad_cut_index", lambda: test_27_correct_glass_offcut_event_rejects_bad_cut_index(db, p, v)),
+            ("test_28_pending_source_notice_on_cross_order_consumption", lambda: test_28_pending_source_notice_on_cross_order_consumption(db, p, v, servedby)),
+            ("test_29_no_notice_once_source_marked_done", lambda: test_29_no_notice_once_source_marked_done(db, p, v, servedby)),
+            ("test_30_ceo_popular_range_drives_tiering_without_sales_history", lambda: test_30_ceo_popular_range_drives_tiering_without_sales_history(db, p, v)),
+            ("test_31_small_tier_consolidates_before_splitting", lambda: test_31_small_tier_consolidates_before_splitting(db, p, v)),
+            ("test_32_snubs_big_waste_even_when_consolidating_makes_less_total_scrap", lambda: test_32_snubs_big_waste_even_when_consolidating_makes_less_total_scrap(db, p, v)),
         ]:
             try:
                 fn()

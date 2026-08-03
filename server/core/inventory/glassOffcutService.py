@@ -11,44 +11,36 @@ POS checkout path (deduct_stock_for_order_item), so no LLM/network call belongs 
 
 The agents from the design brief map to:
   1. WasteAgent            -> _score_waste            (minimize scrap area)
-  2. SellabilityAgent      -> _score_sellability       (reward remainders close to
-                                                         historically popular sizes)
-  3. ProtectPopularStockAgent -> _score_protect_popular (don't cut into an offcut
-                                                         whose own size already sells well)
-  4. AgingAgent            -> _score_aging             (use up older offcuts first)
-  5. FreshSheetPenaltyAgent -> _score_fresh_penalty    (prefer offcuts over a new sheet)
-  6. MinUsableSizeAgent    -> _is_scrap                (classifier, not a weighted score:
+  2. SellabilityAgent      -> _score_sellability       (reward remainders that land
+                                                         in/above a CEO-configured
+                                                         popular_size_range -- see
+                                                         _meets_popular_threshold)
+  3. AgingAgent            -> _score_aging             (use up genuinely stale
+                                                         offcuts first -- only kicks
+                                                         in past AGING_THRESHOLD_DAYS)
+  4. FreshSheetPenaltyAgent -> _score_fresh_penalty    (prefer offcuts over a new sheet)
+  5. MinUsableSizeAgent    -> _is_scrap                (classifier, not a weighted score:
                                                          decides what counts as "scrap" for
                                                          agents 1 and 2 below the minimum
                                                          usable size)
-  7. SizeMatchAgent        -> _score_size_fit          (reward a source whose dimensions
+  6. SizeMatchAgent        -> _score_size_fit          (reward a source whose dimensions
                                                          closely match the pieces placed in
                                                          it -- a snug small offcut over a
                                                          needlessly large one when both fit
                                                          the same pieces; weighted low so it
                                                          only breaks near-ties, never
-                                                         overrides waste/protect_popular)
+                                                         overrides waste)
 
-Source tiering (see _fulfill_pool): the engine only splits a pool of cuts across
-two offcuts when doing so protects something worth protecting. It first finds
-the "consolidated" choice -- whichever offcut the normal weighted score would
-pick with no size preference at all -- and only reaches past it for a smaller
-offcut when cutting the consolidated one would leave a genuinely good,
-non-scrap remainder that's meaningfully bigger than the cut itself (not just
-barely so) AND a smaller offcut is available to take the cut instead. If
-cutting the consolidated offcut would leave scrap anyway, or would leave next
-to nothing beyond the cut itself, there's nothing worth preserving by going
-elsewhere, so it's used as-is regardless of what other offcuts exist. This is
-what makes two same-size cuts against a small offcut and a large offcut each
-claim one -- the small, already-marginal offcut absorbs a cut it can only just
-fit, and the large offcut is only asked for what's left afterward, surviving as
-one large (easier to sell, less backlog) remainder instead of being grid-packed
-down into several medium ones -- while a large offcut that could easily serve
-the whole order alone (with no smaller offcut worth diverting to, or nothing
-distinctive left to protect) is simply used as-is. An offcut whose own whole
-size already sells well (see ProtectPopularStockAgent) is excluded from being
-the "consolidated" pick entirely -- it's only reached for if no other offcut
-can do the job -- so protecting popular stock always wins over this.
+There is deliberately no "ProtectPopularStockAgent" anymore: what counts as
+worth protecting is entirely driven by the CEO's own popular_size_ranges input
+(via SellabilityAgent above and the source tiering below), not by what past
+sales happened to be -- sales history no longer influences source selection.
+
+Source tiering (see _fulfill_pool's docstring for the full two-tier
+small-offcut-first / popular-or-larger breakdown): the engine only splits a
+pool of cuts across two offcuts when doing so protects something worth
+protecting, and never fragments an offcut across sources just for the sake
+of it.
 
 Mirrors the 1D bar/profile system in inventoryService.py (_fulfill_one_cut_via_best_fit /
 apply_manual_cut_selection / restore_specific_offcut_sources) but generalizes a single
@@ -75,7 +67,6 @@ only the cashier's cut input (in ft/inch/mm, from GlassCalculator's per-cut unit
 needs converting, into mm, before comparison.
 """
 
-import time
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -86,6 +77,7 @@ from entities.offcuts import Offcut
 from entities.products import Product
 from entities.variants import Variant
 from entities.orderItems import OrderItem
+from entities.orders import Order
 from loggiing import logger
 
 
@@ -183,11 +175,19 @@ def _get_full_dims(variant: Optional[Variant]) -> tuple:
 # heuristics one; not implemented since the two attempted variants added ~35%
 # latency for zero measured benefit.
 
-def _need_key_area(need: dict) -> float:
-    return -(need["piece_w"] * need["piece_h"])
+def _need_key_area(need: dict) -> tuple:
+    w, h = need["piece_w"], need["piece_h"]
+    # A (primary, secondary) tuple, both canonical (max/min, not raw
+    # piece_w/piece_h — see _need_key_longest_side) so two needs that happen to
+    # tie on the primary criterion (e.g. equal area but different shapes) are
+    # still broken deterministically by their own geometry, never by falling
+    # through to Python's stable sort preserving whichever line was listed
+    # first in the input array — that would make the batch's packing order
+    # (and thus which need claims a limited source) depend on array position.
+    return (-(w * h), -max(w, h), -min(w, h))
 
 
-def _need_key_longest_side(need: dict) -> float:
+def _need_key_longest_side(need: dict) -> tuple:
     # max()/min() here — NOT raw piece_w/piece_h — is deliberate: piece_w/piece_h
     # are literally whichever of L/W the cashier typed first for that line, so
     # ranking lines against each other by the raw (non-canonical) value would
@@ -196,15 +196,18 @@ def _need_key_longest_side(need: dict) -> float:
     # _orientations) is identical either way. Same class of bug already fixed
     # once for single-need tie-breaks (_candidate_sort_key/_pack_rect_multi's own
     # orientation choice) — this is the same fix applied to cross-line ranking.
-    return -max(need["piece_w"], need["piece_h"])
+    w, h = need["piece_w"], need["piece_h"]
+    return (-max(w, h), -min(w, h))
 
 
-def _need_key_shortest_side(need: dict) -> float:
-    return -min(need["piece_w"], need["piece_h"])
+def _need_key_shortest_side(need: dict) -> tuple:
+    w, h = need["piece_w"], need["piece_h"]
+    return (-min(w, h), -max(w, h))
 
 
-def _need_key_perimeter(need: dict) -> float:
-    return -(need["piece_w"] + need["piece_h"])  # already symmetric in w/h, no fix needed
+def _need_key_perimeter(need: dict) -> tuple:
+    w, h = need["piece_w"], need["piece_h"]
+    return (-(w + h), -max(w, h), -min(w, h))  # perimeter is already symmetric in w/h; the tuple's 2nd/3rd elements are just the tiebreak
 
 
 def _prefer_larger_remainder(rect_a_h: dict, rect_b_h: dict, rect_a_v: dict, rect_b_v: dict) -> bool:
@@ -234,6 +237,22 @@ STRATEGIES = [
 
 # ── Recursive packing ────────────────────────────────────────────────────────
 
+def _remainder_fragment_count(src_w: float, src_h: float, grid_w: float, grid_h: float, strategy: dict) -> int:
+    """How many non-degenerate remainder rectangles (0, 1, or 2) result from
+    placing a grid_w x grid_h occupied block in a src_w x src_h source, using
+    the strategy's preferred split direction — e.g. when one of the piece's
+    own sides matches the source's exactly, one split rect is zero-area and
+    only ONE real remainder is left, vs. two real remainders when neither
+    side matches. Used to prefer whichever orientation of a piece leaves the
+    source less fragmented, not just whichever happens to have a larger
+    placed-width value (see _pack_rect_multi)."""
+    eps = 1e-6
+    rect_a_h, rect_b_h = _layout_remainder_rects(src_w, src_h, grid_w, grid_h, "horizontal")
+    rect_a_v, rect_b_v = _layout_remainder_rects(src_w, src_h, grid_w, grid_h, "vertical")
+    rect_a, rect_b = (rect_a_h, rect_b_h) if strategy["prefer_horizontal"](rect_a_h, rect_b_h, rect_a_v, rect_b_v) else (rect_a_v, rect_b_v)
+    return sum(1 for r in (rect_a, rect_b) if r["width"] > eps and r["height"] > eps)
+
+
 def _pack_rect_multi(w: float, h: float, needs: list, allow_rotation: bool, strategy: dict = DEFAULT_STRATEGY, depth: int = 0, max_depth: int = 5) -> dict:
     """
     Greedily packs pieces from a POOL of possibly-different pending needs (each
@@ -260,9 +279,13 @@ def _pack_rect_multi(w: float, h: float, needs: list, allow_rotation: bool, stra
         return {"placed": [], "remainders": remainders}
 
     # Try needs in the strategy's ranked order; use the first that actually fits
-    # here — ties within one need broken by grid area then the orientation's own
-    # width value, never by which one _orientations happened to yield first
-    # (keeps results independent of which of L/W a cashier typed).
+    # here — ties within one need broken by grid area, then how many remainder
+    # fragments that orientation leaves (fewer is better — an orientation that
+    # happens to make one of the piece's own sides match the source exactly
+    # leaves ONE clean leftover instead of splitting it into two), then the
+    # orientation's own width value as a final tiebreak, never by which one
+    # _orientations happened to yield first (keeps results independent of
+    # which of L/W a cashier typed).
     active.sort(key=strategy["need_key"])
     chosen, chosen_need = None, None
     for need in active:
@@ -271,7 +294,8 @@ def _pack_rect_multi(w: float, h: float, needs: list, allow_rotation: bool, stra
             arrangement = _grid_arrangement(w, h, ow, oh, need["remaining"])
             if not arrangement:
                 continue
-            key = (arrangement["k"], arrangement["grid_w"] * arrangement["grid_h"], ow)
+            frag_count = _remainder_fragment_count(w, h, arrangement["grid_w"], arrangement["grid_h"], strategy)
+            key = (arrangement["k"], arrangement["grid_w"] * arrangement["grid_h"], -frag_count, ow)
             if best is None or key > best["_key"]:
                 arrangement.update(ow=ow, oh=oh, rotated=rotated, _key=key)
                 best = arrangement
@@ -372,20 +396,36 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
 AGENT_WEIGHTS = {
     "waste": 10.0,
     "sellability": 6.0,
-    "protect_popular": 8.0,
     "aging": 2.0,
     "fresh_penalty": 4.0,
     "size_fit": 1.5,
 }
-AGING_CAP_DAYS = 60.0
+AGING_THRESHOLD_DAYS = 60.0  # an offcut younger than this gets NO aging bonus at
+# all -- aging only kicks in for stock that's genuinely stale, not "a few days
+# older than the alternative" (previously scored continuously from day 0).
+AGING_CAP_DAYS = 60.0  # bonus saturates this many days past the threshold (i.e.
+# total age 120+ days = max bonus)
 FRESH_SHEET_PENALTY = 1.0
-POPULARITY_TOLERANCE_MM = 25.0  # sizes within 25mm are treated as "the same size"
 USABLE_REMAINDER_BONUS = 0.5
+POPULAR_RANGE_BONUS = 3.0  # extra SellabilityAgent credit when a remainder lands
+# in/above a CEO-configured popular_size_range (_meets_popular_threshold) --
+# "genuinely reusable" is judged by what the CEO said sells, not sales history.
 MM2_PER_M2 = 1_000_000.0  # area normalizer so weights stay meaningful at mm scale
 REMAINDER_SIMILAR_TO_CUT_TOLERANCE_MM = 100.0  # a remainder within this of the cut
 # piece's own size isn't a meaningfully distinct leftover worth protecting — cutting
 # that offcut basically consumes it whole, so there's nothing to redirect elsewhere
 # to preserve (see _remainder_basically_same_as_cut / _fulfill_pool).
+SNUB_WASTE_WIDTH_MM = 99.0
+SNUB_WASTE_HEIGHT_MM = 600.0
+# A source left with more than SNUB_WASTE_WIDTH_MM of unused width OR more
+# than SNUB_WASTE_HEIGHT_MM of unused height beyond what the cut actually
+# needed (source dims minus the placed piece(s)' own footprint — not the
+# shape of the resulting remainder rectangles, which get sliced apart by the
+# guillotine split and don't correspond 1:1 to "how oversized was this
+# source") is treated as wasteful to pick, even though the leftover is
+# technically usable stock, not scrap — snubbed in favor of a closer-fitting
+# offcut when one is available (_creates_big_waste), but only if one
+# actually is: with no alternative, the oversized source is still used.
 
 
 def _is_scrap(dims: Optional[tuple], product: Product) -> bool:
@@ -399,20 +439,27 @@ def _is_scrap(dims: Optional[tuple], product: Product) -> bool:
     return w < m or h < m
 
 
-def _popularity_of(dims: Optional[tuple], product: Product, popularity: dict) -> float:
-    if dims is None or not popularity:
-        return 0.0
+def _meets_popular_threshold(dims: Optional[tuple], product: Product) -> bool:
+    """Whether `dims` is at least as big, in BOTH dimensions, as the lower
+    bound (min_w/min_h) of some CEO-configured entry in product.popular_size_ranges
+    — i.e. "popular-sized or larger", not just "exactly inside a range". This is
+    the hard tier boundary _fulfill_pool uses to split offcuts into the
+    small/unpopular pool (used up first) vs the protected pool (only touched
+    once the small pool can't help anymore); it deliberately only checks the
+    lower bound, so an offcut bigger than every configured range still counts
+    as protected — the CEO ranges mark where "small" stops, not a ceiling.
+    No ranges configured for this product -> nothing meets the threshold, so
+    every offcut lands in the small pool and _fulfill_pool falls back to
+    treating them as one undifferentiated pool (see its docstring)."""
+    if dims is None or not product.popular_size_ranges:
+        return False
     w, h = dims
     if product.allow_rotation:
-        # A rectangle rotated 90° is the same physical piece — compare canonically
-        # so a size's popularity is recognized regardless of which side was called
-        # width vs height (both when it was recorded and when it's being looked up).
-        w, h = max(w, h), min(w, h)
-    best = 0
-    for (pw, ph), count in popularity.items():
-        if abs(pw - w) <= POPULARITY_TOLERANCE_MM and abs(ph - h) <= POPULARITY_TOLERANCE_MM:
-            best = max(best, count)
-    return float(best)
+        w, h = max(w, h), min(w, h)  # canonical wide/narrow
+    for r in product.popular_size_ranges:
+        if w >= r.get("min_w", 0) and h >= r.get("min_h", 0):
+            return True
+    return False
 
 
 def _score_waste(candidate: dict, product: Product) -> float:
@@ -426,33 +473,34 @@ def _score_waste(candidate: dict, product: Product) -> float:
     return -(scrap_area_mm2 / MM2_PER_M2)
 
 
-def _score_sellability(candidate: dict, product: Product, popularity: dict) -> float:
-    """SellabilityAgent — reward remainders close to historically popular sizes
-    (and give any usable-but-unmatched remainder a small flat bonus, so new
-    products with no sales history aren't scored as if every remainder is waste)."""
+def _score_sellability(candidate: dict, product: Product) -> float:
+    """SellabilityAgent — a flat bonus for any non-scrap remainder (so new
+    products aren't scored as if every remainder is waste), plus a stronger
+    bonus if it lands in/above a CEO-configured popular_size_range
+    (_meets_popular_threshold). "Genuinely reusable" is judged by the sizes
+    the CEO said sell well, not by what past sales happened to be — no
+    ranges configured means every remainder only gets the flat bonus."""
     score = 0.0
     for r in candidate["remainders"]:
         dims = (r["width"], r["height"])
         if not _is_scrap(dims, product):
-            score += USABLE_REMAINDER_BONUS + _popularity_of(dims, product, popularity)
+            score += USABLE_REMAINDER_BONUS
+            if _meets_popular_threshold(dims, product):
+                score += POPULAR_RANGE_BONUS
     return score
 
 
-def _score_protect_popular(candidate: dict, product: Product, popularity: dict) -> float:
-    """ProtectPopularStockAgent — penalize cutting into an offcut whose own size
-    already sells well on its own. This is the concrete case from the brief:
-    don't sacrifice an easily-sellable offcut to save a fresh sheet."""
-    if candidate["source_kind"] != "offcut":
-        return 0.0
-    return -_popularity_of((candidate["source_w"], candidate["source_h"]), product, popularity)
-
-
 def _score_aging(candidate: dict, now: datetime) -> float:
-    """AgingAgent — reward consuming older offcuts first (reduce dead stock)."""
+    """AgingAgent — reward consuming genuinely old offcuts first (reduce dead
+    stock). An offcut younger than AGING_THRESHOLD_DAYS gets no bonus at all —
+    this only matters for stock that's actually stale, not "a few days older
+    than the alternative"."""
     if candidate["source_kind"] != "offcut" or not candidate.get("source_created_at"):
         return 0.0
     age_days = max(0.0, (now - candidate["source_created_at"]).total_seconds() / 86400.0)
-    return min(age_days, AGING_CAP_DAYS)
+    if age_days < AGING_THRESHOLD_DAYS:
+        return 0.0
+    return min(age_days - AGING_THRESHOLD_DAYS, AGING_CAP_DAYS)
 
 
 def _score_fresh_penalty(candidate: dict) -> float:
@@ -465,7 +513,7 @@ def _score_size_fit(candidate: dict) -> float:
     (placed area / source area, 0..1). A source whose dimensions are close to
     the pieces cut from it scores near 1; a needlessly large source holding the
     same pieces scores lower. Weighted low (see AGENT_WEIGHTS) — this only
-    nudges near-ties, it never outweighs waste/protect_popular on its own; the
+    nudges near-ties, it never outweighs waste/sellability on its own; the
     actual "use small offcuts before large ones" behavior lives in the source
     tiering done by _fulfill_pool, not in this score."""
     source_area = candidate["source_w"] * candidate["source_h"]
@@ -477,14 +525,24 @@ def _score_size_fit(candidate: dict) -> float:
 
 def _remainder_common_sellable(candidate: dict, product: Product) -> bool:
     """Whether cutting this candidate would leave ONLY non-scrap remainder(s) —
-    used as a "common, easy-to-sell size" signal per SellabilityAgent. A fresh
-    product has no sales history to check real popularity against yet, so "not
-    scrap" (an ordinary, usable offcut size) stands in for "commonly sellable";
-    a real popular-size match (see _popularity_of) only ever strengthens this,
-    never weakens it, so it isn't re-checked here."""
+    used as a "common, easy-to-sell size" signal per SellabilityAgent when no
+    CEO popular_size_ranges are configured for this product yet, so "not
+    scrap" (an ordinary, usable offcut size) stands in for "commonly sellable"."""
     if not candidate["remainders"]:
         return False
     return all(not _is_scrap((r["width"], r["height"]), product) for r in candidate["remainders"])
+
+
+def _remainder_meets_popular_threshold(candidate: dict, product: Product) -> bool:
+    """Whether cutting this candidate would leave at least one remainder that's
+    STILL popular-sized-or-larger per CEO ranges (_meets_popular_threshold) —
+    the "still remains a large/popular size" signal used, once already choosing
+    among the protected (popular-or-larger) tier, to decide whether that
+    tier's consolidated pick is worth protecting from being touched further.
+    Only ANY (not all) remainder needs to qualify: a popular/large offcut that
+    throws off one great leftover plus one small unrelated sliver still counts
+    as protecting something real."""
+    return any(_meets_popular_threshold((r["width"], r["height"]), product) for r in candidate["remainders"])
 
 
 def _remainder_basically_same_as_cut(candidate: dict) -> bool:
@@ -504,18 +562,38 @@ def _remainder_basically_same_as_cut(candidate: dict) -> bool:
     return False
 
 
-def _score_candidate(candidate: dict, product: Product, popularity: dict, now: datetime) -> float:
+def _creates_big_waste(candidate: dict) -> bool:
+    """Whether this source is oversized for the cut(s) actually placed in it
+    by more than a comfortable margin in EITHER direction: more than
+    SNUB_WASTE_WIDTH_MM of unused width, OR more than SNUB_WASTE_HEIGHT_MM of
+    unused height, measuring from the source's own dimensions down to the
+    bounding box of everything placed — not the shape of the resulting
+    remainder rectangles (a guillotine split can slice one big unused corner
+    into two oddly-shaped rectangles, neither of which reflects how oversized
+    the source was for this cut). Feeds _fulfill_pool's redirect-to-a-closer-
+    offcut decision alongside (not instead of) the existing sellability/
+    popular-range worth-protecting checks; _pick_with_redirect only acts on
+    it when a closer alternative actually exists."""
+    if not candidate["placed"]:
+        return False
+    used_w = max(pc["x"] + pc["width"] for pc in candidate["placed"])
+    used_h = max(pc["y"] + pc["height"] for pc in candidate["placed"])
+    excess_w = candidate["source_w"] - used_w
+    excess_h = candidate["source_h"] - used_h
+    return excess_w > SNUB_WASTE_WIDTH_MM or excess_h > SNUB_WASTE_HEIGHT_MM
+
+
+def _score_candidate(candidate: dict, product: Product, now: datetime) -> float:
     return (
         AGENT_WEIGHTS["waste"] * _score_waste(candidate, product)
-        + AGENT_WEIGHTS["sellability"] * _score_sellability(candidate, product, popularity)
-        + AGENT_WEIGHTS["protect_popular"] * _score_protect_popular(candidate, product, popularity)
+        + AGENT_WEIGHTS["sellability"] * _score_sellability(candidate, product)
         + AGENT_WEIGHTS["aging"] * _score_aging(candidate, now)
         + AGENT_WEIGHTS["fresh_penalty"] * _score_fresh_penalty(candidate)
         + AGENT_WEIGHTS["size_fit"] * _score_size_fit(candidate)
     )
 
 
-def _candidate_sort_key(candidate: dict, product: Product, popularity: dict, now: datetime):
+def _candidate_sort_key(candidate: dict, product: Product, now: datetime):
     """
     Fully deterministic ordering: every field used here is a property of the
     candidate's own computed geometry/score — never its position in the list
@@ -544,7 +622,7 @@ def _candidate_sort_key(candidate: dict, product: Product, popularity: dict, now
     single remainder, then fewest total remainder pieces — less fragmentation)
     rather than insertion order.
     """
-    score = _score_candidate(candidate, product, popularity, now)
+    score = _score_candidate(candidate, product, now)
     prefer_offcut = 0 if candidate["source_kind"] == "offcut" else 1  # offcut always beats sheet
     tiebreak_id = candidate["source_id"] or 0
     source_area = candidate["source_w"] * candidate["source_h"]
@@ -555,59 +633,6 @@ def _candidate_sort_key(candidate: dict, product: Product, popularity: dict, now
         prefer_offcut, -len(candidate["placed"]), -score, source_area, tiebreak_id,
         -largest_remainder_area, len(candidate["remainders"]),
     )
-
-
-# ── Popularity lookup (historical demand, used as a sellability proxy) ─────────
-
-_popularity_cache: dict = {}
-POPULARITY_CACHE_TTL = 300  # seconds
-POPULARITY_HISTORY_LIMIT = 500
-
-
-def _get_popularity_lookup(db: Session, product: Product, variant: Optional[Variant]) -> dict:
-    cache_key = (product.productId, variant.variantId if variant else None)
-    cached = _popularity_cache.get(cache_key)
-    now_ts = time.time()
-    if cached and now_ts - cached[0] < POPULARITY_CACHE_TTL:
-        return cached[1]
-
-    stmt = (
-        select(OrderItem)
-        .where(OrderItem.product_id == product.productId, OrderItem.status == "purchased")
-        .order_by(OrderItem.item_id.desc())
-        .limit(POPULARITY_HISTORY_LIMIT)
-    )
-    if variant:
-        stmt = stmt.where(OrderItem.variant_id == variant.variantId)
-    items = db.exec(stmt).all()
-
-    popularity: dict = {}
-    for item in items:
-        details = item.details or {}
-        for line in details.get("lineItems", []) or []:
-            l_type = line.get("type", "")
-            meta = line.get("meta", {}) or {}
-            qty = int(line.get("qty", 1)) or 1
-            w = h = None
-            if l_type == "glass-cut":
-                l_val, w_val, unit = meta.get("l"), meta.get("w"), meta.get("u", "mm")
-                if l_val is not None and w_val is not None:
-                    w, h = _cut_dims_to_mm(float(l_val), float(w_val), unit)
-            elif l_type in ("sheet-full", "sheet-half") and variant and variant.length and variant.width:
-                w, h = float(variant.length), float(variant.width)
-            if w is None or h is None:
-                continue
-            # Bucket to the nearest 10mm so near-identical historical sizes count as one popular size
-            key_w, key_h = round(w / 10.0) * 10.0, round(h / 10.0) * 10.0
-            if product.allow_rotation:
-                # Same physical size rotated 90° — fold into one canonical bucket
-                # (matched symmetrically by _popularity_of at lookup time too).
-                key_w, key_h = max(key_w, key_h), min(key_w, key_h)
-            key = (key_w, key_h)
-            popularity[key] = popularity.get(key, 0) + qty
-
-    _popularity_cache[cache_key] = (now_ts, popularity)
-    return popularity
 
 
 OFFCUT_MATCH_TOLERANCE_MM = 1.0  # sizes within 1mm are "the same offcut" (absorbs unit-conversion float noise)
@@ -655,11 +680,16 @@ def _restore_sheet_stock(db: Session, product: Product, variant: Optional[Varian
         db.add(product)
 
 
-def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available") -> int:
+def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available", source_item_id: Optional[int] = None) -> int:
     """Creates or increments a matching offcut row and returns its id — callers
     attach this to the remainder's audit record so later code (e.g. the cut
     preview's consolidation of same-session offcut chains) can tell whether a
-    later event consumed a genuinely pre-existing offcut or one just created."""
+    later event consumed a genuinely pre-existing offcut or one just created.
+
+    `source_item_id` tags which OrderItem's cutting job produced this remainder.
+    On a merge into an existing row, it's overwritten to the newest contributor —
+    biased toward surfacing a pending-source notice later rather than missing one
+    (this is an advisory feature, not a strict guarantee; see _apply_candidate)."""
     stmt = select(Offcut).where(
         Offcut.product_id == product.productId,
         Offcut.status == status,
@@ -672,6 +702,8 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
     existing = db.exec(stmt).first()
     if existing:
         existing.quantity += 1
+        if source_item_id is not None:
+            existing.source_item_id = source_item_id
         db.add(existing)
         return existing.offcutId
     else:
@@ -679,7 +711,7 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
             product_id=product.productId,
             variant_id=variant.variantId if variant else None,
             width=width, height=height, length=0.0,
-            quantity=1, status=status,
+            quantity=1, status=status, source_item_id=source_item_id,
         )
         db.add(new_offcut)
         db.flush()  # assign a real id immediately, not just on the next autoflush
@@ -717,7 +749,7 @@ def _layout_remainder_rects(src_w: float, src_h: float, grid_w: float, grid_h: f
     return rect_a, rect_b
 
 
-def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], candidate: dict) -> dict:
+def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], candidate: dict, item_id: Optional[int] = None) -> dict:
     """
     Consumes ONE source unit (an offcut row or one sheet) and returns
     {line_idx: event, ...} — one event per order line that got a piece from this
@@ -730,11 +762,34 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
     (see _restore_one_source) — safe because resolve/restore always operate on
     every line of one OrderItem together, so owner and non-owner events for the
     same physical source are always reversed in the same pass.
+
+    `item_id` identifies the OrderItem this resolution is for (None for the
+    manager-correction call sites, which operate on already-committed orders).
+    Any new/merged remainder is tagged with it (Offcut.source_item_id) so a LATER
+    consumer can tell whose still-unfinished cutting job it came from. Conversely,
+    if THIS candidate consumes an existing offcut whose own source_item_id points
+    to an item that hasn't been marked cut yet, every event produced here gets a
+    `pending_source_notice` — advisory only, never blocks the resolution.
     """
+    pending_source_notice = None
     if candidate["source_kind"] == "offcut":
         locked = db.exec(select(Offcut).where(Offcut.offcutId == candidate["source_id"]).with_for_update()).first()
         if not locked or locked.quantity < 1:
             raise ValueError(f"Offcut #{candidate['source_id']} is no longer available")
+        if locked.source_item_id:
+            producing_item = db.get(OrderItem, locked.source_item_id)
+            if producing_item and not producing_item.cutting_completed:
+                customer_name = None
+                order = db.get(Order, producing_item.order_id)
+                if order is not None:
+                    try:
+                        customer_name = order.customer.name if order.customer else None
+                    except Exception:
+                        customer_name = None
+                pending_source_notice = {
+                    "order_id": producing_item.order_id, "item_id": producing_item.item_id,
+                    "customer_name": customer_name,
+                }
         locked.quantity -= 1
         if locked.quantity == 0:
             db.delete(locked)
@@ -743,15 +798,17 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
     else:
         _deduct_sheet_stock(db, product, variant, 1)
 
-    popularity = _get_popularity_lookup(db, product, variant)  # TTL-cached — cheap to call again here
     remainders_created = []
     for r in candidate["remainders"]:
         dims = (r["width"], r["height"])
         status = "scrap" if _is_scrap(dims, product) else "available"
-        offcut_id = _upsert_glass_offcut(db, product, variant, r["width"], r["height"], status)
+        offcut_id = _upsert_glass_offcut(db, product, variant, r["width"], r["height"], status, source_item_id=item_id)
         remainders_created.append({
             "width": r["width"], "height": r["height"], "status": status, "x": r["x"], "y": r["y"], "offcut_id": offcut_id,
-            "is_popular": status == "available" and _popularity_of(dims, product, popularity) > 0,
+            # CEO-configured popular_size_ranges, not sales history — see
+            # _meets_popular_threshold and the module docstring on why
+            # ProtectPopularStockAgent (sales-history-driven) was removed.
+            "is_popular": status == "available" and _meets_popular_threshold(dims, product),
         })
 
     owner_line_idx = candidate["placed"][0]["line_idx"]
@@ -765,7 +822,7 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
     events = {}
     for line_idx, cuts in cuts_by_line.items():
         is_owner = line_idx == owner_line_idx
-        events[line_idx] = {
+        event = {
             "source": candidate["source_kind"],
             "offcut_id": candidate["source_id"],
             "offcut_width": candidate["source_w"],
@@ -775,47 +832,109 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
             "owns_consumption": is_owner,
             "group_id": group_id,
         }
+        if pending_source_notice is not None:
+            event["pending_source_notice"] = pending_source_notice
+        events[line_idx] = event
     return events
 
 
-def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], needs: list, full_w: float, full_h: float, strategy: dict = DEFAULT_STRATEGY) -> dict:
+def _pick_with_redirect(pool: list, product: Product, now: datetime, remainder_worth_protecting) -> dict:
+    """Picks the best-scoring candidate from `pool` (_candidate_sort_key), then
+    redirects to whichever OTHER candidate in the pool is the closest/snuggest
+    fit for this cut (_score_size_fit, highest first) instead, if EITHER:
+      a. the picked candidate is oversized for this cut by more than a
+         comfortable margin (_creates_big_waste) — this is purely about how
+         much of the source goes unused relative to the cut, so it applies
+         regardless of what the resulting remainder happens to look like:
+         even if that remainder coincidentally resembles the cut's own size
+         (_remainder_basically_same_as_cut), the source itself was still far
+         bigger than it needed to be; OR
+      b. the picked candidate's remainder is worth protecting —
+         `remainder_worth_protecting(candidate)` says so (sellability/CEO
+         popular-range signal, varies by caller) — AND that remainder is
+         meaningfully bigger than the cut itself, not just barely more
+         (_remainder_basically_same_as_cut) — nothing distinct enough to
+         protect otherwise.
+    ...AND some other candidate actually exists in the pool to redirect to.
+    Shared by every tier in _fulfill_pool so "prefer the closest offcut
+    unless the picked one is fine as-is" is one rule, not three.
+    """
+    consolidated = min(pool, key=lambda c: _candidate_sort_key(c, product, now))
+    alternatives = [c for c in pool if c is not consolidated]
+    worth_protecting = _creates_big_waste(consolidated) or (
+        remainder_worth_protecting(consolidated)
+        and not _remainder_basically_same_as_cut(consolidated)
+    )
+    if worth_protecting and alternatives:
+        return min(alternatives, key=lambda c: (-_score_size_fit(c), _candidate_sort_key(c, product, now)))
+    return consolidated
+
+
+def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], needs: list, full_w: float, full_h: float, strategy: dict = DEFAULT_STRATEGY, item_id: Optional[int] = None) -> dict:
     """Fulfils as much of the whole `needs` pool as possible from a single
     source, packing pieces from potentially several different order lines into
     it at once when they nest together (see _pack_rect_multi / _generate_candidates).
     Returns {line_idx: event, ...}; the caller loops with the updated pool if
     anything is still unmet afterward.
 
-    Source selection only splits demand across offcuts when doing so actually
-    protects something worth protecting — it never fragments an offcut across
-    two sources just for the sake of it:
-      1. Find the "consolidated" candidate: among existing offcuts that aren't
-         individually a popular whole size (see ProtectPopularStockAgent),
-         whichever one the normal weighted score/pieces-placed ranking would
-         pick on its own — i.e. what the engine would do with no size
-         preference at all.
-      2. Only reach past it for a SMALLER offcut if BOTH:
-         a. cutting the consolidated candidate would leave ONLY non-scrap,
-            "commonly sellable" remainder(s) (_remainder_common_sellable) —
-            if it would leave scrap anyway, there's nothing worth protecting
-            by going elsewhere, so just accept it and cut from the
-            consolidated candidate regardless of what other offcuts exist; AND
-         b. that remainder is meaningfully bigger than the cut itself, not
-            just barely more than the piece being cut
-            (_remainder_basically_same_as_cut) — if it isn't, the offcut is
-            basically being consumed whole anyway and there's no distinct
-            leftover left to preserve; AND
-         c. a smaller offcut is actually available to take the cut instead.
-         When all three hold, the smaller offcut is used for THIS cut, leaving
-         the consolidated candidate's good remainder untouched for now — this
-         is what makes two same-size cuts against a small offcut and a large
-         offcut each claim one: the small, already-marginal offcut absorbs a
-         cut it can only just fit, and the large offcut is only asked for
-         what's left afterward, surviving as one large (easier to sell, less
-         backlog) remainder instead of being grid-packed down into several.
-      3. Only once no offcut fits at all is the fresh sheet used.
+    Source selection is a hard two-tier split when the product has CEO-configured
+    popular_size_ranges, and falls back to the original sales-history-only
+    behavior when it doesn't (see below):
+
+      TIER 1 — small/unpopular offcuts (below every range's own min_w/min_h,
+      see _meets_popular_threshold): used up first, and AS FULLY AS POSSIBLE
+      per offcut — _candidate_sort_key already ranks by most pieces placed
+      before score, so one small offcut that can take two pending cuts wins
+      over splitting them across two different small offcuts. Only once NONE
+      of the remaining small offcuts can help anymore (either consumed by
+      earlier calls in this same resolution, or none of them fit what's left)
+      does tier 2 get considered at all.
+
+      TIER 2 — popular-or-larger offcuts: only reached once tier 1 is
+      exhausted.
+
+      Both tiers pick their best candidate the same way (_pick_with_redirect):
+      find the "consolidated" choice (whichever the normal weighted score/
+      pieces-placed ranking would pick with no size preference at all), then
+      reach past it for whichever OTHER candidate in the same tier is the
+      closest/snuggest fit for this cut (_score_size_fit) instead, if BOTH:
+        a. cutting the consolidated candidate would leave something worth
+           protecting — either its remainder is still a good size to keep
+           (tier 2: popular-or-larger via _remainder_meets_popular_threshold;
+           tier 1 / no ranges configured: just non-scrap via
+           _remainder_common_sellable) OR it would leave a large, mostly-
+           unused chunk behind regardless of whether that chunk itself
+           qualifies as "good" (_creates_big_waste — a source left with more
+           than SNUB_WASTE_WIDTH_MM of unused width OR SNUB_WASTE_HEIGHT_MM
+           of unused height beyond the cut is treated as wasteful to pick
+           even though the leftover is technically usable stock, not scrap);
+           AND
+        b. that remainder is meaningfully bigger than the cut itself, not
+           just barely more than the piece being cut
+           (_remainder_basically_same_as_cut) — if it isn't, the offcut is
+           basically being consumed whole anyway; AND
+        c. some other offcut in the tier is actually available to take the
+           cut instead.
+      This is what makes two same-size cuts against a small offcut and a large
+      offcut each claim one: the small, already-marginal offcut absorbs a cut
+      it can only just fit, and the large offcut is only asked for what's left
+      afterward, surviving as one large (easier to sell, less backlog)
+      remainder instead of being grid-packed down into several. It's also why
+      an oversized offcut loses to a closer-fitting one even when the
+      oversized one's leftover would otherwise be perfectly "good" stock —
+      leaving 90%+ of a source untouched for a comparatively tiny cut is
+      itself the thing being avoided, not just scrap.
+
+      No popular_size_ranges configured for this product: tier 1 is always
+      empty (nothing meets an unconfigured threshold), so every offcut is one
+      pool using the tier-1 rule (_remainder_common_sellable + big-waste)
+      above — there's no CEO signal yet for what counts as popular-or-larger.
+
+      Only once no offcut fits at all (tier 1 and tier 2 both empty) is the
+      fresh sheet used.
     Ties within a comparison still go through the full weighted score
-    (_candidate_sort_key) — waste, sellability, protecting popular stock,
-    aging, fresh-sheet avoidance, and size-fit all still apply.
+    (_candidate_sort_key) — waste, sellability, aging, fresh-sheet avoidance,
+    and size-fit all still apply.
     """
     candidates = _generate_candidates(db, product, variant, needs, full_w, full_h, strategy)
     if not candidates:
@@ -825,38 +944,40 @@ def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], nee
             f"({full_w:.1f}x{full_h:.1f}mm) for product '{product.name}'"
         )
 
-    popularity = _get_popularity_lookup(db, product, variant)
     now = datetime.utcnow()
 
     offcut_candidates = [c for c in candidates if c["source_kind"] == "offcut"]
     if offcut_candidates:
-        unprotected = [
+        small_tier = [
             c for c in offcut_candidates
-            if _popularity_of((c["source_w"], c["source_h"]), product, popularity) <= 0
-        ]
-        pool = unprotected or offcut_candidates
-        consolidated = min(pool, key=lambda c: _candidate_sort_key(c, product, popularity, now))
+            if not _meets_popular_threshold((c["source_w"], c["source_h"]), product)
+        ] if product.popular_size_ranges else []
 
-        smaller_fits = [
-            c for c in pool
-            if c is not consolidated and c["source_w"] * c["source_h"] < consolidated["source_w"] * consolidated["source_h"]
-        ]
-        worth_protecting = (
-            _remainder_common_sellable(consolidated, product)
-            and not _remainder_basically_same_as_cut(consolidated)
-        )
-        if worth_protecting and smaller_fits:
-            best = min(smaller_fits, key=lambda c: (
-                c["source_w"] * c["source_h"],
-                _candidate_sort_key(c, product, popularity, now),
-            ))
+        if small_tier:
+            # Even within the small/unpopular tier, don't let one small
+            # offcut soak up way more source than a cut needs (_creates_big_waste)
+            # when a closer-fitting small offcut is available instead.
+            best = _pick_with_redirect(small_tier, product, now, lambda c: _remainder_common_sellable(c, product))
         else:
-            best = consolidated
+            if product.popular_size_ranges:
+                # Nothing in tier 1 anymore — every remaining offcut candidate
+                # is popular-or-larger (tier 2) by definition of small_tier.
+                pool = offcut_candidates
+                remainder_worth_protecting = lambda c: _remainder_meets_popular_threshold(c, product)  # noqa: E731
+            else:
+                # No CEO ranges configured yet — every offcut is one pool (no
+                # ProtectPopularStockAgent-style sales-history filtering
+                # anymore); only the scrap-avoidance consolidation logic below
+                # still applies.
+                pool = offcut_candidates
+                remainder_worth_protecting = lambda c: _remainder_common_sellable(c, product)  # noqa: E731
+
+            best = _pick_with_redirect(pool, product, now, remainder_worth_protecting)
     else:
         sheet_candidates = [c for c in candidates if c["source_kind"] == "sheet"]
-        best = min(sheet_candidates, key=lambda c: _candidate_sort_key(c, product, popularity, now))
+        best = min(sheet_candidates, key=lambda c: _candidate_sort_key(c, product, now))
 
-    return _apply_candidate(db, product, variant, best)
+    return _apply_candidate(db, product, variant, best, item_id)
 
 
 # ── Public entry points ─────────────────────────────────────────────────────────
@@ -873,7 +994,7 @@ def _line_piece_dims_mm(line: dict) -> Optional[tuple]:
     return cut_w, cut_h, qty
 
 
-def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list, strategy: dict) -> dict:
+def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list, strategy: dict, item_id: Optional[int] = None) -> dict:
     """
     Runs one full resolution pass of `glass_cut_lines` using a single fixed
     tie-break strategy — the actual packing engine. resolve_glass_cut_lines
@@ -890,11 +1011,11 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
     possibly shared with other lines — see _apply_candidate's owns_consumption),
     for restore-on-cancel. Returns comparison metrics: {"sheets_consumed",
     "total_scrap_area", "total_sellability_score", "total_remainder_pieces"}.
-    total_sellability_score rewards strategies whose remainders land on sizes
-    that have actually sold before — given a fixed number of sheets is needed
-    to fit the pieces, this is what steers which SPECIFIC leftover shapes get
-    produced, so the resulting offcuts are ones likely to sell, not just "small
-    in total area."
+    total_sellability_score rewards strategies whose remainders land within a
+    CEO-configured popular_size_range (see _meets_popular_threshold) — given a
+    fixed number of sheets is needed to fit the pieces, this is what steers
+    which SPECIFIC leftover shapes get produced, so the resulting offcuts are
+    ones the CEO has said sell well, not just "small in total area."
     """
     full_w, full_h = _get_full_dims(variant)
 
@@ -909,7 +1030,7 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
 
     sources_by_line = {idx: [] for idx in range(len(glass_cut_lines))}
     while any(n["remaining"] > 0 for n in needs):
-        events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h, strategy)
+        events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h, strategy, item_id)
         for line_idx, event in events_by_line.items():
             sources_by_line[line_idx].append(event)
         for n in needs:
@@ -920,7 +1041,6 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
     for idx, line in enumerate(glass_cut_lines):
         line["offcut_sources"] = sources_by_line[idx]
 
-    popularity = _get_popularity_lookup(db, product, variant)  # TTL-cached — cheap here
     sheets_consumed = 0
     total_scrap_area = 0.0
     total_remainder_pieces = 0
@@ -935,8 +1055,8 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
                 total_remainder_pieces += 1
                 if r.get("status") == "scrap":
                     total_scrap_area += r["width"] * r["height"]
-                else:
-                    total_sellability_score += _popularity_of((r["width"], r["height"]), product, popularity)
+                elif r.get("is_popular"):  # already computed via _meets_popular_threshold, see _apply_candidate
+                    total_sellability_score += POPULAR_RANGE_BONUS
 
     return {
         "sheets_consumed": sheets_consumed,
@@ -946,7 +1066,7 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
     }
 
 
-def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list) -> dict:
+def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list, item_id: Optional[int] = None) -> dict:
     """
     Batches all glass-cut lineItems belonging to one OrderItem together and
     resolves them jointly. Tries each heuristic in STRATEGIES (see "Packing
@@ -958,6 +1078,12 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
     real. This is the same technique dedicated nesting tools rely on for better
     results: breadth of search over several heuristics, not one cleverer
     algorithm — see module docstring.
+
+    `item_id` identifies the OrderItem these lines belong to — every remainder
+    created gets tagged with it (Offcut.source_item_id), and any existing offcut
+    consumed along the way gets checked for a still-pending producer, surfacing a
+    `pending_source_notice` on the resulting event (see _apply_candidate). Pass
+    None for call sites operating on already-committed orders (manager corrections).
 
     Returns an "optimization" summary — {"winning_strategy", "strategies_tried",
     "trials": [{"name", "sheets_consumed", "total_scrap_area", "total_remainder_pieces", "won"}, ...]}
@@ -971,7 +1097,7 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
         trial_lines = [{**line} for line in glass_cut_lines]
         savepoint = db.begin_nested()
         try:
-            metrics = _resolve_with_strategy(db, product, variant, trial_lines, strategy)
+            metrics = _resolve_with_strategy(db, product, variant, trial_lines, strategy, item_id)
             trials.append((metrics, strategy))
         except ValueError:
             pass  # this strategy couldn't fulfil the pool at all — skip it
@@ -981,7 +1107,7 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
     if not trials:
         # No strategy could resolve the pool — re-run the baseline for real so it
         # raises its own informative ValueError instead of failing silently here.
-        _resolve_with_strategy(db, product, variant, glass_cut_lines, DEFAULT_STRATEGY)
+        _resolve_with_strategy(db, product, variant, glass_cut_lines, DEFAULT_STRATEGY, item_id)
         return {"winning_strategy": DEFAULT_STRATEGY["name"], "strategies_tried": 0, "trials": []}
 
     # Priority: fewest sheets (the dominant raw-material cost) > least true scrap
@@ -996,7 +1122,7 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
             t[0]["sheets_consumed"], t[0]["total_scrap_area"], -t[0]["total_sellability_score"], t[0]["total_remainder_pieces"],
         )
     )
-    _resolve_with_strategy(db, product, variant, glass_cut_lines, best_strategy)
+    _resolve_with_strategy(db, product, variant, glass_cut_lines, best_strategy, item_id)
 
     return {
         "winning_strategy": best_strategy["name"],
@@ -1079,9 +1205,8 @@ def apply_manual_glass_selection(db: Session, product: Product, variant: Optiona
             f"({full_w:.1f}x{full_h:.1f}mm) for product '{product.name}'"
         )
 
-    popularity = _get_popularity_lookup(db, product, variant)
     now = datetime.utcnow()
-    best = min(candidates, key=lambda c: _candidate_sort_key(c, product, popularity, now))
+    best = min(candidates, key=lambda c: _candidate_sort_key(c, product, now))
     return _apply_candidate(db, product, variant, best)[0]
 
 
@@ -1129,9 +1254,8 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
             candidates = [c for c in candidates if c["source_kind"] == "offcut" and c["source_id"] == forced_offcut_id]
             if not candidates:
                 raise ValueError(f"Offcut #{forced_offcut_id} doesn't fit any of the corrected pieces")
-            popularity = _get_popularity_lookup(db, product, variant)
             now = datetime.utcnow()
-            best = min(candidates, key=lambda c: _candidate_sort_key(c, product, popularity, now))
+            best = min(candidates, key=lambda c: _candidate_sort_key(c, product, now))
             events_by_line = _apply_candidate(db, product, variant, best)
             forced_pending = False
         else:

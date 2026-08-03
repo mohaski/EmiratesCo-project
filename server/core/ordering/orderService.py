@@ -69,7 +69,9 @@ def _order_to_response(order: Order) -> model.OrderResponse:
                 unitPrice=item.details.get("unitPrice", 0) if item.details else 0,
                 totalPrice=item.total_price,
                 details=item.details,
-                status=None
+                status=None,
+                cuttingCompleted=item.cutting_completed,
+                cuttingCompletedAt=item.cutting_completed_at.isoformat() if item.cutting_completed_at else None,
             ) for item in order.orderItems
         ]
     )
@@ -632,6 +634,8 @@ def update_order(
         raise HTTPException(status_code=404, detail="Order not found")
     if order.status in ("cancelled", "completed"):
         raise HTTPException(status_code=400, detail=f"Cannot edit a {order.status} order")
+    if any(oi.cutting_completed_at is not None for oi in order.orderItems):
+        raise HTTPException(status_code=400, detail="This order has already been cut and can no longer be edited or cancelled.")
 
     try:
         # ── 1. Snapshot before state ──────────────────────────────────────────
@@ -892,6 +896,79 @@ def correct_offcut_for_order_item(
         raise HTTPException(status_code=500, detail="Something went wrong while correcting the offcut. Please try again.")
 
 
+def mark_cutting_complete_batch(item_ids: list, db: Session, current_user) -> dict:
+    """
+    Batch "report finished" action: floor staff don't report each finished cut
+    immediately — someone periodically reports a batch of already-finished
+    items at once. Flips cutting_completed=True/cutting_completed_at=now() for
+    every id in item_ids that's currently pending; silently skips ids that are
+    already done or don't exist — this reports what's done, it isn't a strict
+    per-id transaction.
+    """
+    require_role(["manager", "cashier", "ceo", "admin"], current_user)
+
+    items = db.exec(
+        select(OrderItem).where(OrderItem.item_id.in_(item_ids), OrderItem.cutting_completed == False)  # noqa: E712
+    ).all()
+    now = datetime.utcnow()
+    updated = []
+    for item in items:
+        item.cutting_completed = True
+        item.cutting_completed_at = now
+        db.add(item)
+        updated.append(item.item_id)
+
+    db.commit()
+    return {"updated": updated}
+
+
+def mark_cutting_complete_for_order(order_id: int, db: Session, current_user) -> dict:
+    """Whole-order convenience wrapper — marks every still-pending item on this
+    order done in one call (e.g. the cashier reporting "this order's been cut")."""
+    require_role(["manager", "cashier", "ceo", "admin"], current_user)
+
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    item_ids = [oi.item_id for oi in order.orderItems if not oi.cutting_completed]
+    if not item_ids:
+        return {"updated": []}
+    return mark_cutting_complete_batch(item_ids, db, current_user)
+
+
+def get_pending_cutting_items(db: Session, current_user, skip: int = 0, limit: int = 100) -> list:
+    """
+    Items still awaiting a cutting report — order id/customer/product name plus
+    the lineItems needed to render CuttingInstructions, for the cutting-queue page.
+    """
+    require_role(["manager", "cashier", "ceo", "admin"], current_user)
+
+    stmt = (
+        select(OrderItem, Order, Product)
+        .join(Order, OrderItem.order_id == Order.orderId)
+        .join(Product, OrderItem.product_id == Product.productId)
+        .where(OrderItem.cutting_completed == False, Order.status != "cancelled")  # noqa: E712
+        .order_by(Order.created_at.asc())
+        .offset(skip).limit(limit)
+    )
+    rows = db.exec(stmt).all()
+    results = []
+    for item, order, product in rows:
+        customer_name = None
+        try:
+            customer_name = order.customer.name if order.customer else None
+        except Exception:
+            customer_name = None
+        results.append({
+            "itemId": item.item_id,
+            "orderId": order.orderId,
+            "customerName": customer_name,
+            "productName": product.name,
+            "details": item.details,
+        })
+    return results
+
+
 def get_audit_history(
     entity_type: str | None,
     db: Session,
@@ -1041,6 +1118,8 @@ def cancel_order_with_pin(
         order = db.get(Order, order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
+        if order.status != "cancelled" and any(oi.cutting_completed_at is not None for oi in order.orderItems):
+            raise HTTPException(status_code=400, detail="This order has already been cut and can no longer be edited or cancelled.")
 
         _restore_and_cancel(db, order)
         db.commit()

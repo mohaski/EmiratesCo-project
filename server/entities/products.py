@@ -49,6 +49,15 @@ class Product(SQLModel, table=True):
     # Whether a cut piece may be rotated 90° to fit a source sheet/offcut (false for
     # directional/patterned/coated glass where orientation matters).
     allow_rotation: bool = Field(default=True)
+    # CEO-configured "this size sells well" bands, e.g. [{"min_w":500,"max_w":650,
+    # "min_h":1020,"max_h":1150}, ...] (mm, canonical wide/narrow — see
+    # glassOffcutService.py's _meets_popular_threshold). Drives the offcut-tiering
+    # decision: an offcut whose OWN size is below every range's min_w/min_h is
+    # "small/unpopular" and gets used up before an offcut in-or-above a range is
+    # touched at all. Empty means no CEO ranges configured yet for this product —
+    # tiering falls back to treating every offcut as a single pool (today's
+    # sales-history-only ProtectPopularStockAgent behavior still applies either way).
+    popular_size_ranges: List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSON))
 
     # Relationships
     category: Optional["Category"] = Relationship(back_populates="products")

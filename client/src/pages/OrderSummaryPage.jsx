@@ -39,10 +39,11 @@ const DetailBadge = ({ color, children }) => (
     <span style={{ fontSize: '0.62rem', fontWeight: 600, padding: '1px 6px', background: `${color}15`, border: `1px solid ${color}30`, borderRadius: '4px', color, textTransform: 'uppercase' }}>{children}</span>
 );
 
-const ItemRow = ({ item, canCorrectOffcuts, onCorrect }) => {
+const ItemRow = ({ item, canCorrectOffcuts, canMarkCuttingDone, onCorrect, onMarkDone }) => {
     const lineItems = item.details?.lineItems || [];
     const attributes = item.details?.attributes;
     const extras = item.details?.extras;
+    const pendingCut = item.cuttingCompleted === false;
 
     return (
     <div style={{ padding: '1rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
@@ -72,8 +73,16 @@ const ItemRow = ({ item, canCorrectOffcuts, onCorrect }) => {
                     {!attributes && extras && Object.entries(extras).map(([k, v]) => (
                         k === 'Color' || k === 'Category' ? null : <DetailBadge key={k} color="#93c5fd">{k}: {v}{k === 'Length' && typeof v === 'number' ? 'ft' : ''}</DetailBadge>
                     ))}
+                    {pendingCut && <DetailBadge color="#fbbf24">Awaiting cut</DetailBadge>}
                 </div>
             </div>
+            {pendingCut && canMarkCuttingDone && (
+                <button onClick={() => onMarkDone(item.itemId)} style={{
+                    flexShrink: 0, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)',
+                    color: '#4ade80', fontSize: '0.72rem', fontWeight: 700, padding: '5px 11px',
+                    borderRadius: '100px', cursor: 'pointer', whiteSpace: 'nowrap',
+                }}>Mark Done</button>
+            )}
             <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#f1f5f9', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
                 KSH {item.totalPrice.toFixed(2)}
             </div>
@@ -147,15 +156,40 @@ export default function OrderSummaryPage() {
 
     const [order, setOrder] = useState(location.state?.order || null);
     const canCorrectOffcuts = ['manager', 'ceo', 'admin'].includes(user?.role);
+    const canMarkCuttingDone = ['manager', 'cashier', 'ceo', 'admin'].includes(user?.role);
+
+    const refreshOrder = async () => {
+        const full = await api.orderService.getOrder(order.orderId);
+        setOrder({ ...full, id: full.orderId, customer: order.customer });
+    };
 
     const handleOffcutCorrected = async (newRemainders, notes, failedCutIndices, forcedOffcutId) => {
         await api.orderService.correctOffcutEvent(order.orderId, {
             item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
             new_remainders: newRemainders, failed_cut_indices: failedCutIndices, forced_offcut_id: forcedOffcutId, notes,
         });
-        const full = await api.orderService.getOrder(order.orderId);
-        setOrder({ ...full, id: full.orderId, customer: order.customer });
+        await refreshOrder();
         showToast('Offcut correction saved', 'success');
+    };
+
+    const handleMarkItemDone = async (itemId) => {
+        try {
+            await api.orderService.markCuttingDone([itemId]);
+            await refreshOrder();
+            showToast('Cutting reported done', 'success');
+        } catch (err) {
+            showToast(err.response?.data?.detail || 'Failed to report cutting done.', 'error');
+        }
+    };
+
+    const handleMarkOrderDone = async () => {
+        try {
+            await api.orderService.markOrderCuttingDone(order.orderId);
+            await refreshOrder();
+            showToast('Order cutting reported done', 'success');
+        } catch (err) {
+            showToast(err.response?.data?.detail || 'Failed to report cutting done.', 'error');
+        }
     };
 
     const items = useMemo(() => {
@@ -184,6 +218,11 @@ export default function OrderSummaryPage() {
     const vatAmount = order.VAT_status ? Math.max(0, order.total - (order.subtotal - (order.discount || 0))) : 0;
     // Cashier can view the summary but not edit or cancel — read-only + Add To only
     const canEditOrCancel = ['manager', 'ceo', 'admin'].includes(user?.role);
+    // Once any item has actually been cut, the order can no longer be safely edited/cancelled
+    // (both restore stock for every item, which would fabricate inventory for a piece that's
+    // already been physically cut) — see the backend guard in update_order/cancel_order_with_pin.
+    const anyItemCut = order.items?.some(i => i.cuttingCompletedAt) || false;
+    const anyItemPending = order.items?.some(i => i.cuttingCompleted === false) || false;
 
     const handleEdit = () => navigate('/sales', { state: { mode: 'edit', orderData: { ...order, id: order.orderId } } });
 
@@ -221,19 +260,35 @@ export default function OrderSummaryPage() {
                     </p>
                 </div>
 
-                {!isCancelled && canEditOrCancel && (
-                    <div style={{ display: 'flex', gap: '0.625rem' }}>
-                        <button onClick={handleEdit} style={{
-                            padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
-                            background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', border: 'none',
-                            color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
-                            boxShadow: '0 2px 12px rgba(59,130,246,0.3)',
-                        }}>✏️ Edit Order</button>
-                        <button onClick={() => setShowCancel(true)} style={{
-                            padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
-                            background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
-                            color: '#f87171', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
-                        }}>🚫 Cancel Order</button>
+                {!isCancelled && (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.375rem' }}>
+                        <div style={{ display: 'flex', gap: '0.625rem' }}>
+                            {canMarkCuttingDone && anyItemPending && (
+                                <button onClick={handleMarkOrderDone} style={{
+                                    padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
+                                    background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
+                                    color: '#4ade80', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
+                                }}>✅ Mark Order Cutting Done</button>
+                            )}
+                            {canEditOrCancel && !anyItemCut && (
+                                <>
+                                    <button onClick={handleEdit} style={{
+                                        padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
+                                        background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', border: 'none',
+                                        color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
+                                        boxShadow: '0 2px 12px rgba(59,130,246,0.3)',
+                                    }}>✏️ Edit Order</button>
+                                    <button onClick={() => setShowCancel(true)} style={{
+                                        padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
+                                        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                                        color: '#f87171', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
+                                    }}>🚫 Cancel Order</button>
+                                </>
+                            )}
+                        </div>
+                        {canEditOrCancel && anyItemCut && (
+                            <span style={{ fontSize: '0.7rem', color: '#475569' }}>Already cut — can no longer be edited or cancelled</span>
+                        )}
                     </div>
                 )}
             </div>
@@ -252,7 +307,8 @@ export default function OrderSummaryPage() {
                         <p style={{ color: '#334155', fontSize: '0.82rem', padding: '1.5rem 0' }}>No items on this order.</p>
                     ) : (
                         items.map((item, idx) => (
-                            <ItemRow key={idx} item={item} canCorrectOffcuts={canCorrectOffcuts} onCorrect={setCorrecting} />
+                            <ItemRow key={idx} item={item} canCorrectOffcuts={canCorrectOffcuts} canMarkCuttingDone={canMarkCuttingDone}
+                                onCorrect={setCorrecting} onMarkDone={handleMarkItemDone} />
                         ))
                     )}
                 </div>
