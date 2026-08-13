@@ -11,7 +11,10 @@ const inputStyle = {
 const sectionStyle = { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem', padding: '1rem', marginBottom: '0.75rem' };
 const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' };
 
-const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart = [], cartIndex = null }) => {
+const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart = [], cartIndex = null, source = 'sales' }) => {
+    // Offcut selection is a POS/cutting-floor concern — invoices/quotations are
+    // generated before any physical cutting happens, so there's nothing to pick from yet.
+    const allowOffcutSelection = source !== 'invoice';
 
     const extraAttributes = useMemo(() => {
         const extras = {};
@@ -239,7 +242,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                     <p style={{ fontSize: '0.68rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', margin: '0.375rem 0 0', textAlign: 'right' }}>KSH{pricing.priceFoot}/ft</p>
                     {cuterror && <p style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700, margin: '4px 0 0', animation: 'pulse 1.5s ease-in-out infinite' }}>{cuterror}</p>}
 
-                    {product.trackOffcuts && feet > 0 && (
+                    {allowOffcutSelection && product.trackOffcuts && feet > 0 && (
                         <div style={{ marginTop: '0.625rem', paddingTop: '0.625rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                             {offcutSelection && offcutSelection.length > 0 ? (
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
@@ -273,7 +276,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                 </p>
             )}
 
-            {showOffcutModal && (
+            {allowOffcutSelection && showOffcutModal && (
                 <OffcutSelectorModal
                     productId={product.id}
                     variantId={pricing.variantId ?? null}

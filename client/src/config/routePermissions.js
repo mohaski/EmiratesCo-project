@@ -10,11 +10,14 @@ export const ROUTE_ROLES = {
     '/invoice/review':      ['manager', 'cashier'],
     '/orders':              ['manager', 'cashier', 'ceo', 'admin'],
     '/orders/review':       ['manager', 'cashier', 'ceo', 'admin'],
-    '/cutting-queue':       ['manager', 'cashier', 'ceo', 'admin'],
-    '/inventory':           ['cashier'],
+    '/collect-payments':    ['cashier', 'manager', 'admin'],
+    '/dues':                ['ceo', 'manager', 'admin'],
+    '/inventory':           ['cashier', 'manager'],
     '/add-product':         ['admin', 'ceo'],
     '/manage-products':     ['admin', 'ceo'],
     // Manager gets everything (checkout, return, loans, catalog) as tabs on one page — see '/tools/manage'.
     '/tools':               ['cashier'],
     '/tools/manage':        ['manager'],
+    '/change-password':     ['admin', 'ceo', 'manager', 'cashier'],
+    '/users':               ['ceo', 'admin'],
 };

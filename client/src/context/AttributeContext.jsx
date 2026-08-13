@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../services/api';
 import { wsEvents } from '../utils/wsEvents';
+import { useAuth } from './AuthContext';
 
 const AttributeContext = createContext();
 
@@ -13,6 +14,7 @@ export const useAttributes = () => {
 };
 
 export const AttributeProvider = ({ children }) => {
+    const { user } = useAuth();
     const [attributeClasses, setAttributeClasses] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -34,7 +36,17 @@ export const AttributeProvider = ({ children }) => {
         }
     }, []);
 
-    useEffect(() => { refreshAttributes(); }, [refreshAttributes]);
+    // Refetch on login/logout — this provider lives above the router for the
+    // whole app lifetime, so a mount-only effect never re-runs when the same
+    // session logs out and back in.
+    useEffect(() => {
+        if (user) {
+            refreshAttributes();
+        } else {
+            setAttributeClasses([]);
+            setLoading(false);
+        }
+    }, [user, refreshAttributes]);
     useEffect(() => wsEvents.on('attributes_updated', refreshAttributes), [refreshAttributes]);
 
     const createAttributeClass = useCallback(async (name, type = 'list') => {

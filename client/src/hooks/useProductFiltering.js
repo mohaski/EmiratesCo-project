@@ -4,8 +4,8 @@ import { useProducts } from '../context/ProductContext';
 export const PROFILE_COLORS = [
     { name: 'White', hex: '#FFFFFF' },
     { name: 'Brown', hex: '#8B4513' },
-    { name: 'Silver', hex: '#C0C0C0' },
-    { name: 'Grey', hex: '#808080' }
+    { name: 'Silver', hex: '#DCE1E6' },
+    { name: 'Grey', hex: '#5B6370' }
 ];
 
 export function useProductFiltering() {

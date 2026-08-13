@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import api from '../services/api';
 import { wsEvents } from '../utils/wsEvents';
+import { useAuth } from './AuthContext';
 
 const OrderContext = createContext();
 
@@ -13,13 +14,15 @@ export const useOrders = () => {
 
 // ── Pure mappers (outside component — stable, no closure over state) ──────────
 
-const mapBackendOrder = (o) => ({
+export const mapBackendOrder = (o) => ({
     ...o,
     id: o.orderId,
     date: o.created_at,
     customer: {
         id: o.customerId,
         name: o.customerName || (o.customerId ? `Customer #${o.customerId}` : 'Walk-in Customer'),
+        type: o.customerType,
+        phone: o.customerPhone,
     },
     fromInvoice: !!o.source_invoice_id,
     sourceInvoiceId: o.source_invoice_id || null,
@@ -61,6 +64,7 @@ const mapItemForBackend = (item) => {
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 export const OrderProvider = ({ children }) => {
+    const { user } = useAuth();
     const [orders, setOrders] = useState([]);
     const [invoices, setInvoices] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -101,10 +105,19 @@ export const OrderProvider = ({ children }) => {
         }
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Initial load — [] is correct here since fetchOrders is stable (useCallback([]))
+    // Refetch on login/logout — this provider lives above the router for the
+    // whole app lifetime, so a mount-only effect never re-runs when the same
+    // session logs out and back in (see WebSocketContext for the same pattern).
     useEffect(() => {
-        fetchOrders({ showLoading: true });
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+        if (user) {
+            fetchOrders({ showLoading: true });
+        } else {
+            setOrders([]);
+            setInvoices([]);
+            setError(null);
+            setLoading(false);
+        }
+    }, [user, fetchOrders]);
 
     // Silent background refresh on WS events (no loading flash)
     useEffect(() => {
@@ -143,11 +156,13 @@ export const OrderProvider = ({ children }) => {
         const items = rawItems.map(mapItemForBackend);
 
         const isPaid = totals.balance <= 0.1;
-        const paymentStatus = isPaid ? 'Paid' : (totals.paid > 0 ? 'Partial' : 'Pending');
+        const paymentStatus = isPaid ? 'Paid' : (totals.paid > 0 ? 'Partial' : 'Unpaid');
+        const amountPaidNow = parseFloat(totals.paid || 0);
 
         const payload = {
             customerId: customer?.id ? parseInt(customer.id) : null,
-            amountPaid: parseFloat(totals.paid || 0),
+            guestName: customer?.id ? null : (customer?.name || null),
+            amountPaid: amountPaidNow,
             parentOrderId: parentOrderId ? parseInt(parentOrderId) : null,
             sourceInvoiceId: sourceInvoiceId ? parseInt(sourceInvoiceId) : null,
             servedBy: servedBy || '00000000-0000-0000-0000-000000000000',
@@ -155,7 +170,7 @@ export const OrderProvider = ({ children }) => {
             discount: parseFloat(totals.discount || 0),
             paymentStatus,
             status: 'confirmed',
-            paymentMethod: payment?.method || 'cash',
+            paymentMethod: amountPaidNow > 0 ? (payment?.method || 'cash') : null,
             paymentDetails: payment?.details || null,
             items,
         };
@@ -171,15 +186,17 @@ export const OrderProvider = ({ children }) => {
 
         const isPaid = totals.balance <= 0.1;
         const paymentStatus = isPaid ? 'Paid' : (totals.paid > 0 ? 'Partial' : 'Unpaid');
+        const amountPaidNow = parseFloat(totals.paid || 0);
 
         const payload = {
             customerId: customer?.id ? parseInt(customer.id) : null,
-            amountPaid: parseFloat(totals.paid || 0),
+            guestName: customer?.id ? null : (customer?.name || null),
+            amountPaid: amountPaidNow,
             servedBy: servedBy || '00000000-0000-0000-0000-000000000000',
             VAT_status: Boolean(totals.tax > 0),
             discount: parseFloat(totals.discount || 0),
             paymentStatus,
-            paymentMethod: payment?.method || 'cash',
+            paymentMethod: amountPaidNow > 0 ? (payment?.method || 'cash') : null,
             paymentDetails: payment?.details || null,
             items,
             notes: `Edited order #${orderId}`,

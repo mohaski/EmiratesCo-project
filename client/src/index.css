@@ -549,6 +549,34 @@ select option {
 
 .product-card:active { transform: translateY(-1px) scale(0.99); }
 
+.product-tile {
+  position: relative;
+  isolation: isolate;
+}
+
+.product-tile::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(155deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0) 42%, rgba(0,0,0,0.14) 100%);
+  pointer-events: none;
+}
+
+.product-tile::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -60%;
+  width: 35%;
+  height: 100%;
+  background: linear-gradient(75deg, transparent, rgba(255,255,255,0.32), transparent);
+  transform: skewX(-20deg);
+  transition: left 0.65s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+.product-card:hover .product-tile::after { left: 135%; }
+
 /* ============================================================
    TABLE STYLES
    ============================================================ */

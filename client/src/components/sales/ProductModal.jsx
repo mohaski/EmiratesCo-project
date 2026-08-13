@@ -75,7 +75,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                             </span>
                             {isProfile && color && (
                                 <span style={{ fontSize: '0.62rem', fontWeight: 700, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', padding: '2px 8px', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: color === 'White' ? '#e2e8f0' : color === 'Silver' ? '#C0C0C0' : color === 'Gold' ? '#FFD700' : '#808080', display: 'inline-block' }} />
+                                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: color === 'White' ? '#e2e8f0' : color === 'Silver' ? '#DCE1E6' : color === 'Gold' ? '#FFD700' : color === 'Grey' ? '#5B6370' : '#8B4513', display: 'inline-block' }} />
                                     {color}
                                 </span>
                             )}
@@ -86,7 +86,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
 
                 {/* Calculator content */}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar">
-                    {isProfile ? <ProfileCalculator key={product.id} product={product} color={color} initialDetails={initialDetails} onUpdate={handleUpdate} cart={cart} cartIndex={cartIndex} />
+                    {isProfile ? <ProfileCalculator key={product.id} product={product} color={color} initialDetails={initialDetails} onUpdate={handleUpdate} cart={cart} cartIndex={cartIndex} source={source} />
                         : isGlass ? <GlassCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />
                             : isAccessory ? <AccessoryCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />
                                 : isDynamic ? <DynamicCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />

@@ -5,6 +5,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from datetime import datetime
 from entities.credits import Credit
 from entities.customers import Customer
+from entities.orders import Order
+from entities.payments import Payment
 from db.database import get_session
 from loggiing import logger
 from . import model
@@ -94,7 +96,7 @@ def check_credit_for_customer_by_customerId(customerId, db: Session = Depends(ge
         }
         
     return [
-        
+
         model.checkCreditResponse(
             creditId=customerCredit.creditId,
             customerName=customer_name,
@@ -103,5 +105,58 @@ def check_credit_for_customer_by_customerId(customerId, db: Session = Depends(ge
             unpaidAmount=customerCredit.amount_due,
             settled_at=customerCredit.settledAt.isoformat() if customerCredit.settledAt else None
         ) for customerCredit in customerCreditList
-    ] 
-    
+    ]
+
+
+def get_all_outstanding_credits(db: Session = Depends(get_session)) -> list[model.OutstandingCreditItem]:
+    """Aggregate every outstanding balance across all customers — feeds the
+    CEO/Manager dues follow-up page. Sorted by days-outstanding (oldest first),
+    since there's no due-date concept."""
+    try:
+        statement = (
+            select(Credit, Customer, Order)
+            .join(Customer, Credit.customerId == Customer.customerId)
+            .join(Order, Credit.orderId == Order.orderId)
+            .where(Credit.status != "Paid")
+        )
+        rows = db.exec(statement).all()
+        if not rows:
+            return []
+
+        order_ids = [order.orderId for _, _, order in rows]
+        last_payment_stmt = (
+            select(Payment.orderId, func.max(Payment.payed_at))
+            .where(Payment.orderId.in_(order_ids))
+            .group_by(Payment.orderId)
+        )
+        last_payment_map = dict(db.exec(last_payment_stmt).all())
+
+        now = datetime.utcnow()
+        items = []
+        for credit, customer, order in rows:
+            created_at = order.created_at
+            days_outstanding = (now - created_at).days if created_at else 0
+            last_payment_at = last_payment_map.get(order.orderId)
+            items.append(
+                model.OutstandingCreditItem(
+                    creditId=credit.creditId,
+                    orderId=credit.orderId,
+                    customerId=credit.customerId,
+                    customerName=customer.name,
+                    customerPhone=customer.phoneNumber,
+                    amount=credit.amount,
+                    amountDue=credit.amount_due,
+                    status=credit.status,
+                    createdAt=created_at.isoformat() if created_at else "",
+                    daysOutstanding=days_outstanding,
+                    lastPaymentAt=last_payment_at.isoformat() if last_payment_at else None,
+                )
+            )
+
+        items.sort(key=lambda i: i.daysOutstanding, reverse=True)
+        return items
+
+    except SQLAlchemyError as sae:
+        logger.error(f"Database error retrieving outstanding credits: {sae}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred while retrieving outstanding credits")
+

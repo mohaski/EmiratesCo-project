@@ -20,13 +20,22 @@ const PendingSourceNotice = ({ notice, theme }) => (
     </div>
 );
 
-// One 1D (bar/profile) offcut_sources entry — {source, offcut_id, length_used, offcut_length, remainder_created}
-const CuttingInstructionLine1D = ({ src, theme }) => (
-    <div style={{ fontSize: '10.5px', lineHeight: 1.4 }}>
-        {src.source === 'offcut'
-            ? <div>Cut <strong>{fmtLen(src.length_used)}</strong> from <strong>Offcut #{src.offcut_id}</strong> ({fmtLen(src.offcut_length)} available)</div>
-            : <div>Cut <strong>{fmtLen(src.length_used)}</strong> from a <strong>new bar</strong></div>
-        }
+// One 1D (bar/profile) offcut_sources entry — {source, offcut_id, length_used, offcut_length, remainder_created}.
+// `superseded` marks an event a manager correction has fully reversed and
+// replaced with a separate new entry (see inventoryService.correct_profile_offcut_event) —
+// kept in place as a historical record rather than deleted.
+const CuttingInstructionLine1D = ({ src, theme, renderActions }) => (
+    <div style={{ fontSize: '10.5px', lineHeight: 1.4, opacity: src.superseded ? 0.5 : 1 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem' }}>
+            <div>
+                {src.source === 'offcut'
+                    ? <span>Cut <strong>{fmtLen(src.length_used)}</strong> from <strong>Offcut #{src.offcut_id}</strong> ({fmtLen(src.offcut_length)} available)</span>
+                    : <span>Cut <strong>{fmtLen(src.length_used)}</strong> from a <strong>new bar</strong></span>
+                }
+                {src.superseded && <span style={{ color: theme.dim }}> — replaced</span>}
+            </div>
+            {renderActions && renderActions(src)}
+        </div>
         {src.pending_source_notice && <PendingSourceNotice notice={src.pending_source_notice} theme={theme} />}
         {src.remainder_created > 0 && (
             <div style={{ fontSize: '9.5px', color: theme.dim, marginTop: '2px' }}>
@@ -152,8 +161,9 @@ const CuttingInstructionLine2D = ({ src, theme, renderActions }) => {
     );
 };
 
-// `renderActions(event)` is an optional render prop invoked per 2D event (e.g. for a
-// manager "Correct" button) — only meaningful for owning events with remainders.
+// `renderActions(event)` is an optional render prop invoked per event, both 1D
+// and 2D (e.g. for a manager "Correct" button) — only meaningful for owning
+// events with something left to correct (see each caller's own correctable check).
 export default function CuttingInstructions({ sources, theme = RECEIPT_THEME, renderActions }) {
     if (!sources || sources.length === 0) return null;
     return (
@@ -164,7 +174,7 @@ export default function CuttingInstructions({ sources, theme = RECEIPT_THEME, re
             {sources.map((src, idx) => (
                 'cuts' in src
                     ? <CuttingInstructionLine2D key={idx} src={src} theme={theme} renderActions={renderActions} />
-                    : <CuttingInstructionLine1D key={idx} src={src} theme={theme} />
+                    : <CuttingInstructionLine1D key={idx} src={src} theme={theme} renderActions={renderActions} />
             ))}
         </div>
     );

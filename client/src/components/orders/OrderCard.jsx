@@ -8,9 +8,11 @@ const isToday = (dateStr) => {
            d.getDate() === now.getDate();
 };
 
-const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, highlighted, canManage = true }) => {
+const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, highlighted, canManage = true }) => {
     const isCancelled = order.status === 'cancelled';
     const orderIsToday = isToday(order.date);
+    // Mirrors the backend's 7-day cutoff in cancel_order_with_pin
+    const orderTooOldToCancel = (new Date() - new Date(order.date)) > 7 * 24 * 60 * 60 * 1000;
     const cardRef = useRef(null);
 
     useEffect(() => {
@@ -92,7 +94,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, highlighted,
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: '0.5rem' }} onClick={e => e.stopPropagation()}>
-            {!isCancelled && orderIsToday && (
+            {!isCancelled && orderIsToday && onAddTo && (
                 <button onClick={() => onAddTo(order)} style={{
                     padding: '0.5rem 1rem', borderRadius: '0.625rem',
                     background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
@@ -115,7 +117,19 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, highlighted,
                 onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
                 >✏️ Edit</button>
             )}
-            {!isCancelled && canManage && onCancel && (
+            {!isCancelled && onCollect && (
+                <button onClick={() => onCollect(order)} style={{
+                    padding: '0.5rem 1rem', borderRadius: '0.625rem',
+                    background: 'linear-gradient(135deg, #22c55e, #16a34a)', border: 'none',
+                    color: '#fff', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer',
+                    transition: 'all 0.15s', boxShadow: '0 2px 12px rgba(34,197,94,0.3)',
+                    display: 'flex', alignItems: 'center', gap: '0.375rem',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
+                >💰 Collect Payment</button>
+            )}
+            {!isCancelled && canManage && onCancel && !orderTooOldToCancel && (
                 <button onClick={() => onCancel(order)} style={{
                     padding: '0.5rem 1rem', borderRadius: '0.625rem',
                     background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',

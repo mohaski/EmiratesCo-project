@@ -1,17 +1,22 @@
 from pydantic import BaseModel
 from typing import Optional
 
-class PaymentCreateRequest(BaseModel):
+class RecordPaymentRequest(BaseModel):
     orderId: int
     amount: float
     paymentMethod: str
     numberUsed: Optional[str] = None
-    
-    
-class PaymentResponse(BaseModel):
-    msg: str
+    transactionRef: Optional[str] = None
+
+
+class RecordPaymentResponse(BaseModel):
+    message: str
     paymentId: int
-    
+    orderId: int
+    newBalance: float
+    newPaymentStatus: str
+
+
 class CreditCreateRequest(BaseModel):
     orderId: int
     customerId: int
@@ -42,3 +47,17 @@ class CreditUpdate(BaseModel):
 class CreditUpdateResponse(BaseModel):
     message: str
     creditId: Optional[int]
+
+
+class OutstandingCreditItem(BaseModel):
+    creditId: int
+    orderId: int
+    customerId: int
+    customerName: str
+    customerPhone: str
+    amount: float
+    amountDue: float
+    status: str
+    createdAt: str
+    daysOutstanding: int
+    lastPaymentAt: Optional[str] = None

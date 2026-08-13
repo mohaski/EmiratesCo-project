@@ -1,5 +1,6 @@
 from fastapi import HTTPException, Depends
 from entities.payments import Payment
+from entities.credits import Credit
 from db.database import get_session
 from entities.orders import Order
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -7,6 +8,7 @@ from sqlmodel import Session, select
 from loggiing import logger
 from sqlalchemy import func
 from datetime import datetime
+from utils import require_role
 
 from . import model
 
@@ -85,57 +87,107 @@ def calculate_cash_payments_for_certain_date(date: str, db: Session = Depends(ge
         raise HTTPException(status_code=500, detail="Failed to calculate cash payments for the specified date")
 
 
-def process_payment(payment_data: model.PaymentCreateRequest, db: Session = Depends(get_session)) -> model.PaymentResponse:
-    """
-    Process a payment for an order.
+def _sync_credit_for_order(db: Session, order: Order) -> None:
+    """Keep the order's Credit row (if any) mirroring Order.balance/amountPayed.
+    This is the single place that reconciles the two, called both by
+    record_payment and by order-edit so they can never drift apart."""
+    credit = db.exec(select(Credit).where(Credit.orderId == order.orderId)).first()
 
-    Steps:
-    1. Validate the order exists.
-    2. Prevent duplicate payments for the same order (optional, if needed).
-    3. Save payment details in the database.
-    4. Return a structured response with the payment ID and message.
+    if credit:
+        credit.amount_due = order.balance
+        if order.balance <= 0.10:
+            credit.status = "Paid"
+            if not credit.settledAt:
+                credit.settledAt = datetime.utcnow()
+        else:
+            credit.status = "Partially Paid" if order.amountPayed > 0 else "Pending"
+        db.add(credit)
+    elif order.balance > 0.01 and order.customerid:
+        # Order didn't have a credit row yet (e.g. was created fully paid, then
+        # edited to owe money) — create one now, matching create_order's rule.
+        new_credit = Credit(
+            orderId=order.orderId,
+            customerId=order.customerid,
+            amount=order.total,
+            amount_due=order.balance,
+            status="Partially Paid" if order.amountPayed > 0 else "Pending",
+        )
+        db.add(new_credit)
+
+
+def record_payment(
+    order_id: int,
+    amount: float,
+    payment_method: str,
+    db: Session,
+    current_user,
+    number_used: str | None = None,
+    transaction_ref: str | None = None,
+) -> model.RecordPaymentResponse:
     """
+    Single transactional entry point for "money was collected against this order":
+    creates the Payment row, recomputes Order.amountPayed/balance/payment_status,
+    and syncs the associated Credit row — all in one commit.
+    """
+    require_role(["cashier", "manager", "ceo", "admin"], current_user)
 
     try:
-        # ✅ 1. Ensure order exists 
-        order = db.exec(
-            select(Order).where(Order.orderId == payment_data.orderId)
-        ).first()
-
+        order = db.exec(select(Order).where(Order.orderId == order_id)).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
+        if order.status == "cancelled":
+            raise HTTPException(status_code=400, detail="Cannot record a payment against a cancelled order")
 
-        # ✅ 2. Create payment
+        if amount is None or amount <= 0:
+            raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+        if amount > (order.balance or 0) + 0.10:
+            raise HTTPException(status_code=400, detail="Payment exceeds the outstanding balance")
+
+        pay_method = (payment_method or "cash").lower()
+        if pay_method not in {"cash", "mpesa", "split", "number"}:
+            pay_method = "cash"
+
         new_payment = Payment(
-            orderId=payment_data.orderId,
-            amount=payment_data.amount,
-            payment_method=payment_data.paymentMethod,
-            number_used=payment_data.numberUsed
+            orderId=order_id,
+            amount=amount,
+            payment_method=pay_method,
+            number_used=number_used,
+            transaction_ref=transaction_ref,
+            recorded_by=current_user.userId,
         )
-
         db.add(new_payment)
+
+        new_paid = (order.amountPayed or 0) + amount
+        new_balance = max((order.total or 0) - new_paid, 0.0)
+        order.amountPayed = new_paid
+        order.balance = new_balance
+        order.payment_status = "Paid" if new_balance <= 0.10 else "Partial"
+        db.add(order)
+
+        _sync_credit_for_order(db, order)
+
         db.commit()
         db.refresh(new_payment)
+        db.refresh(order)
 
-        logger.info(f"✅ Payment processed successfully | PaymentID: {new_payment.paymentId}")
+        logger.info(f"Payment recorded for order {order_id}: amount={amount}, new_balance={new_balance}")
 
-        # ✅ 4. Return clean response
-        return model.PaymentResponse(
-            msg="Payment processed successfully",
-            paymentId=new_payment.paymentId
+        return model.RecordPaymentResponse(
+            message="Payment recorded successfully",
+            paymentId=new_payment.paymentId,
+            orderId=order_id,
+            newBalance=new_balance,
+            newPaymentStatus=order.payment_status,
         )
 
+    except HTTPException:
+        raise
     except IntegrityError as e:
         db.rollback()
-        logger.error(f"Database integrity error while processing payment: {e}")
+        logger.error(f"Database integrity error while recording payment: {e}")
         raise HTTPException(status_code=400, detail="Invalid payment data")
-
-    except HTTPException:
-        # re-raise HTTPExceptions so FastAPI handles them properly
-        raise
-
     except Exception as e:
         db.rollback()
-        logger.error(f"Unexpected error while processing payment: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process payment")
-    
+        logger.error(f"Unexpected error while recording payment: {e}")
+        raise HTTPException(status_code=500, detail="Failed to record payment")
+

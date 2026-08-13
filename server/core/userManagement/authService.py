@@ -54,7 +54,7 @@ def userRegistration(register_user_request: model.UserRegistrationRequest, db: S
         email=register_user_request.email,
         password=hash_password(register_user_request.password),
         phoneNumber=register_user_request.phoneNumber,
-        firstLogin= False)
+        mustChangePassword= True)
         
         db.add(create_user)
         db.commit()
@@ -98,7 +98,7 @@ def authenticate_user(username: str, password: str, db: Session) -> dict | bool:
             "message": "No account found with this username",
             "provided_username": username,
         }))
-        return {"Success": False, "reason": "no user"}
+        return {"success": False, "reason": "no user"}
 
     if not verify_password(password, user.password):
         logger.warning(json.dumps({
@@ -107,7 +107,15 @@ def authenticate_user(username: str, password: str, db: Session) -> dict | bool:
             "provided_username": username,
         }))
         return {"success": False, "reason": "wrong password"}
-    
+
+    if not user.isActive:
+        logger.warning(json.dumps({
+            "event": "User authentication failed",
+            "message": "Account is deactivated",
+            "provided_username": username,
+        }))
+        return {"success": False, "reason": "inactive"}
+
     logger.info(json.dumps({
             "Event": "Login successfully",
             "User_id": str(user.userId),
@@ -118,9 +126,9 @@ def authenticate_user(username: str, password: str, db: Session) -> dict | bool:
         "user": user
     }
     
-def create_access_token(username: str, email: str, userId: UUID, role: str) -> str:
+def create_access_token(username: str, email: str, userId: UUID, role: str, mustChangePassword: bool = False) -> str:
     try:
-        
+
         """Create a JWT access token with expiry."""
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         encode = {
@@ -128,6 +136,7 @@ def create_access_token(username: str, email: str, userId: UUID, role: str) -> s
             "username": username,
             "id": str(userId),
             "role": role,
+            "mustChangePassword": mustChangePassword,
             "exp": expire,
         }
         
@@ -159,6 +168,12 @@ def create_access_token(username: str, email: str, userId: UUID, role: str) -> s
 def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: Session = Depends(get_session)) -> model.Token:
         result= authenticate_user(form_data.username, form_data.password, db)
         if not result["success"]:
+            if result["reason"] == "inactive":
+                raise HTTPException(
+                    status_code = status.HTTP_401_UNAUTHORIZED,
+                    detail = "This account has been deactivated. Contact your administrator.",
+                    headers={"WWW-Authenticate": "Bearer"}
+                )
             messages = {
                 'no user': f"No account with username {form_data.username}",
                 'wrong password': "The password is incorrect"
@@ -168,14 +183,15 @@ def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depen
                 detail = f"{messages.get(result['reason'])}, Authentication failure",
                 headers={"WWW-Authenticate": "Bearer"}
             )
-        
+
         user = result['user']
-            
+
         access_token = create_access_token(
             username = user.username,
             email = user.email,
             userId = user.userId,
-            role = user.role
+            role = user.role,
+            mustChangePassword = user.mustChangePassword
         )
         
         logger.info(json.dumps({
@@ -193,12 +209,13 @@ def verify_token(token: str) -> model.TokenData:
             username: str = payload.get("username")
             email: str = payload.get("sub")
             role: str = payload.get("role")
+            mustChangePassword: bool = payload.get("mustChangePassword", False)
             if userId is None or email is None or role is None:
                 raise HTTPException(
                     status_code = status.HTTP_401_UNAUTHORIZED,
                     detail = "Could not validate credentials",
                 )
-            return model.TokenData(userId=userId, username=username, role=role)
+            return model.TokenData(userId=userId, username=username, role=role, mustChangePassword=mustChangePassword)
         except PyJWTError:
             raise HTTPException(
                 status_code= status.HTTP_401_UNAUTHORIZED,

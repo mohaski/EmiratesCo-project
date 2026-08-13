@@ -17,7 +17,8 @@ class User(SQLModel, table=True):
     email: str = Field(unique= True, nullable= False)
     username: str = Field(unique= True, nullable= False)
     password: str = Field(max_length= 255, nullable= False)
-    firstLogin: bool = Field(default= False)
+    mustChangePassword: bool = Field(default= True)
+    isActive: bool = Field(default= True)
     createdAt: datetime = Field(sa_column_kwargs={"server_default": func.now()})
 
     orders: List["Order"] = Relationship(back_populates = "user")

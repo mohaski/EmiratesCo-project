@@ -180,7 +180,7 @@ export default function CheckoutPage() {
 
     const isRegistered = useMemo(() => {
         if (!customer?.id) return false;
-        return ['individual', 'cooperate', 'corporate', 'registered', 'frequent'].includes(customer.type);
+        return ['individual', 'cooperate'].includes(customer.type);
     }, [customer]);
 
     const { subtotal: rawSubtotal } = useCartTotals(cartItems, enableTax);

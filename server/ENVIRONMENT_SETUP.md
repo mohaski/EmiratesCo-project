@@ -49,12 +49,12 @@ pip install -r requirements.txt
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DATABASE_URL` | Complete database connection string | `postgresql+psycopg2://postgres:21589596@localhost/EmiratesCo_Database` |
+| `DATABASE_URL` | Complete database connection string | `postgresql+psycopg2://postgres:<password>@localhost/EmiratesCo_Database` |
 | `DB_HOST` | Database host | `localhost` |
 | `DB_PORT` | Database port | `5432` |
 | `DB_NAME` | Database name | `EmiratesCo_Database` |
 | `DB_USER` | Database username | `postgres` |
-| `DB_PASSWORD` | Database password | `21589596` |
+| `DB_PASSWORD` | Database password | *(no default — set in `.env`)* |
 | `DEBUG` | Enable debug mode | `True` |
 | `SECRET_KEY` | Secret key for security | `your-secret-key-here-change-in-production` |
 | `ENVIRONMENT` | Environment name | `development` |

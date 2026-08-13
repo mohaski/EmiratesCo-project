@@ -11,17 +11,17 @@ class UserRegistrationRequest(BaseModel):
     email: EmailStr
     password: str = "1234"
     phoneNumber: str
-    firstLogin: bool = False
-    
+
 class Token(BaseModel):
     access_token: str
     token_type: str
-    
+
 class TokenData(BaseModel):
-    userId: Optional[str] 
+    userId: Optional[str]
     username: Optional[str]
     role: Optional[str]
-    
+    mustChangePassword: Optional[bool] = False
+
     def get_uuid(self):
         if self.userId:
             return UUID(self.userId)
@@ -37,6 +37,8 @@ class userDetailsResponse(BaseModel):
     role: str
     email: EmailStr
     phoneNumber: str
+    isActive: bool
+    mustChangePassword: bool
 
     class Config:
         from_attributes = True
@@ -46,12 +48,21 @@ class passwordResetRequest(BaseModel):
     currentPassword: str
     newPassword: str
     confirmNewPassword: str
-    
+
 class passwordChangeRequest(BaseModel):
     newPassword: str
     confirmNewPassword: str
-    
-    
+
+class AdminPasswordResetRequest(BaseModel):
+    newPassword: str = Field(min_length=6)
+
+class RoleChangeRequest(BaseModel):
+    role: str
+
+class StatusChangeRequest(BaseModel):
+    isActive: bool
+
+
 ######### customers models #########
 
 class CustomerCreateRequest(BaseModel):

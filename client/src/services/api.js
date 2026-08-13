@@ -65,8 +65,9 @@ export const OrderService = {
         const response = await api.get(`/orders/customer/${customerId}`);
         return response.data;
     },
-    updatePaymentStatus: async (id, status) => {
-        const response = await api.put(`/orders/${id}/payment-status?new_status=${status}`);
+    /** Orders with an outstanding balance — feeds the Collect Payments page. */
+    getOutstandingOrders: async (skip = 0, limit = 200) => {
+        const response = await api.get(`/orders/with-balance?skip=${skip}&limit=${limit}`);
         return response.data;
     },
     updateWorkflowStatus: async (id, status) => {
@@ -94,6 +95,14 @@ export const OrderService = {
     correctOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainders, failed_cut_indices, forced_offcut_id, notes }) => {
         const response = await api.put(`/orders/${orderId}/correct-offcut`, {
             item_id, line_idx, event_idx, new_remainders, failed_cut_indices, forced_offcut_id, notes,
+        });
+        return response.data;
+    },
+    /** 1D (bar/profile) analogue of correctOffcutEvent — corrects a single
+     * offcut_sources entry's remainder, and/or replaces the source it came from. */
+    correctProfileOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainder_length, replace_source, forced_offcut_id, notes }) => {
+        const response = await api.put(`/orders/${orderId}/correct-profile-offcut`, {
+            item_id, line_idx, event_idx, new_remainder_length, replace_source, forced_offcut_id, notes,
         });
         return response.data;
     },
@@ -164,6 +173,14 @@ export const ProductService = {
     getOffcuts: async (productId, variantId = null) => {
         const params = variantId ? `?variant_id=${variantId}` : '';
         const response = await api.get(`/products/${productId}/offcuts${params}`);
+        return response.data;
+    },
+    /**
+     * Manager-entered offcuts — leftover pieces measured by hand rather than
+     * produced by a cutting job. offcuts: [{ variant_id, length, width, height, quantity }].
+     */
+    addOffcutsBulk: async (productId, offcuts) => {
+        const response = await api.post(`/products/${productId}/offcuts/bulk`, offcuts);
         return response.data;
     },
     /**
@@ -245,8 +262,14 @@ export const AttributeService = {
 };
 
 export const FinancialService = {
+    /** paymentData: { orderId, amount, paymentMethod, numberUsed?, transactionRef? } */
     createPayment: async (paymentData) => {
         const response = await api.post('/financials/payments', paymentData);
+        return response.data;
+    },
+    /** Aggregate outstanding balances across all customers — feeds the Dues page. */
+    getOutstandingCredits: async () => {
+        const response = await api.get('/financials/credits/outstanding');
         return response.data;
     },
     getTodayCash: async () => {
@@ -319,6 +342,18 @@ export const UserService = {
     changePassword: async (userId, data) => {
         // data: { newPassword, confirmNewPassword }
         const response = await api.post(`/users/${userId}/change-password`, data);
+        return response.data;
+    },
+    adminResetPassword: async (userId, newPassword) => {
+        const response = await api.post(`/users/${userId}/admin-reset-password`, { newPassword });
+        return response.data;
+    },
+    updateRole: async (userId, role) => {
+        const response = await api.put(`/users/${userId}/role`, { role });
+        return response.data;
+    },
+    updateStatus: async (userId, isActive) => {
+        const response = await api.put(`/users/${userId}/status`, { isActive });
         return response.data;
     },
 };

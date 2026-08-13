@@ -49,16 +49,27 @@ const NAV_ICONS = {
       <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
     </svg>
   ),
-  cuttingQueue: (
+  collectPayments: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" />
-      <line x1="20" y1="4" x2="8.12" y2="15.88" /><line x1="14.47" y1="14.48" x2="20" y2="20" /><line x1="8.12" y1="8.12" x2="12" y2="12" />
+      <rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" />
+      <path d="M6 6v-.5A1.5 1.5 0 017.5 4h9A1.5 1.5 0 0118 5.5V6" />
+    </svg>
+  ),
+  dues: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" /><path d="M12 7v5l3 3" />
     </svg>
   ),
   settings: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+    </svg>
+  ),
+  users: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 00-3-3.87" /><path d="M16 3.13a4 4 0 010 7.75" />
     </svg>
   ),
   logout: (
@@ -139,12 +150,14 @@ export default function Layout() {
     { path: '/sales', label: 'Sales POS', iconKey: 'sales' },
     { path: '/invoice', label: 'Invoices', iconKey: 'invoice' },
     { path: '/orders', label: 'Order History', iconKey: 'orders' },
-    { path: '/cutting-queue', label: 'Cutting Queue', iconKey: 'cuttingQueue' },
+    { path: '/collect-payments', label: 'Collect Payments', iconKey: 'collectPayments' },
+    { path: '/dues', label: 'Dues Follow-Up', iconKey: 'dues' },
     { path: '/inventory', label: 'Stock Control', iconKey: 'inventory' },
     { path: '/add-product', label: 'Add Product', iconKey: 'addProduct' },
     { path: '/manage-products', label: 'Manage Products', iconKey: 'manageProducts' },
     { path: '/tools', label: 'Tool Checkout', iconKey: 'tools' },
     { path: '/tools/manage', label: 'Tool Tracking', iconKey: 'tools' },
+    { path: '/users', label: 'User Management', iconKey: 'users' },
   ];
 
   const filteredItems = menuItems.filter(item => (ROUTE_ROLES[item.path] || []).includes(user?.role));
@@ -324,6 +337,7 @@ export default function Layout() {
         )}
 
         <button
+          onClick={() => handleNavigate('/change-password')}
           style={{
             display: 'flex', alignItems: 'center', gap: '0.75rem',
             padding: showLabels ? '0.5rem 0.875rem' : '0.5rem 0',

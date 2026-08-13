@@ -166,6 +166,17 @@ class OffcutResponse(BaseModel):
         from_attributes = True
 
 
+class OffcutCreate(BaseModel):
+    """A manager-entered offcut piece — one row of a bulk 'Add Offcuts' submission.
+    For a 2D (has_dimensions) product, width+height are required (mm); for a 1D
+    (bar/profile) product, length is required, in the product's own unit."""
+    variant_id: Optional[int] = None
+    length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    quantity: int = 1
+
+
 class GlassCutPreviewCut(BaseModel):
     l: float
     w: float

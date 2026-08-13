@@ -7,6 +7,7 @@ import { useToast } from '../context/ToastContext';
 import api from '../services/api';
 import CancelOrderModal from '../components/orders/CancelOrderModal';
 import CorrectOffcutModal from '../components/orders/CorrectOffcutModal';
+import CorrectProfileOffcutModal from '../components/orders/CorrectProfileOffcutModal';
 import CuttingInstructions from '../components/orders/CuttingInstructions';
 import { REVIEW_THEME } from '../utils/cuttingInstructionFormat';
 
@@ -123,11 +124,14 @@ const ItemRow = ({ item, canCorrectOffcuts, canMarkCuttingDone, onCorrect, onMar
                         theme={REVIEW_THEME}
                         renderActions={(src) => {
                             const eventIdx = sources.indexOf(src);
-                            const correctable = src.owns_consumption !== false && (src.remainders_created || []).length > 0;
+                            const is2D = 'cuts' in src;
+                            const correctable = is2D
+                                ? src.owns_consumption !== false && (src.remainders_created || []).length > 0
+                                : !src.superseded;
                             if (!correctable) return null;
                             return (
                                 <button
-                                    onClick={() => onCorrect({ itemId: item.itemId, productId: item.productId, variantId: item.variantId, lineIdx, eventIdx, event: src })}
+                                    onClick={() => onCorrect({ kind: is2D ? 'glass' : 'profile', itemId: item.itemId, productId: item.productId, variantId: item.variantId, lineIdx, eventIdx, event: src })}
                                     style={{
                                         flexShrink: 0, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
                                         color: '#fbbf24', fontSize: '0.68rem', fontWeight: 700, padding: '2px 9px',
@@ -156,7 +160,7 @@ export default function OrderSummaryPage() {
 
     const [order, setOrder] = useState(location.state?.order || null);
     const canCorrectOffcuts = ['manager', 'ceo', 'admin'].includes(user?.role);
-    const canMarkCuttingDone = ['manager', 'cashier', 'ceo', 'admin'].includes(user?.role);
+    const canMarkCuttingDone = ['cashier', 'admin'].includes(user?.role);
 
     const refreshOrder = async () => {
         const full = await api.orderService.getOrder(order.orderId);
@@ -167,6 +171,15 @@ export default function OrderSummaryPage() {
         await api.orderService.correctOffcutEvent(order.orderId, {
             item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
             new_remainders: newRemainders, failed_cut_indices: failedCutIndices, forced_offcut_id: forcedOffcutId, notes,
+        });
+        await refreshOrder();
+        showToast('Offcut correction saved', 'success');
+    };
+
+    const handleProfileOffcutCorrected = async (newRemainderLength, replaceSource, forcedOffcutId, notes) => {
+        await api.orderService.correctProfileOffcutEvent(order.orderId, {
+            item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
+            new_remainder_length: newRemainderLength, replace_source: replaceSource, forced_offcut_id: forcedOffcutId, notes,
         });
         await refreshOrder();
         showToast('Offcut correction saved', 'success');
@@ -223,6 +236,9 @@ export default function OrderSummaryPage() {
     // already been physically cut) — see the backend guard in update_order/cancel_order_with_pin.
     const anyItemCut = order.items?.some(i => i.cuttingCompletedAt) || false;
     const anyItemPending = order.items?.some(i => i.cuttingCompleted === false) || false;
+    // Mirrors the backend's 7-day cutoff in cancel_order_with_pin — cancelling an
+    // order that old is no longer allowed, so hide the option before the user tries.
+    const orderTooOldToCancel = (new Date() - new Date(order.created_at)) > 7 * 24 * 60 * 60 * 1000;
 
     const handleEdit = () => navigate('/sales', { state: { mode: 'edit', orderData: { ...order, id: order.orderId } } });
 
@@ -278,16 +294,21 @@ export default function OrderSummaryPage() {
                                         color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
                                         boxShadow: '0 2px 12px rgba(59,130,246,0.3)',
                                     }}>✏️ Edit Order</button>
-                                    <button onClick={() => setShowCancel(true)} style={{
-                                        padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
-                                        background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
-                                        color: '#f87171', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
-                                    }}>🚫 Cancel Order</button>
+                                    {!orderTooOldToCancel && (
+                                        <button onClick={() => setShowCancel(true)} style={{
+                                            padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
+                                            background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
+                                            color: '#f87171', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
+                                        }}>🚫 Cancel Order</button>
+                                    )}
                                 </>
                             )}
                         </div>
                         {canEditOrCancel && anyItemCut && (
                             <span style={{ fontSize: '0.7rem', color: '#475569' }}>Already cut — can no longer be edited or cancelled</span>
+                        )}
+                        {canEditOrCancel && !anyItemCut && orderTooOldToCancel && (
+                            <span style={{ fontSize: '0.7rem', color: '#475569' }}>Order is over a week old — can no longer be cancelled</span>
                         )}
                     </div>
                 )}
@@ -346,13 +367,23 @@ export default function OrderSummaryPage() {
                 />
             )}
 
-            {correcting && (
+            {correcting && correcting.kind === 'glass' && (
                 <CorrectOffcutModal
                     event={correcting.event}
                     productId={correcting.productId}
                     variantId={correcting.variantId}
                     onClose={() => setCorrecting(null)}
                     onConfirm={handleOffcutCorrected}
+                />
+            )}
+
+            {correcting && correcting.kind === 'profile' && (
+                <CorrectProfileOffcutModal
+                    event={correcting.event}
+                    productId={correcting.productId}
+                    variantId={correcting.variantId}
+                    onClose={() => setCorrecting(null)}
+                    onConfirm={handleProfileOffcutCorrected}
                 />
             )}
         </div>

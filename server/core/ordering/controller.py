@@ -59,6 +59,18 @@ def get_orders_by_customer(
     return orderService.get_orders_by_customerId(customer_id, db, skip, limit)
 
 
+@router.get("/with-balance", response_model=List[model.OrderResponse])
+def get_orders_with_balance(
+    skip: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Orders with an outstanding balance — feeds the Cashier's Collect Payments page."""
+    require_role(["cashier", "manager", "ceo", "admin"], current_user)
+    return orderService.get_orders_with_balance(db, skip, limit)
+
+
 @router.get("/cutting-queue", response_model=List[model.PendingCuttingItem])
 def get_cutting_queue(
     skip: int = 0,
@@ -134,6 +146,27 @@ async def correct_offcut(
     )
 
 
+@router.put("/{order_id}/correct-profile-offcut", response_model=model.CorrectProfileOffcutResponse)
+async def correct_profile_offcut(
+    order_id: int,
+    body: model.CorrectProfileOffcutRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Manager-only: correct a single 1D (bar/profile) cutting event — its
+    recorded remainder, and/or replace the source it says it came from."""
+    result = orderService.correct_profile_offcut_for_order_item(
+        order_id, body.item_id, body.line_idx, body.event_idx,
+        body.new_remainder_length, body.replace_source, body.forced_offcut_id, body.notes, db, current_user,
+    )
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return model.CorrectProfileOffcutResponse(
+        message="Offcut corrected", before=result["before"], after=result["after"],
+        replacement_event=result["replacement_event"],
+    )
+
+
 @router.put("/{order_id}/mark-cutting-done", response_model=model.MarkCuttingDoneResponse)
 async def mark_order_cutting_done(
     order_id: int,
@@ -145,19 +178,6 @@ async def mark_order_cutting_done(
     result = orderService.mark_cutting_complete_for_order(order_id, db, current_user)
     background_tasks.add_task(manager.broadcast, "cutting_status_updated")
     return model.MarkCuttingDoneResponse(updated=result["updated"])
-
-
-@router.put("/{order_id}/payment-status", response_model=model.OrderStatusUpdateResponse)
-async def update_payment_status(
-    order_id: int,
-    new_status: str,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
-):
-    result = orderService.update_order_payment_status(order_id, new_status, db, current_user)
-    background_tasks.add_task(manager.broadcast, "orders_updated")
-    return result
 
 
 @router.put("/{order_id}/workflow-status", response_model=model.OrderStatusUpdateResponse)

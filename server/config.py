@@ -8,22 +8,19 @@ load_dotenv()
 class Settings:
     """Application settings loaded from environment variables"""
     
-    # Database Configuration
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL", 
-        "postgresql+psycopg2://postgres:21589596@localhost/EmiratesCo_Database"
-    )
-    
+    # Database Configuration — no hardcoded fallback; .env (gitignored) is required
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+
     # Database Connection Settings
     DB_HOST: str = os.getenv("DB_HOST", "localhost")
     DB_PORT: int = int(os.getenv("DB_PORT", "5432"))
     DB_NAME: str = os.getenv("DB_NAME", "EmiratesCo_Database")
     DB_USER: str = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "21589596")
-    
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
+
     # Application Settings
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     
     # API Settings
@@ -57,7 +54,7 @@ class Settings:
     @classmethod
     def get_database_url(cls) -> str:
         """Get database URL, either from DATABASE_URL or constructed from individual components"""
-        if cls.DATABASE_URL and not cls.DATABASE_URL.startswith("postgresql+psycopg2://postgres:21589596@localhost"):
+        if cls.DATABASE_URL:
             return cls.DATABASE_URL
         
         # Construct database URL from individual components

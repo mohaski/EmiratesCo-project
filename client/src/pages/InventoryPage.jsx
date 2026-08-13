@@ -1,15 +1,18 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useProducts } from '../context/ProductContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import api from '../services/api';
 import AddStockModal from '../components/inventory/AddStockModal';
+import AddOffcutsModal from '../components/inventory/AddOffcutsModal';
 
 const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Brown', 'Grey', 'Matt Black'];
 const GLASS_THICKNESSES = ['4mm', '6mm', '8mm', '10mm', '12mm'];
 
 export default function InventoryPage() {
-    const { products, categories: CATEGORIES, updateProduct, updateProductVariant } = useProducts();
+    const { products, categories: CATEGORIES, updateProduct, updateProductVariant, addProductOffcuts } = useProducts();
     const { user } = useAuth();
+    const showToast = useToast();
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('ke-profile');
     const [filterSubCategory, setFilterSubCategory] = useState('window');
@@ -19,6 +22,7 @@ export default function InventoryPage() {
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [selectedVariant, setSelectedVariant] = useState('');
     const [stockToAdd, setStockToAdd] = useState('');
+    const [offcutsProduct, setOffcutsProduct] = useState(null);
 
     const canViewHistory = user?.role === 'ceo' || user?.role === 'admin';
     const [sidebarTab, setSidebarTab] = useState('recent');
@@ -92,6 +96,11 @@ export default function InventoryPage() {
     };
 
     const getTotalStock = (item) => !item.stockVariants ? 0 : Object.values(item.stockVariants).reduce((a, b) => a + b, 0);
+
+    const handleSubmitOffcuts = async (rows) => {
+        await addProductOffcuts(offcutsProduct.id, rows);
+        showToast(`${rows.length} offcut${rows.length > 1 ? 's' : ''} added to ${offcutsProduct.name}`, 'success');
+    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--color-bg)', overflow: 'hidden' }}>
@@ -221,6 +230,16 @@ export default function InventoryPage() {
                                                 <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '2px' }}>Total Stock</div>
                                                 <div style={{ fontSize: '1.5rem', fontWeight: 900, color: isLow ? '#f87171' : '#f1f5f9', fontFamily: 'var(--font-mono)', letterSpacing: '-0.02em' }}>{total}</div>
                                             </div>
+                                            {item.trackOffcuts && item.variants?.length > 0 && (
+                                                <button onClick={() => setOffcutsProduct(item)} style={{
+                                                    padding: '0.625rem 1.125rem', borderRadius: '0.75rem', border: '1px solid rgba(6,182,212,0.3)', cursor: 'pointer',
+                                                    background: 'rgba(6,182,212,0.1)',
+                                                    color: '#22d3ee', fontWeight: 800, fontSize: '0.8rem', transition: 'all 0.2s',
+                                                }}
+                                                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(6,182,212,0.18)'; }}
+                                                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(6,182,212,0.1)'; }}
+                                                >✂️ Add Offcuts</button>
+                                            )}
                                             <button onClick={() => handleAddStockClick(item)} style={{
                                                 padding: '0.625rem 1.25rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
                                                 background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
@@ -346,6 +365,10 @@ export default function InventoryPage() {
                 product={selectedProduct} selectedVariant={selectedVariant}
                 onVariantSelect={setSelectedVariant} stockToAdd={stockToAdd}
                 onStockChange={setStockToAdd} onConfirm={confirmAddStock}
+            />
+            <AddOffcutsModal
+                isOpen={!!offcutsProduct} onClose={() => setOffcutsProduct(null)}
+                product={offcutsProduct} onSubmit={handleSubmitOffcuts}
             />
         </div>
     );

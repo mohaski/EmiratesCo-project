@@ -565,7 +565,15 @@ def restore_specific_offcut_sources(
 ) -> None:
     """
     Undo the exact offcut/stock consumption recorded in a cut line's offcut_sources.
-    Called before applying a new manager-chosen set of sources.
+    Called before applying a new manager-chosen set of sources, and by order
+    cancel/edit to reverse a whole line's consumption. Restores every entry
+    exactly as recorded, including ones a manager correction has marked
+    `superseded` — see correct_profile_offcut_event's docstring: a superseded
+    event still legitimately owns its own original consumption (only its
+    remainder was ever corrected, never its source/offcut_id/length_used), so
+    it needs restoring here exactly like any other event. A replacement event
+    created alongside it is a fully separate, independent entry that gets
+    restored on its own merits in the same pass.
     """
     for src in sources:
         remainder = float(src.get("remainder_created", 0))
@@ -734,3 +742,95 @@ def _upsert_offcut(
             quantity=1,
             source_item_id=source_item_id,
         ))
+
+
+# ── Manager-facing correction (1D analogue of glassOffcutService.correct_glass_offcut_event) ──
+
+def correct_profile_offcut_event(
+    db: Session,
+    product: Product,
+    variant: Optional[Variant],
+    event: dict,
+    new_remainder_length: float,
+    replace_source: bool,
+    forced_offcut_id: Optional[int] = None,
+) -> dict:
+    """
+    Manager-facing correction for a single 1D (bar/profile) offcut_sources entry
+    — the 1D analogue of glassOffcutService.correct_glass_offcut_event, mirroring
+    its shape exactly: two independent corrections, the remainder edit always
+    applied, source replacement layered on top only if asked for.
+
+      - remainder correction (always applied): reverses the remainder THIS
+        event recorded (_remove_offcut) and records new_remainder_length
+        instead (_upsert_offcut) — 0 means nothing usable was left (e.g. the
+        source was damaged). The event's own source/offcut_id/length_used
+        fields are NEVER touched here, exactly like glass never touches an
+        event's own source/offcut_id when correcting remainders_created —
+        this is the ONLY way material from the original source re-enters the
+        pool. If replace_source below also says length_used didn't really
+        come from here, the manager is trusted to type what the source
+        actually still is — e.g. its full original offcut_length if none of
+        it was really used, or something smaller if it was partly damaged.
+
+      - source replacement (replace_source=True): length_used didn't actually
+        come from the recorded source — resolves a fresh, INDEPENDENT
+        consumption of that same length from the CURRENT pool
+        (forced_offcut_id, or the normal best-fit pick if not given — same
+        forced-then-fallback shape as apply_manual_cut_selection) and returns
+        it as a separate replacement event, exactly like glass's
+        resolve_replacement_pieces for a failed cut. Crucially, this function
+        never reverses/restores the original event's own source consumption
+        first — unlike a restore-then-refill approach, there's nothing to
+        exclude from the search: the original source was never put back in
+        the pool to begin with, so the replacement pick can't trivially
+        re-select the very thing it's replacing. The original event is
+        marked superseded=True purely to block a SECOND replace_source call
+        from supplying length_used twice over — it still legitimately owns
+        its own original consumption (now with the corrected remainder above)
+        and is restored completely normally, like any other event, if the
+        order is later cancelled or edited.
+
+    Returns {"before": <snapshot of the event's own fields beforehand>,
+    "after": <the event's own fields afterward>, "replacement_event": <new
+    offcut_sources-shaped dict, or None>}.
+    """
+    if "cuts" in event or "remainders_created" in event:
+        raise ValueError("This cutting event isn't a correctable 1D profile-cut event")
+    if replace_source and event.get("superseded"):
+        raise ValueError("This cutting event's cut has already been replaced by an earlier correction")
+    if new_remainder_length < 0:
+        raise ValueError("Corrected remainder length must be zero or positive")
+
+    before = {
+        "source": event.get("source"), "offcut_id": event.get("offcut_id"),
+        "offcut_length": event.get("offcut_length"), "length_used": event.get("length_used"),
+        "remainder_created": event.get("remainder_created", 0),
+    }
+
+    # ── Remainder correction — always applied ───────────────────────────────
+    old_remainder = float(event.get("remainder_created", 0) or 0)
+    if old_remainder > 0.01:
+        _remove_offcut(db, product, variant, old_remainder)
+    new_remainder = round(float(new_remainder_length), 4)
+    if new_remainder > 0.01:
+        _upsert_offcut(db, product, variant, new_remainder)
+    event["remainder_created"] = new_remainder if new_remainder > 0.01 else 0
+
+    if not replace_source:
+        return {"before": before, "after": dict(event), "replacement_event": None}
+
+    # ── Source replacement — independent of the remainder edit above ────────
+    length_used = float(event.get("length_used", 0))
+    full_length = _get_full_length(product, variant)
+
+    if forced_offcut_id is not None:
+        replacement_event = _consume_offcut_sources(
+            db, product, variant, [{"offcut_id": forced_offcut_id, "length_used": length_used}],
+        )[0]
+    else:
+        replacement_event = _fulfill_one_cut_via_best_fit(db, product, variant, length_used, full_length)
+
+    event["superseded"] = True
+
+    return {"before": before, "after": dict(event), "replacement_event": replacement_event}

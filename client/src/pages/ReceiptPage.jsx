@@ -112,13 +112,18 @@ export default function ReceiptPage() {
     }
 
     return (
-        <div style={{ minHeight: '100vh', background: 'var(--color-bg)', padding: '2.5rem 1rem' }} className="print:bg-white print:p-0">
+        <div style={{ minHeight: '100vh', background: 'var(--color-bg)', padding: '2.5rem 1rem' }} className="receipt-page">
             <style type="text/css" media="print">{`
-                @page { size: 80mm auto; margin: 3mm; }
-                body { background-color: white !important; }
+                /* XP-80T (and 80mm thermal generally): zero the page margin and let the
+                   tape's own inner padding be the only margin — a printer-driver margin
+                   here would double up with it and eat into the ~72mm printable width. */
+                @page { size: 80mm auto; margin: 0; }
+                html, body { background-color: #fff !important; margin: 0 !important; padding: 0 !important; }
                 .print-hidden { display: none !important; }
+                .receipt-page { padding: 0 !important; background: #fff !important; }
+                .receipt-strip-row { display: block !important; gap: 0 !important; }
                 .receipt-tape { box-shadow: none !important; width: 100% !important; }
-                .receipt-section { page-break-after: always; break-after: page; }
+                .receipt-section { width: 100% !important; page-break-after: always; break-after: page; }
                 .receipt-section:last-of-type { page-break-after: auto; break-after: auto; }
             `}</style>
 
@@ -154,7 +159,7 @@ export default function ReceiptPage() {
             )}
 
             {/* Strip(s) — one per checked/populated department, each its own torn-off slip */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2rem', justifyContent: 'center', alignItems: 'flex-start' }}>
+            <div className="receipt-strip-row" style={{ display: 'flex', flexWrap: 'wrap', gap: '2rem', justifyContent: 'center', alignItems: 'flex-start' }}>
                 {visibleBuckets.map((bucket, sheetIdx) => {
                     const meta = BUCKET_META[bucket];
                     return (

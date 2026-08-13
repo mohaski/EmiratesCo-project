@@ -10,7 +10,9 @@ class Order(SQLModel, table=True):
 
     orderId: Optional[int] = Field(default=None, primary_key=True)
     customerid: Optional[int] = Field(default=None, foreign_key="customers.customerId")
-    
+    # Free-text name for unregistered walk-in customers (no Customer row to join to)
+    guest_name: Optional[str] = Field(default=None)
+
     # Financials
     amountPayed: float = Field(default=0.0)
     subtotal: float = Field(default=0.0)

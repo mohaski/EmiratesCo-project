@@ -17,7 +17,7 @@ const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
         e.preventDefault();
         setLoading(true); setError(''); setSuccess('');
         try {
-            await api.userService.register({ ...formData, password: '1234', firstLogin: false });
+            await api.userService.register({ ...formData, password: '1234' });
             setSuccess('User registered! Default password is "1234".');
             if (onSuccess) onSuccess();
             setFormData({ firstName: '', secondName: '', username: '', role: 'cashier', email: '', phoneNumber: '' });

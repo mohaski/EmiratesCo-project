@@ -105,8 +105,12 @@ python -m venv .venv && .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 cp .env.example .env                                  # then edit DB credentials, secrets
 python create_tables.py                                # create tables (or let uvicorn do it on startup)
-uvicorn main:app --reload
+dev.bat                                                 # runs on port 8001 with --reload
 ```
+Production runs as a Windows service (`EmiratesCoAPI`, NSSM) on port **8000** at all times —
+`dev.bat` always uses **8001** instead so a local dev session can never collide with it. Do
+not run uvicorn on port 8000 manually; that will fail to bind (production already owns it)
+or, worse, race it on startup.
 See `server/ENVIRONMENT_SETUP.md` and `server/DATABASE_SETUP.md` for the full list of
 environment variables and database setup options.
 

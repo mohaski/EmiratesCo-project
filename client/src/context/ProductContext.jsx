@@ -2,6 +2,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../services/api';
 import { wsEvents } from '../utils/wsEvents';
+import { useAuth } from './AuthContext';
 
 const ProductContext = createContext();
 
@@ -14,6 +15,7 @@ export const useProducts = () => {
 };
 
 export const ProductProvider = ({ children }) => {
+    const { user } = useAuth();
     const [products, setProducts] = useState([]);
     const [categories, setCategories] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -148,9 +150,19 @@ export const ProductProvider = ({ children }) => {
         }
     }, []);
 
+    // Refetch on login/logout — this provider lives above the router for the
+    // whole app lifetime, so a mount-only effect never re-runs when the same
+    // session logs out and back in.
     useEffect(() => {
-        initializeData();
-    }, []);
+        if (user) {
+            initializeData();
+        } else {
+            setProducts([]);
+            setCategories([]);
+            setError(null);
+            setLoading(false);
+        }
+    }, [user, initializeData]);
 
     // Re-fetch whenever another client (or tab) mutates products
     useEffect(() => {
@@ -270,6 +282,25 @@ export const ProductProvider = ({ children }) => {
         }
     }, [refreshProducts]);
 
+    // Manager-entered offcuts — bulk list of leftover pieces measured by hand.
+    // offcutsData items: { variantId, length, width, height, quantity }.
+    const addProductOffcuts = useCallback(async (productId, offcutsData) => {
+        try {
+            const payload = offcutsData.map(o => ({
+                variant_id: o.variantId ?? null,
+                length: o.length != null ? parseFloat(o.length) : null,
+                width: o.width != null ? parseFloat(o.width) : null,
+                height: o.height != null ? parseFloat(o.height) : null,
+                quantity: parseInt(o.quantity) || 1,
+            }));
+            await api.productService.addOffcutsBulk(productId, payload);
+            return true;
+        } catch (err) {
+            console.error("Failed to add offcuts", err);
+            throw err;
+        }
+    }, []);
+
     const updateProductVariant = useCallback(async (variantId, updateData) => {
         try {
             await api.productService.updateVariant(variantId, updateData);
@@ -292,9 +323,10 @@ export const ProductProvider = ({ children }) => {
         addCategory,
         addProductVariant,
         addProductVariants,
+        addProductOffcuts,
         updateProductVariant,
         refreshProducts: initializeData
-    }), [products, categories, loading, error, addProduct, deleteProduct, updateProduct, addCategory, addProductVariant, addProductVariants, updateProductVariant, initializeData]);
+    }), [products, categories, loading, error, addProduct, deleteProduct, updateProduct, addCategory, addProductVariant, addProductVariants, addProductOffcuts, updateProductVariant, initializeData]);
 
     return (
         <ProductContext.Provider value={value}>

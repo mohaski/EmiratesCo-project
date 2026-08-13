@@ -13,6 +13,7 @@ class OrderItemRequest(BaseModel):
 
 class OrderCreate(BaseModel):
     customerId: Optional[int] = None
+    guestName: Optional[str] = None   # walk-in customer's provided name, when customerId is not set
     amountPaid: float = 0.0
     # totalAmount is now calculated by backend
     # totalAmount: float = 0.0 
@@ -40,6 +41,8 @@ class OrderResponse(BaseModel):
     orderId: int
     customerId: Optional[int] = None
     customerName: Optional[str] = None
+    customerType: Optional[str] = None
+    customerPhone: Optional[str] = None
     amountPaid: float
     # Maps to subtotal or a generic total
     totalAmount: float
@@ -112,6 +115,7 @@ class OrderCancelRequest(BaseModel):
 class OrderEditRequest(BaseModel):
     """Payload for editing an existing order (replaces items + recalculates)."""
     customerId: Optional[int] = None
+    guestName: Optional[str] = None   # walk-in customer's provided name, when customerId is not set
     amountPaid: float = 0.0
     servedBy: UUID
     VAT_status: bool = False
@@ -149,6 +153,30 @@ class CorrectOffcutResponse(BaseModel):
     before: List[Dict[str, Any]]
     after: List[Dict[str, Any]]
     replacement_events: List[Dict[str, Any]] = []
+
+class CorrectProfileOffcutRequest(BaseModel):
+    """Payload for correcting a single 1D (bar/profile) offcut_sources entry —
+    the 1D analogue of CorrectOffcutRequest. new_remainder_length always
+    describes the corrected remainder of the RECORDED source (mirrors
+    CorrectOffcutRequest.new_remainders — always applied, required, 0 means
+    nothing usable was left, e.g. full offcut_length if none of it was
+    really used). replace_source separately marks that length_used didn't
+    actually come from that source — this resolves an independent
+    replacement, never touching the original event's own remainder logic
+    above; forced_offcut_id overrides the auto-suggested replacement."""
+    item_id: int
+    line_idx: int
+    event_idx: int
+    new_remainder_length: float
+    replace_source: bool = False
+    forced_offcut_id: Optional[int] = None
+    notes: Optional[str] = None
+
+class CorrectProfileOffcutResponse(BaseModel):
+    message: str
+    before: Dict[str, Any]
+    after: Dict[str, Any]
+    replacement_event: Optional[Dict[str, Any]] = None
 
 class MarkCuttingDoneRequest(BaseModel):
     """Batch report: floor staff report a batch of already-finished cutting jobs

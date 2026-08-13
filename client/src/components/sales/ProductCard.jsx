@@ -1,10 +1,42 @@
 import { memo } from 'react';
+import { PROFILE_COLORS } from '../../hooks/useProductFiltering';
+
+function getContrastText(hex) {
+    if (!hex) return '#e2e8f0';
+    const c = hex.replace('#', '');
+    const r = parseInt(c.substring(0, 2), 16);
+    const g = parseInt(c.substring(2, 4), 16);
+    const b = parseInt(c.substring(4, 6), 16);
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.6 ? '#0f172a' : '#f1f5f9';
+}
+
+// Lightens (positive) or darkens (negative) a hex color by a percentage
+function shade(hex, percent) {
+    const c = hex.replace('#', '');
+    const r = parseInt(c.substring(0, 2), 16);
+    const g = parseInt(c.substring(2, 4), 16);
+    const b = parseInt(c.substring(4, 6), 16);
+    const amt = Math.round(2.55 * percent);
+    const clamp = v => Math.min(255, Math.max(0, v + amt));
+    return `rgb(${clamp(r)}, ${clamp(g)}, ${clamp(b)})`;
+}
 
 function ProductCard({ product, onClick, selectedColor }) {
     const isProfile = product.category?.toLowerCase().includes('profile');
     const isGlass   = product.category?.toLowerCase().includes('glass');
     const displayGrid = isProfile || isGlass;
     const variantKey  = isProfile ? 'Length' : 'Thickness';
+
+    // Rectangle color reflects the selected color, but only in profile sections
+    const matchedColorHex = isProfile && selectedColor
+        ? PROFILE_COLORS.find(c => c.name.toLowerCase() === selectedColor.toLowerCase())?.hex
+        : null;
+    const rectBackground = matchedColorHex
+        ? `linear-gradient(155deg, ${shade(matchedColorHex, 16)} 0%, ${matchedColorHex} 48%, ${shade(matchedColorHex, -16)} 100%)`
+        : 'linear-gradient(155deg, rgba(255,255,255,0.075) 0%, rgba(255,255,255,0.025) 55%, rgba(255,255,255,0.01) 100%)';
+    const rectTextColor = matchedColorHex ? getContrastText(matchedColorHex) : '#e2e8f0';
+    const isDarkText = rectTextColor === '#0f172a';
 
     // Resolve dynamic pricing based on selected color
     let displayPrice = {
@@ -87,40 +119,33 @@ function ProductCard({ product, onClick, selectedColor }) {
                 </div>
             )}
 
-            {/* Product image */}
-            <div style={{
+            {/* Product tile (color reflects selection in profile sections) */}
+            <div className="product-tile" style={{
                 aspectRatio: '4/3',
                 borderRadius: '0.75rem',
                 overflow: 'hidden',
                 marginBottom: '0.875rem',
-                background: 'rgba(255,255,255,0.04)',
-                border: '1px solid rgba(255,255,255,0.06)',
-                position: 'relative',
+                background: rectBackground,
+                border: '1px solid rgba(255,255,255,0.08)',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.15), inset 0 -8px 16px rgba(0,0,0,0.16), 0 6px 16px rgba(0,0,0,0.2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                padding: '0.65rem',
+                transition: 'background 0.25s ease, box-shadow 0.25s ease',
             }}>
-                {product.image ? (
-                    <img
-                        src={product.image}
-                        alt={product.name}
-                        loading="lazy"
-                        style={{
-                            width: '100%', height: '100%',
-                            objectFit: 'cover',
-                            transition: 'transform 0.4s ease',
-                            mixBlendMode: 'luminosity',
-                            opacity: 0.85,
-                        }}
-                        onMouseEnter={e => { e.target.style.transform = 'scale(1.05)'; e.target.style.opacity = '1'; e.target.style.mixBlendMode = 'normal'; }}
-                        onMouseLeave={e => { e.target.style.transform = ''; e.target.style.opacity = '0.85'; e.target.style.mixBlendMode = 'luminosity'; }}
-                    />
-                ) : (
-                    <div style={{
-                        width: '100%', height: '100%',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: '2rem', opacity: 0.4,
-                    }}>
-                        {isGlass ? '🪟' : isProfile ? '🔩' : '📦'}
-                    </div>
-                )}
+                <span style={{
+                    position: 'relative', zIndex: 1,
+                    fontSize: '0.82rem', fontWeight: 700,
+                    letterSpacing: '0.015em',
+                    color: rectTextColor,
+                    opacity: matchedColorHex ? 1 : 0.6,
+                    textAlign: 'center',
+                    lineHeight: 1.35,
+                    textShadow: isDarkText ? '0 1px 0 rgba(255,255,255,0.45)' : '0 1px 3px rgba(0,0,0,0.5)',
+                    overflow: 'hidden', textOverflow: 'ellipsis',
+                    display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+                }}>
+                    {product.name}
+                </span>
             </div>
 
             {/* Product name */}

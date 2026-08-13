@@ -138,5 +138,46 @@ def change_password(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot change another user's password")
     return userService.password_change(user_id, password_data, db)
 
+@router.post("/{user_id}/admin-reset-password")
+def admin_reset_password(
+    user_id: str,
+    password_data: model.AdminPasswordResetRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
+):
+    """
+    CEO/admin reset of a user's forgotten password. Requires CEO or admin role.
+    """
+    from utils import require_role
+    require_role(["ceo", "admin"], current_user)
+    return userService.admin_reset_password(user_id, password_data.newPassword, db)
+
+@router.put("/{user_id}/role")
+def change_role(
+    user_id: str,
+    role_data: model.RoleChangeRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
+):
+    """
+    Change a user's role. Requires CEO or admin role.
+    """
+    from utils import require_role
+    require_role(["ceo", "admin"], current_user)
+    return userService.update_role(user_id, role_data.role, db)
+
+@router.put("/{user_id}/status")
+def change_status(
+    user_id: str,
+    status_data: model.StatusChangeRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(authService.get_current_user)
+):
+    """
+    Activate or deactivate a user. Requires CEO or admin role.
+    """
+    from utils import require_role
+    require_role(["ceo", "admin"], current_user)
+    return userService.set_active_status(user_id, status_data.isActive, current_user, db)
 
 

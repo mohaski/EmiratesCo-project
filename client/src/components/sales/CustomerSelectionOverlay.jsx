@@ -7,6 +7,13 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
     const [newCustomerPhone, setNewCustomerPhone] = useState('');
     const [newCustomerType, setNewCustomerType] = useState('individual');
     const [isRegistering, setIsRegistering] = useState(false);
+    const [walkInMode, setWalkInMode] = useState(false);
+    const [walkInName, setWalkInName] = useState('');
+
+    const handleWalkInConfirm = () => {
+        if (!walkInName.trim()) return;
+        onSelectCustomer({ id: null, name: walkInName.trim(), type: 'walk-in' });
+    };
 
     const filteredCustomers = useMemo(() => {
         if (!customerSearch) return [];
@@ -164,23 +171,61 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: '0.75rem' }}>
-                            <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '0.875rem', marginBottom: '0.25rem' }}>
-                                <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0 0 0.5rem', fontWeight: 600 }}>Quick Options</p>
-                                <p style={{ fontSize: '0.7rem', color: '#334155', margin: 0, lineHeight: 1.5 }}>
-                                    For customers without registration, use Walk-in. For registered clients, search by name or phone.
-                                </p>
-                            </div>
-                            <button onClick={() => onSelectCustomer({ id: 'walk-in', name: 'Walk-in Customer', type: 'walk-in' })} style={{
-                                padding: '0.875rem', borderRadius: '0.875rem',
-                                background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)',
-                                color: '#60a5fa', fontWeight: 700, fontSize: '0.875rem', cursor: 'pointer',
-                                transition: 'all 0.2s',
-                            }}
-                            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.18)'; }}
-                            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.1)'; }}
-                            >
-                                🚶 Walk-in Customer
-                            </button>
+                            {walkInMode ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                    <label style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                                        Customer's Name
+                                    </label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g. John Doe"
+                                        autoFocus
+                                        style={inputStyle}
+                                        value={walkInName}
+                                        onChange={e => setWalkInName(e.target.value)}
+                                        onKeyDown={e => e.key === 'Enter' && handleWalkInConfirm()}
+                                        onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
+                                        onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                                    />
+                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                        <button onClick={() => { setWalkInMode(false); setWalkInName(''); }} style={{
+                                            flex: 1, padding: '0.75rem', borderRadius: '0.75rem', border: '1px solid rgba(255,255,255,0.1)',
+                                            background: 'transparent', color: '#64748b', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
+                                        }}>
+                                            Cancel
+                                        </button>
+                                        <button onClick={handleWalkInConfirm} disabled={!walkInName.trim()} style={{
+                                            flex: 2, padding: '0.75rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
+                                            background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
+                                            color: '#fff', fontWeight: 800, fontSize: '0.82rem',
+                                            opacity: !walkInName.trim() ? 0.5 : 1,
+                                            transition: 'opacity 0.2s',
+                                        }}>
+                                            Continue →
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <div style={{ padding: '1rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '0.875rem', marginBottom: '0.25rem' }}>
+                                        <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0 0 0.5rem', fontWeight: 600 }}>Quick Options</p>
+                                        <p style={{ fontSize: '0.7rem', color: '#334155', margin: 0, lineHeight: 1.5 }}>
+                                            For customers without registration, use Walk-in — you'll be asked for their name. For registered clients, search by name or phone.
+                                        </p>
+                                    </div>
+                                    <button onClick={() => setWalkInMode(true)} style={{
+                                        padding: '0.875rem', borderRadius: '0.875rem',
+                                        background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)',
+                                        color: '#60a5fa', fontWeight: 700, fontSize: '0.875rem', cursor: 'pointer',
+                                        transition: 'all 0.2s',
+                                    }}
+                                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.18)'; }}
+                                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.1)'; }}
+                                    >
+                                        🚶 Walk-in Customer
+                                    </button>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

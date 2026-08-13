@@ -1,7 +1,7 @@
 # services/order_service.py
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import Depends, HTTPException, Query
@@ -30,10 +30,14 @@ from typing import List
 # ---------------------------------------------------------------------------
 def _order_to_response(order: Order) -> model.OrderResponse:
     """Map ORM → response Pydantic model (centralised)."""
-    customer_name = None
+    customer_name = order.guest_name
+    customer_type = None
+    customer_phone = None
     try:
         if order.customer:
             customer_name = order.customer.name
+            customer_type = order.customer.type
+            customer_phone = order.customer.phoneNumber
     except Exception:
         pass
 
@@ -44,6 +48,8 @@ def _order_to_response(order: Order) -> model.OrderResponse:
         orderId=order.orderId,
         customerId=order.customerid,
         customerName=customer_name,
+        customerType=customer_type,
+        customerPhone=customer_phone,
         amountPaid=amount_paid,
         servedBy=order.servedby,
         parentOrderId=order.parent_orderid,
@@ -78,10 +84,14 @@ def _order_to_response(order: Order) -> model.OrderResponse:
 
 def _order_to_shallow_response(order: Order) -> model.OrderResponse:
     """Map ORM into response Pydantic model WITHOUT loading items (to prevent N+1 list queries)."""
-    customer_name = None
+    customer_name = order.guest_name
+    customer_type = None
+    customer_phone = None
     try:
         if order.customer:
             customer_name = order.customer.name
+            customer_type = order.customer.type
+            customer_phone = order.customer.phoneNumber
     except Exception:
         pass
 
@@ -92,6 +102,8 @@ def _order_to_shallow_response(order: Order) -> model.OrderResponse:
         orderId=order.orderId,
         customerId=order.customerid,
         customerName=customer_name,
+        customerType=customer_type,
+        customerPhone=customer_phone,
         amountPaid=amount_paid,
         servedBy=order.servedby,
         parentOrderId=order.parent_orderid,
@@ -252,6 +264,7 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # 2. Create the Order Shell (Pending totals)
         new_order = Order(
             customerid=order_data.customerId,
+            guest_name=order_data.guestName if not order_data.customerId else None,
             servedby=order_data.servedBy,
             parent_orderid=order_data.parentOrderId,
             source_invoice_id=order_data.sourceInvoiceId,
@@ -728,6 +741,7 @@ def update_order(
         payment_status = "Paid" if is_paid else ("Partial" if total_paid > 0 else "Unpaid")
 
         order.customerid = order_data.customerId
+        order.guest_name = order_data.guestName if not order_data.customerId else None
         order.discount = float(discount_val)
         order.amountPayed = float(total_paid)
         order.subtotal = float(net)
@@ -738,6 +752,10 @@ def update_order(
         order.payment_details = order_data.paymentDetails
         order.VAT_status = order_data.VAT_status
         db.add(order)
+
+        # Keep the order's Credit row (if any) in sync with the recomputed balance
+        from core.financials.PaymentService import _sync_credit_for_order
+        _sync_credit_for_order(db, order)
 
         # ── 6. Write audit record ─────────────────────────────────────────────
         old_total = Decimal(str(before_snapshot["total"]))
@@ -896,6 +914,93 @@ def correct_offcut_for_order_item(
         raise HTTPException(status_code=500, detail="Something went wrong while correcting the offcut. Please try again.")
 
 
+def correct_profile_offcut_for_order_item(
+    order_id: int,
+    item_id: int,
+    line_idx: int,
+    event_idx: int,
+    new_remainder_length: float,
+    replace_source: bool,
+    forced_offcut_id: int | None,
+    notes: str | None,
+    db: Session,
+    current_user,
+) -> dict:
+    """
+    Manager correction for a single 1D (bar/profile) cutting event on a past
+    order — the 1D analogue of correct_offcut_for_order_item. See
+    inventoryService.correct_profile_offcut_event for the actual offcut
+    inventory mutation (remainder-only edit vs. full source replacement).
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+    from core.inventory.inventoryService import correct_profile_offcut_event
+
+    require_role(["manager", "ceo", "admin"], current_user)
+
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    item = db.get(OrderItem, item_id)
+    if not item or item.order_id != order_id:
+        raise HTTPException(status_code=404, detail="Order item not found on this order")
+
+    details = item.details or {}
+    line_items = details.get("lineItems") or []
+    if not (0 <= line_idx < len(line_items)):
+        raise HTTPException(status_code=422, detail="Invalid line_idx for this order item")
+
+    offcut_sources = line_items[line_idx].get("offcut_sources") or []
+    if not (0 <= event_idx < len(offcut_sources)):
+        raise HTTPException(status_code=422, detail="Invalid event_idx for this cutting line")
+
+    event = offcut_sources[event_idx]
+
+    product = db.get(Product, item.product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    variant = db.get(Variant, item.variant_id) if item.variant_id else None
+
+    try:
+        result = correct_profile_offcut_event(
+            db, product, variant, event, new_remainder_length, replace_source, forced_offcut_id,
+        )
+        if result["replacement_event"]:
+            offcut_sources.append(result["replacement_event"])
+
+        item.details = {**details, "lineItems": line_items}
+        flag_modified(item, "details")
+        db.add(item)
+
+        audit = EditHistory(
+            entity_type="profile_offcut_correction",
+            entity_id=order_id,
+            edited_by=current_user.userId,
+            action="correct",
+            before_snapshot={"item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "event": result["before"]},
+            after_snapshot={
+                "item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "event": result["after"],
+                "replacement_event": result["replacement_event"],
+            },
+            notes=notes,
+        )
+        db.add(audit)
+        db.commit()
+        db.refresh(item)
+
+        logger.info(f"Profile offcut corrected for order {order_id} item {item_id} by {current_user.userId}")
+        return result
+    except HTTPException:
+        raise
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error correcting profile offcut for order {order_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Something went wrong while correcting the offcut. Please try again.")
+
+
 def mark_cutting_complete_batch(item_ids: list, db: Session, current_user) -> dict:
     """
     Batch "report finished" action: floor staff don't report each finished cut
@@ -954,11 +1059,12 @@ def get_pending_cutting_items(db: Session, current_user, skip: int = 0, limit: i
     rows = db.exec(stmt).all()
     results = []
     for item, order, product in rows:
-        customer_name = None
+        customer_name = order.guest_name
         try:
-            customer_name = order.customer.name if order.customer else None
+            if order.customer:
+                customer_name = order.customer.name
         except Exception:
-            customer_name = None
+            pass
         results.append({
             "itemId": item.item_id,
             "orderId": order.orderId,
@@ -998,40 +1104,20 @@ def get_audit_history(
     ]
 
 
-def update_order_payment_status(
-    order_id: int,
-    new_status: str,
-    db: Session = Depends(get_session),
-    current_user=Depends(get_current_user)
-) -> model.OrderStatusUpdateResponse:
-    """
-    Update the payment status of an existing order.
-    - Only users with admin or manager roles can update order status.
-    - Returns a structured success message.
-    """
+def get_orders_with_balance(db: Session, skip: int = 0, limit: int = 200) -> list[model.OrderResponse]:
+    """Orders with money still owed — feeds the Cashier's Collect Payments page."""
     try:
-        # 🔐 Ensure user has privilege to update
-        require_role(["manager", "cashier", "ceo", "admin"], current_user)
-
-        order = db.get(Order, order_id)
-        if not order:
-            logger.warning(f"Order {order_id} not found for status update.")
-            raise HTTPException(status_code=404, detail="Order not found")
-
-        order.payment_status = new_status
-        db.add(order)
-        db.commit()
-        db.refresh(order)
-
-        logger.info(f"Order {order_id} payment status updated to {new_status} by user {current_user.userId}.")
-        return model.OrderStatusUpdateResponse(
-            message=f"Order {order_id} payment status updated successfully to {new_status}."
+        statement = (
+            select(Order)
+            .where(Order.balance > 0.01, Order.status != "cancelled")
+            .order_by(Order.created_at.asc())
+            .offset(skip)
+            .limit(limit)
         )
-    except HTTPException:
-        raise
+        orders = db.exec(statement).all()
+        return [_order_to_shallow_response(order) for order in orders]
     except Exception as e:
-        db.rollback()
-        logger.error(f"Error updating order {order_id} payment status: {e}", exc_info=True)
+        logger.error(f"Error retrieving orders with balance: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -1120,6 +1206,8 @@ def cancel_order_with_pin(
             raise HTTPException(status_code=404, detail="Order not found")
         if order.status != "cancelled" and any(oi.cutting_completed_at is not None for oi in order.orderItems):
             raise HTTPException(status_code=400, detail="This order has already been cut and can no longer be edited or cancelled.")
+        if order.status != "cancelled" and datetime.utcnow() - order.created_at > timedelta(days=7):
+            raise HTTPException(status_code=400, detail="This order is more than a week old and can no longer be cancelled.")
 
         _restore_and_cancel(db, order)
         db.commit()

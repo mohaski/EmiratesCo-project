@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import UserRegistrationModal from '../users/UserRegistrationModal';
+import { useOutstandingCredits } from '../../hooks/useOutstandingCredits';
 
 /* ── Mini Sparkline (pure CSS/SVG) ── */
 const Sparkline = ({ data = [], color = '#3b82f6', height = 40 }) => {
@@ -153,6 +154,7 @@ const CeoDashboard = () => {
     const navigate = useNavigate();
     const [showUserReg, setShowUserReg] = useState(false);
     const [period, setPeriod] = useState('week');
+    const { totalDue, count: duesCount } = useOutstandingCredits();
 
     const revenueData = {
         week:  [42, 58, 51, 76, 68, 90, 84],
@@ -188,11 +190,10 @@ const CeoDashboard = () => {
         {
             icon: '⚡',
             label: 'Pending Credits',
-            value: 'KSH 45,000',
-            subtext: '12 accounts',
-            change: '-2.1%',
+            value: `KSH ${totalDue.toLocaleString()}`,
+            subtext: `${duesCount} account${duesCount === 1 ? '' : 's'}`,
             color: '#f59e0b',
-            sparkData: [55, 48, 52, 46, 44, 42, 45],
+            onClick: () => navigate('/dues'),
         },
         {
             icon: '👥',
@@ -419,9 +420,9 @@ const CeoDashboard = () => {
                     { label: 'Avg. Order Value', value: 'KSH 924', icon: '📊', trend: '+8%', color: '#06b6d4' },
                     { label: 'Customer Satisfaction', value: '96.4%', icon: '⭐', trend: '+1.2%', color: '#f59e0b' },
                     { label: 'Stock Turnover', value: '4.2x', icon: '🔄', trend: '+0.3x', color: '#22c55e' },
-                    { label: 'Outstanding Credits', value: 'KSH 45K', icon: '💼', trend: '-2%', color: '#a855f7' },
+                    { label: 'Outstanding Credits', value: `KSH ${totalDue.toLocaleString()}`, icon: '💼', color: '#a855f7', onClick: () => navigate('/dues') },
                 ].map((kpi, i) => (
-                    <div key={i} style={{
+                    <div key={i} onClick={kpi.onClick} style={{
                         background: 'rgba(255,255,255,0.03)',
                         border: '1px solid rgba(255,255,255,0.07)',
                         borderRadius: '1rem',
@@ -430,6 +431,7 @@ const CeoDashboard = () => {
                         alignItems: 'center',
                         gap: '0.875rem',
                         transition: 'all 0.25s ease',
+                        cursor: kpi.onClick ? 'pointer' : 'default',
                     }}
                         onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.transform = ''; }}
@@ -446,12 +448,14 @@ const CeoDashboard = () => {
                             <div style={{ fontSize: '0.65rem', color: '#475569', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{kpi.label}</div>
                             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginTop: '2px' }}>
                                 <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#f1f5f9' }}>{kpi.value}</span>
-                                <span style={{
-                                    fontSize: '0.7rem', fontWeight: 600,
-                                    color: kpi.trend.startsWith('+') ? '#4ade80' : '#f87171',
-                                }}>
-                                    {kpi.trend}
-                                </span>
+                                {kpi.trend && (
+                                    <span style={{
+                                        fontSize: '0.7rem', fontWeight: 600,
+                                        color: kpi.trend.startsWith('+') ? '#4ade80' : '#f87171',
+                                    }}>
+                                        {kpi.trend}
+                                    </span>
+                                )}
                             </div>
                         </div>
                     </div>

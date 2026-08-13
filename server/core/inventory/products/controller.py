@@ -150,6 +150,20 @@ def get_product_offcuts(
 ):
     return service.get_offcuts_for_product(product_id, db, variant_id)
 
+@router.post("/{product_id}/offcuts/bulk", response_model=List[model.OffcutResponse])
+async def add_product_offcuts_bulk(
+    product_id: int,
+    offcuts_data: List[model.OffcutCreate],
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Manager-entered offcuts — leftover pieces measured by hand rather than
+    produced by a cutting job (e.g. found in the yard, never recorded)."""
+    result = service.add_offcuts_bulk(product_id, offcuts_data, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
 @router.post("/{product_id}/glass-cut-preview")
 def preview_glass_cuts(
     product_id: int,

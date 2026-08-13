@@ -6,6 +6,7 @@ import OrderCard from '../components/orders/OrderCard';
 import InvoiceCard from '../components/orders/InvoiceCard';
 import CancelOrderModal from '../components/orders/CancelOrderModal';
 import SetCancelPinModal from '../components/orders/SetCancelPinModal';
+import CuttingQueueSection from '../components/orders/CuttingQueueSection';
 
 export default function OrdersPage() {
     const navigate = useNavigate();
@@ -20,6 +21,7 @@ export default function OrdersPage() {
     const deferredQuery = useDeferredValue(searchQuery);
     const [orderToCancel, setOrderToCancel] = useState(null);
     const [showSetPin, setShowSetPin] = useState(false);
+    const [cuttingQueueCount, setCuttingQueueCount] = useState(0);
     const canSetPin = user?.role === 'ceo' || user?.role === 'admin';
     // Cashier gets Order History back, but read-only + Add To — no edit or cancel
     const canManageOrders = ['manager', 'ceo', 'admin'].includes(user?.role);
@@ -102,6 +104,7 @@ export default function OrdersPage() {
     const tabs = [
         { id: 'orders', label: 'Sales Orders', color: '#3b82f6', count: orders.length },
         { id: 'invoices', label: 'Quotations', color: '#f59e0b', count: invoices.length },
+        { id: 'cutting', label: 'Cutting Queue', color: '#22d3ee', count: cuttingQueueCount },
     ];
 
     return (
@@ -147,22 +150,24 @@ export default function OrdersPage() {
                     }}>🔐 Set Cancel PIN</button>
                 )}
 
-                <div style={{ position: 'relative', minWidth: '280px' }}>
-                    <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: '#475569', fontSize: '0.875rem' }}>🔍</span>
-                    <input
-                        type="text"
-                        placeholder="Search by order ID or customer..."
-                        style={{
-                            width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: '0.75rem', padding: '0.625rem 1rem 0.625rem 2.25rem',
-                            color: '#e2e8f0', fontSize: '0.82rem', outline: 'none', transition: 'border-color 0.2s', boxSizing: 'border-box',
-                        }}
-                        value={searchQuery}
-                        onChange={e => setSearchQuery(e.target.value)}
-                        onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
-                        onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
-                    />
-                </div>
+                {activeTab !== 'cutting' && (
+                    <div style={{ position: 'relative', minWidth: '280px' }}>
+                        <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: '#475569', fontSize: '0.875rem' }}>🔍</span>
+                        <input
+                            type="text"
+                            placeholder="Search by order ID or customer..."
+                            style={{
+                                width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                                borderRadius: '0.75rem', padding: '0.625rem 1rem 0.625rem 2.25rem',
+                                color: '#e2e8f0', fontSize: '0.82rem', outline: 'none', transition: 'border-color 0.2s', boxSizing: 'border-box',
+                            }}
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value)}
+                            onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
+                            onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                        />
+                    </div>
+                )}
             </div>
 
             {/* Tabs */}
@@ -240,6 +245,9 @@ export default function OrdersPage() {
                             </div>
                         )}
                     </div>
+                )}
+                {activeTab === 'cutting' && (
+                    <CuttingQueueSection onCountChange={setCuttingQueueCount} />
                 )}
             </div>
 

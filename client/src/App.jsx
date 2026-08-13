@@ -14,6 +14,7 @@ import PWAPrompt from './components/PWAPrompt';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import ChangePasswordPage from './pages/ChangePasswordPage';
 import Layout from './components/Layout';
 
 // Lazy: every other page is code-split into its own chunk
@@ -29,9 +30,11 @@ const InvoiceGenPage      = lazy(() => import('./pages/InvoiceGenPage'));
 const InvoiceReviewPage   = lazy(() => import('./pages/InvoiceReviewPage'));
 const OrdersPage          = lazy(() => import('./pages/OrdersPage'));
 const OrderSummaryPage    = lazy(() => import('./pages/OrderSummaryPage'));
+const CollectPaymentsPage = lazy(() => import('./pages/CollectPaymentsPage'));
+const DuesPage            = lazy(() => import('./pages/DuesPage'));
 const ToolCheckoutPage    = lazy(() => import('./pages/ToolCheckoutPage'));
 const ManagerToolsPage    = lazy(() => import('./pages/ManagerToolsPage'));
-const CuttingQueuePage    = lazy(() => import('./pages/CuttingQueuePage'));
+const UserManagementPage  = lazy(() => import('./pages/UserManagementPage'));
 
 // Minimal spinner shown during lazy-load transitions
 const PageLoader = () => (
@@ -49,6 +52,9 @@ const ProtectedRoute = ({ children, roles }) => {
   if (loading) return <PageLoader />;
   if (!user) return <Navigate to="/login" />;
   if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
+  if (user.mustChangePassword && window.location.pathname !== '/change-password') {
+    return <Navigate to="/change-password" replace />;
+  }
   return children;
 };
 
@@ -76,6 +82,9 @@ function App() {
                   <Route path="/reset-password"  element={<ResetPassword />} />
 
                   {/* Standalone protected */}
+                  <Route path="/change-password" element={
+                    <ProtectedRoute><ChangePasswordPage /></ProtectedRoute>
+                  } />
                   <Route path="/checkout" element={
                     <ProtectedRoute roles={ROUTE_ROLES['/checkout']}><CheckoutPage /></ProtectedRoute>
                   } />
@@ -95,11 +104,13 @@ function App() {
                     <Route path="/manage-products"     element={<AdminProductsPage />} />
                     <Route path="/orders"              element={<OrdersPage />} />
                     <Route path="/orders/review"       element={<OrderSummaryPage />} />
-                    <Route path="/cutting-queue"       element={<CuttingQueuePage />} />
+                    <Route path="/collect-payments"    element={<CollectPaymentsPage />} />
+                    <Route path="/dues"                element={<DuesPage />} />
                     <Route path="/invoice"             element={<InvoiceGenPage />} />
                     <Route path="/invoice/review"      element={<InvoiceReviewPage />} />
                     <Route path="/tools"               element={<ToolCheckoutPage />} />
                     <Route path="/tools/manage"        element={<ManagerToolsPage />} />
+                    <Route path="/users"               element={<UserManagementPage />} />
                   </Route>
                 </Routes>
               </Suspense>

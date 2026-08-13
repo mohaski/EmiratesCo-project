@@ -467,6 +467,73 @@ def get_offcuts_for_product(
     return db.exec(stmt).all()
 
 
+def add_offcuts_bulk(
+    product_id: int,
+    offcuts_data: List["model.OffcutCreate"],
+    db: Session,
+    current_user=None,
+) -> List["Offcut"]:
+    """Manager-entered offcuts — leftover pieces measured by hand and added straight
+    into the pickable pool, as opposed to the ones a cutting job creates automatically
+    (_upsert_offcut / _upsert_glass_offcut). Doesn't touch product.stock_quantity,
+    which tracks full-unit stock only; offcuts are a separate pool."""
+    from entities.offcuts import Offcut
+
+    require_role(["manager", "ceo", "admin"], current_user)
+
+    product = db.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if not product.track_offcuts:
+        raise HTTPException(status_code=400, detail="This product does not track offcuts")
+    if not offcuts_data:
+        raise HTTPException(status_code=400, detail="At least one offcut is required")
+
+    created = []
+    for row in offcuts_data:
+        if row.quantity < 1:
+            raise HTTPException(status_code=400, detail="quantity must be at least 1")
+        if row.variant_id is not None and db.get(Variant, row.variant_id) is None:
+            raise HTTPException(status_code=404, detail=f"Variant {row.variant_id} not found")
+
+        if product.has_dimensions:
+            if row.width is None or row.height is None or row.width <= 0 or row.height <= 0:
+                raise HTTPException(status_code=400, detail="width and height are required for this product")
+            offcut = Offcut(
+                product_id=product_id, variant_id=row.variant_id,
+                length=0.0, width=row.width, height=row.height,
+                quantity=row.quantity, status="available",
+            )
+        else:
+            if row.length is None or row.length <= 0:
+                raise HTTPException(status_code=400, detail="length is required for this product")
+            offcut = Offcut(
+                product_id=product_id, variant_id=row.variant_id,
+                length=row.length, width=None, height=None,
+                quantity=row.quantity, status="available",
+            )
+        db.add(offcut)
+        created.append(offcut)
+
+    if current_user is not None:
+        from entities.editHistory import EditHistory
+        from uuid import UUID
+        db.add(EditHistory(
+            entity_type='manual_offcut',
+            entity_id=product_id,
+            edited_by=UUID(current_user.userId),
+            action='create',
+            before_snapshot={},
+            after_snapshot={'product_name': product.name, 'count': len(created)},
+            notes=current_user.username,
+        ))
+
+    db.commit()
+    for o in created:
+        db.refresh(o)
+    return created
+
+
 def _consolidate_preview_events(all_events: List[dict], pre_existing_offcut_ids: set) -> List[dict]:
     """
     Merges consumption events that represent the same physical sheet/offcut, for
