@@ -23,8 +23,10 @@ export default function OrdersPage() {
     const [showSetPin, setShowSetPin] = useState(false);
     const [cuttingQueueCount, setCuttingQueueCount] = useState(0);
     const canSetPin = user?.role === 'ceo' || user?.role === 'admin';
-    // Cashier gets Order History back, but read-only + Add To — no edit or cancel
-    const canManageOrders = ['manager', 'ceo', 'admin'].includes(user?.role);
+    const isCeo = user?.role === 'ceo';
+    // CEO is read-only on Sales Orders — no Add To, Edit, or Cancel (mirrors
+    // cashier's existing read-only + Add To, minus the Add To).
+    const canManageOrders = ['manager', 'admin'].includes(user?.role);
 
     // Clear the highlight after a moment so it doesn't linger forever
     useEffect(() => {
@@ -101,10 +103,13 @@ export default function OrdersPage() {
         }
     }), [navigate]);
 
+    // CEO doesn't work quotations or the cutting floor — both tabs are
+    // manager/cashier/admin only (mirrors '/invoice' + '/invoice/review'
+    // already being off-limits to ceo in routePermissions.js).
     const tabs = [
         { id: 'orders', label: 'Sales Orders', color: '#3b82f6', count: orders.length },
-        { id: 'invoices', label: 'Quotations', color: '#f59e0b', count: invoices.length },
-        { id: 'cutting', label: 'Cutting Queue', color: '#22d3ee', count: cuttingQueueCount },
+        ...(isCeo ? [] : [{ id: 'invoices', label: 'Quotations', color: '#f59e0b', count: invoices.length }]),
+        ...(isCeo ? [] : [{ id: 'cutting', label: 'Cutting Queue', color: '#22d3ee', count: cuttingQueueCount }]),
     ];
 
     return (
@@ -210,7 +215,7 @@ export default function OrdersPage() {
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                                     {group.items.map(order => (
-                                        <OrderCard key={order.id} order={order} onAddTo={handleAddTo} onEdit={handleEdit} onCancel={setOrderToCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} canManage={canManageOrders} />
+                                        <OrderCard key={order.id} order={order} onAddTo={isCeo ? undefined : handleAddTo} onEdit={handleEdit} onCancel={setOrderToCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} canManage={canManageOrders} />
                                     ))}
                                 </div>
                             </div>

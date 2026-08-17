@@ -13,7 +13,7 @@ class OrderItemRequest(BaseModel):
 
 class OrderCreate(BaseModel):
     customerId: Optional[int] = None
-    guestName: Optional[str] = None   # walk-in customer's provided name, when customerId is not set
+    customerName: Optional[str] = None   # walk-in customer's provided name, when customerId is not set
     amountPaid: float = 0.0
     # totalAmount is now calculated by backend
     # totalAmount: float = 0.0 
@@ -115,7 +115,7 @@ class OrderCancelRequest(BaseModel):
 class OrderEditRequest(BaseModel):
     """Payload for editing an existing order (replaces items + recalculates)."""
     customerId: Optional[int] = None
-    guestName: Optional[str] = None   # walk-in customer's provided name, when customerId is not set
+    customerName: Optional[str] = None   # walk-in customer's provided name, when customerId is not set
     amountPaid: float = 0.0
     servedBy: UUID
     VAT_status: bool = False
@@ -187,12 +187,27 @@ class MarkCuttingDoneResponse(BaseModel):
     updated: List[int]
 
 class PendingCuttingItem(BaseModel):
-    """One row on the cutting queue — an OrderItem still awaiting a cutting report."""
+    """One still-pending item within a PendingCuttingOrder row."""
     itemId: int
-    orderId: int
-    customerName: Optional[str] = None
     productName: str
     details: Optional[Dict[str, Any]] = None
+
+class PendingCuttingOrder(BaseModel):
+    """One row on the cutting queue — a whole order carrying 1+ items still
+    awaiting a cutting report. The queue is checked off order-by-order, not
+    item-by-item (see mark_cutting_complete_for_orders_batch)."""
+    orderId: int
+    customerName: Optional[str] = None
+    items: List[PendingCuttingItem] = []
+
+class MarkOrdersCuttingDoneRequest(BaseModel):
+    """Order-queue batch report: mark every still-pending item across the given
+    orders as cut, and each order itself as completed."""
+    order_ids: List[int]
+
+class MarkOrdersCuttingDoneResponse(BaseModel):
+    updated_orders: List[int]
+    updated_items: List[int]
 
 class EditHistoryResponse(BaseModel):
     id: int

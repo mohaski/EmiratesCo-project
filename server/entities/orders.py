@@ -1,6 +1,6 @@
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import func, Enum, Column, JSON
-from typing import Optional, List, Dict, Any
+from sqlalchemy import func, Enum, Column
+from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 
@@ -10,8 +10,10 @@ class Order(SQLModel, table=True):
 
     orderId: Optional[int] = Field(default=None, primary_key=True)
     customerid: Optional[int] = Field(default=None, foreign_key="customers.customerId")
-    # Free-text name for unregistered walk-in customers (no Customer row to join to)
-    guest_name: Optional[str] = Field(default=None)
+    # Display name for this order's customer — the walk-in name typed at
+    # checkout for guests, or a snapshot of the registered customer's name.
+    # Always populated, unlike the old guest-only guest_name column.
+    customer_name: Optional[str] = Field(default=None)
 
     # Financials
     amountPayed: float = Field(default=0.0)
@@ -33,9 +35,11 @@ class Order(SQLModel, table=True):
     status: str = Field(sa_column=Column(Enum("pending", "confirmed", "ready", "completed", "cancelled", name="order_status_enum"), default="pending", nullable=False))
     
     # Payment Info
+    # payment_method/payment_details are no longer stored here — the
+    # representative method/split for an order is derived from its Payment
+    # rows (see orderService._latest_payment_method); Payment.payment_details
+    # now carries the split breakdown per payment event instead of once per order.
     payment_status: str = Field(sa_column=Column(Enum("Paid", "Unpaid", "Partial", name="payment_status_enum"), default="Unpaid", nullable=False))
-    payment_method: Optional[str] = Field(default=None) # 'cash', 'mpesa', 'split', 'cheque'
-    payment_details: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON)) # For split payments {cash: 100, mpesa: 200}
 
     # Link back to the invoice this order was created from (null for direct orders)
     source_invoice_id: Optional[int] = Field(default=None, foreign_key="invoices.invoiceId")

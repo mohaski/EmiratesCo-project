@@ -24,7 +24,7 @@ const ReceiptItemRow = ({ item, index }) => (
         </div>
 
         {item.details?.attributes && item.details.attributes.length > 0 && (
-            <div style={{ fontSize: '10px', color: '#333', margin: '1px 0 4px' }}>
+            <div style={{ fontSize: '10px', color: '#000', fontWeight: 700, margin: '1px 0 4px' }}>
                 {item.details.attributes.map((attr, idx) => (
                     <span key={idx}>
                         {idx > 0 && <span style={{ margin: '0 4px' }}>&middot;</span>}
@@ -188,7 +188,7 @@ export default function ReceiptPage() {
 
                                 <div style={{ textAlign: 'center' }}>
                                     <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase' }}>{meta.label} Worksheet</div>
-                                    <div style={{ fontSize: '9.5px', color: '#333', marginTop: '1px' }}>Sheet {sheetIdx + 1} of {visibleBuckets.length}</div>
+                                    <div style={{ fontSize: '9.5px', color: '#000', fontWeight: 700, marginTop: '1px' }}>Sheet {sheetIdx + 1} of {visibleBuckets.length}</div>
                                 </div>
 
                                 <Rule />
@@ -209,12 +209,12 @@ export default function ReceiptPage() {
 
                                 <div style={{ marginTop: '10px' }}>
                                     <div style={{ borderBottom: '1px solid #000', height: '16px' }} />
-                                    <div style={{ fontSize: '9px', color: '#333', margin: '2px 0 8px' }}>CUT BY &middot; DATE</div>
+                                    <div style={{ fontSize: '9px', color: '#000', fontWeight: 700, margin: '2px 0 8px' }}>CUT BY &middot; DATE</div>
                                     <div style={{ borderBottom: '1px solid #000', height: '16px' }} />
-                                    <div style={{ fontSize: '9px', color: '#333', marginTop: '2px' }}>CHECKED BY &middot; DATE</div>
+                                    <div style={{ fontSize: '9px', color: '#000', fontWeight: 700, marginTop: '2px' }}>CHECKED BY &middot; DATE</div>
                                 </div>
 
-                                <div style={{ fontSize: '9px', color: '#333', textAlign: 'center', marginTop: '8px' }}>
+                                <div style={{ fontSize: '9px', color: '#000', fontWeight: 700, textAlign: 'center', marginTop: '8px' }}>
                                     Internal worksheet — not a customer invoice
                                 </div>
                             </div>

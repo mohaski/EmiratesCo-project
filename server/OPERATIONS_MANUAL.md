@@ -7,7 +7,7 @@ _Last verified against the live machine: 2026-08-04._
 ## 1. For shop workers — daily use
 
 1. Turn on the laptop.
-2. **Currently**: sign in with the `emirates` account password (auto-login isn't active yet — see §5 Known Gaps).
+2. **Currently**: sign in with the `emirates` account password (auto-login isn't active yet — see §6 Known Gaps).
 3. Once signed in, open the **EmiratesCo** app (installed as a PWA — a dedicated icon, not a browser tab). If it's not pinned yet, go to `http://127.0.0.1:8000` in Edge and install it (address bar → install icon).
 4. Log into the app itself with your employee account (this is separate from the Windows login).
 
@@ -72,7 +72,29 @@ nssm restart EmiratesCoAPI      # as Administrator — picks up new frontend + b
 
 ---
 
-## 5. Known gaps / open items
+## 5. Setting up a new machine
+
+To bring the app up on a different Windows machine (replacement laptop, second shop, backup box):
+
+```powershell
+git clone https://github.com/mohaski/EmiratesCo-project.git "EmiratesCo project"
+cd "EmiratesCo project\server"
+.\setup_new_machine.ps1   # run as Administrator
+```
+
+This installs Python deps into a venv, writes `.env` (prompts for the Postgres password,
+auto-generates `SECRET_KEY`/`JWT_SECRET_KEY`), creates the Postgres database, builds the
+frontend, and registers the NSSM service — i.e. everything in §4 above, scripted. It
+requires Python, Node.js, PostgreSQL, and NSSM to already be installed (the script checks
+and tells you what's missing). What it does **not** do — because they're one-time,
+machine-specific, UI steps — is PWA install/pinning, the `emirates` account and its NTFS
+lockdown, auto-login, and the screensaver setting; do those manually per §1 and §6 below,
+and set up the nightly backup task (command printed at the end of the script, or see
+`backup_db.ps1`).
+
+---
+
+## 6. Known gaps / open items
 
 - **Auto-login for `emirates` is not currently active.** `AutoAdminLogon` was intentionally turned off when the account was recreated on 2026-08-04, pending you setting your own password and re-enabling it via `netplwiz` (Win+R → `netplwiz` → select `emirates` → uncheck "Users must enter a user name and password" → enter password). Until that's done, workers get a normal Windows password prompt at boot.
 - **PWA install + Startup-folder auto-launch** under the `emirates` profile — needs to be done once, logged in as `emirates` (see §1, step 3, and the Startup folder step: `Win+R` → `shell:startup` → drop the installed app's shortcut there).
@@ -83,11 +105,11 @@ nssm restart EmiratesCoAPI      # as Administrator — picks up new frontend + b
 
 ---
 
-## 6. Quick troubleshooting
+## 7. Quick troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | "Cannot reach the server" in the app | Frontend built with a stale/wrong API URL, or service down | Check `/health`; confirm `client/.env.development.local` isn't leaking into a production build (see git history for the incident on 2026-08-04) |
 | App unreachable after laptop reboot | Service not set to auto-start, or a manual dev server is squatting on port 8000 | `Get-Service EmiratesCoAPI` should show `Running`; never run `uvicorn` manually on port 8000 |
 | `dev.bat` fails with "... was unexpected at this time." | A cmd.exe parenthesis-parsing bug (fixed 2026-08-04) | Should not recur — if it does, check for literal `(` `)` characters inside `echo` lines within an `if (...)` block |
-| Windows asks `emirates` for a password unexpectedly | Either auto-login isn't configured yet (§5), or the machine woke from sleep/lock (password-on-wake is disabled machine-wide, so this shouldn't happen anymore) | See §5 to finish the auto-login setup |
+| Windows asks `emirates` for a password unexpectedly | Either auto-login isn't configured yet (§6), or the machine woke from sleep/lock (password-on-wake is disabled machine-wide, so this shouldn't happen anymore) | See §6 to finish the auto-login setup |

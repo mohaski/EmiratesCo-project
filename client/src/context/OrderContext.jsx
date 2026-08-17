@@ -161,7 +161,7 @@ export const OrderProvider = ({ children }) => {
 
         const payload = {
             customerId: customer?.id ? parseInt(customer.id) : null,
-            guestName: customer?.id ? null : (customer?.name || null),
+            customerName: customer?.id ? null : (customer?.name || null),
             amountPaid: amountPaidNow,
             parentOrderId: parentOrderId ? parseInt(parentOrderId) : null,
             sourceInvoiceId: sourceInvoiceId ? parseInt(sourceInvoiceId) : null,
@@ -190,7 +190,7 @@ export const OrderProvider = ({ children }) => {
 
         const payload = {
             customerId: customer?.id ? parseInt(customer.id) : null,
-            guestName: customer?.id ? null : (customer?.name || null),
+            customerName: customer?.id ? null : (customer?.name || null),
             amountPaid: amountPaidNow,
             servedBy: servedBy || '00000000-0000-0000-0000-000000000000',
             VAT_status: Boolean(totals.tax > 0),

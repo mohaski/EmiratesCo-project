@@ -11,6 +11,7 @@ from entities.orderItems import OrderItem
 from entities.products import Product
 from entities.variants import Variant
 from loggiing import logger
+from utils import ceil_amount
 from . import model
 
 
@@ -178,10 +179,10 @@ def convert_invoice_to_order(
     try:
         discount = Decimal(str(data.discount if data.discount is not None else inv.discount))
         subtotal = Decimal(str(inv.subtotal))
-        net = max(subtotal - discount, Decimal("0.00"))
+        net = ceil_amount(max(subtotal - discount, Decimal("0.00")))
         vat = compute_VAT_amount(net) if inv.vat_enabled else Decimal("0.00")
         final_total = net + vat
-        amount_paid = Decimal(str(data.amount_paid))
+        amount_paid = ceil_amount(Decimal(str(data.amount_paid)))
         balance = final_total - amount_paid
 
         is_paid = balance <= Decimal("0.10")
@@ -196,8 +197,6 @@ def convert_invoice_to_order(
             discount=float(discount),
             amountPayed=float(amount_paid),
             status="confirmed",
-            payment_method=data.payment_method,
-            payment_details=data.payment_details,
             subtotal=float(net),
             total=float(final_total),
             balance=float(balance),
@@ -206,6 +205,21 @@ def convert_invoice_to_order(
 
         db.add(new_order)
         db.flush()  # get orderId
+
+        # Record the payment collected at conversion time (mirrors orderService.create_order)
+        if amount_paid > Decimal("0"):
+            from entities.payments import Payment
+            pay_method = (data.payment_method or "cash").lower()
+            if pay_method not in {"cash", "mpesa", "split", "number"}:
+                pay_method = "cash"
+            db.add(Payment(
+                orderId=new_order.orderId,
+                amount=float(amount_paid),
+                payment_method=pay_method,
+                reason="order",
+                payment_details=data.payment_details,
+                recorded_by=served_by_id,
+            ))
 
         # Build OrderItems from the stored item snapshots
         for item_snap in inv.items:

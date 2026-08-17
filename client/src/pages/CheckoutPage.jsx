@@ -4,6 +4,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
 import { useCartTotals } from '../hooks/useCartTotals';
+import { ceilAmount } from '../utils/money';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 
 /* ── Review Item Card ── */
@@ -69,7 +70,7 @@ const ReviewItemCard = memo(({ item, index, onRemove }) => (
         {/* Total */}
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
             <div style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.01em', fontFamily: 'var(--font-mono)' }}>
-                KSH {item.totalPrice?.toFixed(2)}
+                KSH {Math.ceil(item.totalPrice || 0)}
             </div>
         </div>
 
@@ -186,15 +187,14 @@ export default function CheckoutPage() {
     const { subtotal: rawSubtotal } = useCartTotals(cartItems, enableTax);
 
     const financials = useMemo(() => {
-        const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-        const discountValue = isPartial ? 0 : (parseFloat(discount) || 0);
+        const discountValue = isPartial ? 0 : ceilAmount(parseFloat(discount) || 0);
         const netTaxable = Math.max(0, rawSubtotal - discountValue);
-        const effectiveTax = enableTax ? round2(netTaxable * 0.16) : 0;
-        const total = round2(netTaxable + effectiveTax);
+        const effectiveTax = enableTax ? ceilAmount(netTaxable * 0.16) : 0;
+        const total = netTaxable + effectiveTax;
         const effectiveTotal = mode === 'edit' ? (total - originalTotal) : total;
-        const currentPayable = isPartial ? (parseFloat(amountPaid) || 0) : Math.max(0, effectiveTotal);
-        const balance = Math.max(0, round2(total - ((mode === 'edit' ? originalTotal : 0) + currentPayable)));
-        const mpesaAutoAmount = Math.max(0, round2(currentPayable - (parseFloat(cashAmount) || 0)));
+        const currentPayable = isPartial ? ceilAmount(parseFloat(amountPaid) || 0) : Math.max(0, effectiveTotal);
+        const balance = Math.max(0, ceilAmount(total - ((mode === 'edit' ? originalTotal : 0) + currentPayable)));
+        const mpesaAutoAmount = Math.max(0, ceilAmount(currentPayable - (parseFloat(cashAmount) || 0)));
         return { subtotal: rawSubtotal, tax: effectiveTax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, originalTotal };
     }, [rawSubtotal, enableTax, discount, isPartial, amountPaid, cashAmount, mode, originalTotal]);
 
@@ -480,8 +480,9 @@ export default function CheckoutPage() {
                                     type="number"
                                     value={discount}
                                     onChange={e => setDiscount(e.target.value)}
-                                    placeholder="0.00"
+                                    placeholder="0"
                                     min="0"
+                                    step="1"
                                     style={{
                                         width: '100%', background: 'rgba(255,255,255,0.04)',
                                         border: '1px solid rgba(255,255,255,0.08)',
@@ -534,6 +535,7 @@ export default function CheckoutPage() {
                                 value={amountPaid}
                                 onChange={e => setAmountPaid(e.target.value)}
                                 placeholder="Enter amount..."
+                                step="1"
                                 style={{
                                     width: '100%', background: 'rgba(245,158,11,0.06)',
                                     border: '1px solid rgba(245,158,11,0.25)',
@@ -544,7 +546,7 @@ export default function CheckoutPage() {
                             />
                             {balance > 0 && (
                                 <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b', textAlign: 'right', marginTop: '0.375rem' }}>
-                                    Remaining balance: KSH {balance.toFixed(2)}
+                                    Remaining balance: KSH {balance.toFixed(0)}
                                 </div>
                             )}
                         </div>
@@ -601,6 +603,7 @@ export default function CheckoutPage() {
                                     value={cashAmount}
                                     onChange={e => setCashAmount(e.target.value)}
                                     placeholder="0"
+                                    step="1"
                                     style={{
                                         width: '100%', background: 'rgba(255,255,255,0.05)',
                                         border: '1px solid rgba(255,255,255,0.1)',
@@ -614,7 +617,7 @@ export default function CheckoutPage() {
                                 <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>M-Pesa (auto)</label>
                                 <input
                                     type="number"
-                                    value={mpesaAutoAmount.toFixed(2)}
+                                    value={mpesaAutoAmount.toFixed(0)}
                                     readOnly
                                     style={{
                                         width: '100%', background: 'rgba(255,255,255,0.02)',
@@ -627,7 +630,7 @@ export default function CheckoutPage() {
                             </div>
                             {(parseFloat(cashAmount) || 0) > currentPayable && (
                                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f87171' }}>
-                                    ⚠ Cash exceeds total (max KSH {currentPayable.toFixed(2)})
+                                    ⚠ Cash exceeds total (max KSH {currentPayable.toFixed(0)})
                                 </div>
                             )}
                         </div>
@@ -648,30 +651,30 @@ export default function CheckoutPage() {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                             <span style={{ fontSize: '0.825rem', color: '#475569' }}>Subtotal</span>
-                            <span style={{ fontSize: '0.825rem', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>KSH {subtotal.toFixed(2)}</span>
+                            <span style={{ fontSize: '0.825rem', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>KSH {subtotal.toFixed(0)}</span>
                         </div>
                         {enableTax && (
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                 <span style={{ fontSize: '0.825rem', color: '#475569' }}>VAT (16%)</span>
-                                <span style={{ fontSize: '0.825rem', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>KSH {tax.toFixed(2)}</span>
+                                <span style={{ fontSize: '0.825rem', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>KSH {tax.toFixed(0)}</span>
                             </div>
                         )}
                         {discountValue > 0 && (
                             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                 <span style={{ fontSize: '0.825rem', color: '#22c55e' }}>Discount</span>
-                                <span style={{ fontSize: '0.825rem', color: '#22c55e', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>−KSH {discountValue.toFixed(2)}</span>
+                                <span style={{ fontSize: '0.825rem', color: '#22c55e', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>−KSH {discountValue.toFixed(0)}</span>
                             </div>
                         )}
                         {mode === 'edit' && originalTotal > 0 && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', background: 'rgba(59,130,246,0.08)', padding: '0.375rem 0.625rem', borderRadius: '0.375rem' }}>
                                 <span style={{ fontSize: '0.8rem', color: '#60a5fa' }}>Prior Collection</span>
-                                <span style={{ fontSize: '0.8rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>−KSH {originalTotal.toFixed(2)}</span>
+                                <span style={{ fontSize: '0.8rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>−KSH {originalTotal.toFixed(0)}</span>
                             </div>
                         )}
                         {mode === 'edit' && originalBalance > 0 && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', background: 'rgba(245,158,11,0.08)', padding: '0.375rem 0.625rem', borderRadius: '0.375rem' }}>
                                 <span style={{ fontSize: '0.8rem', color: '#fbbf24' }}>Outstanding Balance</span>
-                                <span style={{ fontSize: '0.8rem', color: '#fbbf24', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>KSH {originalBalance.toFixed(2)}</span>
+                                <span style={{ fontSize: '0.8rem', color: '#fbbf24', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>KSH {originalBalance.toFixed(0)}</span>
                             </div>
                         )}
                         <div style={{ height: '1px', background: 'rgba(255,255,255,0.07)', margin: '0.25rem 0' }} />
@@ -686,7 +689,7 @@ export default function CheckoutPage() {
                                     ? (effectiveTotal >= 0 ? '#fbbf24' : '#60a5fa')
                                     : '#f1f5f9',
                             }}>
-                                KSH {Math.abs(mode === 'edit' ? effectiveTotal : total).toFixed(2)}
+                                KSH {Math.abs(mode === 'edit' ? effectiveTotal : total).toFixed(0)}
                             </span>
                         </div>
                     </div>
@@ -753,8 +756,8 @@ export default function CheckoutPage() {
                         ) : currentPayable === 0
                             ? 'Confirm Credit →'
                             : balance > 0
-                                ? `Confirm & Record Credit · KSH ${currentPayable.toFixed(2)} →`
-                                : editOrderId ? `Update Order · KSH ${total.toFixed(2)} →` : `Confirm Payment · KSH ${total.toFixed(2)} →`
+                                ? `Confirm & Record Credit · KSH ${currentPayable.toFixed(0)} →`
+                                : editOrderId ? `Update Order · KSH ${total.toFixed(0)} →` : `Confirm Payment · KSH ${total.toFixed(0)} →`
                         }
                     </button>
                 </div>

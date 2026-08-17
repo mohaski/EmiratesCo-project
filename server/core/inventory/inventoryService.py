@@ -19,13 +19,8 @@ def _pending_source_notice(db: Session, source_item_id: Optional[int]) -> Option
     producing_item = db.get(OrderItem, source_item_id)
     if not producing_item or producing_item.cutting_completed:
         return None
-    customer_name = None
     order = db.get(Order, producing_item.order_id)
-    if order is not None:
-        try:
-            customer_name = order.customer.name if order.customer else None
-        except Exception:
-            customer_name = None
+    customer_name = order.customer_name if order is not None else None
     return {"order_id": producing_item.order_id, "item_id": producing_item.item_id, "customer_name": customer_name}
 
 
@@ -175,6 +170,12 @@ def _process_line_items(
 
         elif "roll" in l_type or "meter" in l_type:
             _deduct_simple_stock(db, product, variant, qty)
+
+        elif l_type == "accessory-pcs":
+            # Piece sale against a box-packaged variant: qty is a piece count,
+            # stock is tracked in boxes, so deduct the box-equivalent.
+            pieces_per_box = (variant.unit_quantity if variant else None) or 1
+            _deduct_simple_stock(db, product, variant, qty / pieces_per_box)
 
         elif "unit" in l_type:
             _deduct_simple_stock(db, product, variant, qty)
@@ -526,6 +527,10 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
                         remainder = round(full_len - cut_len, 4)
                         if remainder > 0.01:
                             _remove_offcut(db, product, variant, remainder)
+
+        elif l_type == "accessory-pcs":
+            pieces_per_box = (variant.unit_quantity if variant else None) or 1
+            _restore_simple_stock(db, product, variant, qty / pieces_per_box)
 
         elif "roll" in l_type or "meter" in l_type or "unit" in l_type:
             _restore_simple_stock(db, product, variant, qty)

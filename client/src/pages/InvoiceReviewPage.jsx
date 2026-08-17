@@ -177,17 +177,17 @@ export default function InvoiceReviewPage() {
                             <div style={{ width: '240px' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.625rem' }}>
                                     <span style={{ fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>Subtotal</span>
-                                    <span style={{ fontSize: '0.82rem', color: '#1e293b', fontFamily: 'monospace', fontWeight: 600 }}>KSH {totals.grandTotal.toFixed(2)}</span>
+                                    <span style={{ fontSize: '0.82rem', color: '#1e293b', fontFamily: 'monospace', fontWeight: 600 }}>KSH {totals.grandTotal.toFixed(0)}</span>
                                 </div>
                                 {enableTax && (
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.625rem' }}>
                                         <span style={{ fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>VAT (16%)</span>
-                                        <span style={{ fontSize: '0.82rem', color: '#1e293b', fontFamily: 'monospace', fontWeight: 600 }}>KSH {totals.vat.toFixed(2)}</span>
+                                        <span style={{ fontSize: '0.82rem', color: '#1e293b', fontFamily: 'monospace', fontWeight: 600 }}>KSH {totals.vat.toFixed(0)}</span>
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #e2e8f0', paddingTop: '0.75rem', marginTop: '0.375rem' }}>
                                     <span style={{ fontSize: '1.1rem', fontWeight: 900, color: '#0f172a' }}>Total</span>
-                                    <span style={{ fontSize: '1.1rem', fontWeight: 900, color: '#0f172a', fontFamily: 'monospace' }}>KSH {totals.total.toFixed(2)}</span>
+                                    <span style={{ fontSize: '1.1rem', fontWeight: 900, color: '#0f172a', fontFamily: 'monospace' }}>KSH {totals.total.toFixed(0)}</span>
                                 </div>
                             </div>
                         </div>

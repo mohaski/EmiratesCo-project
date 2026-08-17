@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 from fastapi import Depends, HTTPException, Query
 from sqlmodel import Session, select
@@ -11,15 +11,16 @@ from entities.orders import Order
 from entities.orderItems import OrderItem
 from entities.products import Product
 from entities.variants import Variant
+from entities.customers import Customer
 from entities.editHistory import EditHistory
 from entities.invoices import Invoice
 from db.database import get_session
 from loggiing import logger
-from utils import require_role
+from utils import require_role, ceil_amount
 from ..userManagement.authService import get_current_user
 from ..inventory.inventoryService import deduct_stock_for_order_item
 from . import model
-from typing import List
+from typing import List, Optional
 
 
 
@@ -28,14 +29,35 @@ from typing import List
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+def _resolve_customer_name(db: Session, customer_id: Optional[int], provided_name: Optional[str]) -> Optional[str]:
+    """Customer display name to snapshot onto the order: the registered
+    customer's name when one is selected, otherwise whatever name was typed
+    in for the walk-in guest."""
+    if customer_id:
+        customer = db.get(Customer, customer_id)
+        return customer.name if customer else None
+    return provided_name
+
+def _latest_payment_method(order: Order) -> Optional[str]:
+    """Order.payment_method no longer exists — the method shown for an order
+    is whichever Payment against it was recorded most recently (mirrors how
+    order.customer is already lazy-loaded per order in the response builders
+    below; same N+1-per-list-row tradeoff, not a new pattern)."""
+    try:
+        payments = order.payments
+    except Exception:
+        return None
+    if not payments:
+        return None
+    return max(payments, key=lambda p: p.payed_at).payment_method
+
 def _order_to_response(order: Order) -> model.OrderResponse:
     """Map ORM → response Pydantic model (centralised)."""
-    customer_name = order.guest_name
+    customer_name = order.customer_name
     customer_type = None
     customer_phone = None
     try:
         if order.customer:
-            customer_name = order.customer.name
             customer_type = order.customer.type
             customer_phone = order.customer.phoneNumber
     except Exception:
@@ -60,7 +82,7 @@ def _order_to_response(order: Order) -> model.OrderResponse:
         totalAmount=(Decimal(str(amount_paid)) + Decimal(str(balance))),
         discount=order.discount or 0,
         status=order.status,
-        paymentMethod=order.payment_method,
+        paymentMethod=_latest_payment_method(order),
         balance=balance,
         total=order.total or 0,
         source_invoice_id=order.source_invoice_id,
@@ -84,12 +106,11 @@ def _order_to_response(order: Order) -> model.OrderResponse:
 
 def _order_to_shallow_response(order: Order) -> model.OrderResponse:
     """Map ORM into response Pydantic model WITHOUT loading items (to prevent N+1 list queries)."""
-    customer_name = order.guest_name
+    customer_name = order.customer_name
     customer_type = None
     customer_phone = None
     try:
         if order.customer:
-            customer_name = order.customer.name
             customer_type = order.customer.type
             customer_phone = order.customer.phoneNumber
     except Exception:
@@ -114,7 +135,7 @@ def _order_to_shallow_response(order: Order) -> model.OrderResponse:
         totalAmount=(Decimal(str(amount_paid)) + Decimal(str(balance))),
         discount=order.discount or 0,
         status=order.status,
-        paymentMethod=order.payment_method,
+        paymentMethod=_latest_payment_method(order),
         balance=balance,
         total=order.total or 0,
         source_invoice_id=order.source_invoice_id,
@@ -127,7 +148,7 @@ def _order_to_shallow_response(order: Order) -> model.OrderResponse:
 
 def compute_VAT_amount(subtotal: Decimal) -> Decimal:
     vat = subtotal * Decimal("0.16")  # 16% VAT
-    return vat.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return ceil_amount(vat)
 
 def _calculate_complex_item_total(
     item_req: model.OrderItemRequest, 
@@ -264,7 +285,7 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # 2. Create the Order Shell (Pending totals)
         new_order = Order(
             customerid=order_data.customerId,
-            guest_name=order_data.guestName if not order_data.customerId else None,
+            customer_name=_resolve_customer_name(db, order_data.customerId, order_data.customerName),
             servedby=order_data.servedBy,
             parent_orderid=order_data.parentOrderId,
             source_invoice_id=order_data.sourceInvoiceId,
@@ -273,8 +294,6 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
             discount=order_data.discount,
             amountPayed=order_data.amountPaid,
             status=order_data.status or "confirmed",
-            payment_method=order_data.paymentMethod,
-            payment_details=order_data.paymentDetails,
             subtotal=0.0,
             balance=0.0,
             total=0.0
@@ -301,7 +320,7 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         calculated_subtotal = Decimal("0.00")
 
         for item_req in order_data.items:
-            item_total = _calculate_complex_item_total(item_req, db, products_cache, variants_cache)
+            item_total = ceil_amount(_calculate_complex_item_total(item_req, db, products_cache, variants_cache))
 
             store_unit_price = item_total
             if item_req.quantity > 0:
@@ -328,8 +347,7 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
 
         # 3. Apply Financials to Order
         discount_val = Decimal(str(order_data.discount or 0))
-        net_subtotal = calculated_subtotal - discount_val
-        if net_subtotal < 0: net_subtotal = Decimal("0.00")
+        net_subtotal = ceil_amount(max(calculated_subtotal - discount_val, Decimal("0.00")))
 
         if new_order.VAT_status:
             vat_amount = compute_VAT_amount(net_subtotal)
@@ -337,9 +355,9 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         else:
             final_total = net_subtotal
 
-        amount_paid_val = Decimal(str(order_data.amountPaid or 0))
+        amount_paid_val = ceil_amount(Decimal(str(order_data.amountPaid or 0)))
         raw_balance = final_total - amount_paid_val
-        new_balance = raw_balance if raw_balance > Decimal("0.10") else Decimal("0.00")
+        new_balance = ceil_amount(raw_balance) if raw_balance > Decimal("0.10") else Decimal("0.00")
 
         new_order.subtotal = float(net_subtotal)
         new_order.total = float(final_total)
@@ -382,6 +400,8 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
                 orderId=new_order.orderId,
                 amount=float(order_data.amountPaid),
                 payment_method=pay_method,
+                reason="order",
+                payment_details=order_data.paymentDetails,
                 recorded_by=current_user.userId,
             )
             db.add(new_payment_rec)
@@ -699,7 +719,7 @@ def update_order(
         new_items_snapshot = []
 
         for item_req in order_data.items:
-            item_total = _calculate_complex_item_total(item_req, db, products_cache, variants_cache)
+            item_total = ceil_amount(_calculate_complex_item_total(item_req, db, products_cache, variants_cache))
 
             store_unit_price = item_total / Decimal(item_req.quantity) if item_req.quantity > 0 else item_total
             final_details = dict(item_req.details or {})
@@ -727,12 +747,12 @@ def update_order(
 
         # ── 5. Recalculate totals ─────────────────────────────────────────────
         discount_val = Decimal(str(order_data.discount or 0))
-        net = max(calculated_subtotal - discount_val, Decimal("0.00"))
+        net = ceil_amount(max(calculated_subtotal - discount_val, Decimal("0.00")))
         vat = compute_VAT_amount(net) if order_data.VAT_status else Decimal("0.00")
         final_total = net + vat
 
         # Accumulate payments: add the new payment on top of what was already collected
-        new_payment = Decimal(str(order_data.amountPaid))
+        new_payment = ceil_amount(Decimal(str(order_data.amountPaid)))
         prior_paid = Decimal(str(order.amountPayed or 0))
         total_paid = min(prior_paid + new_payment, final_total)
         new_balance = max(final_total - total_paid, Decimal("0.00"))
@@ -741,15 +761,13 @@ def update_order(
         payment_status = "Paid" if is_paid else ("Partial" if total_paid > 0 else "Unpaid")
 
         order.customerid = order_data.customerId
-        order.guest_name = order_data.guestName if not order_data.customerId else None
+        order.customer_name = _resolve_customer_name(db, order_data.customerId, order_data.customerName)
         order.discount = float(discount_val)
         order.amountPayed = float(total_paid)
         order.subtotal = float(net)
         order.total = float(final_total)
         order.balance = float(new_balance)
         order.payment_status = payment_status
-        order.payment_method = order_data.paymentMethod
-        order.payment_details = order_data.paymentDetails
         order.VAT_status = order_data.VAT_status
         db.add(order)
 
@@ -802,6 +820,8 @@ def update_order(
                 orderId=order_id,
                 amount=float(new_payment),
                 payment_method=pay_method,
+                reason="order",
+                payment_details=order_data.paymentDetails,
                 recorded_by=current_user.userId,
             )
             db.add(edit_payment_rec)
@@ -1027,50 +1047,77 @@ def mark_cutting_complete_batch(item_ids: list, db: Session, current_user) -> di
     return {"updated": updated}
 
 
-def mark_cutting_complete_for_order(order_id: int, db: Session, current_user) -> dict:
-    """Whole-order convenience wrapper — marks every still-pending item on this
-    order done in one call (e.g. the cashier reporting "this order's been cut")."""
+def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current_user) -> dict:
+    """
+    Order-queue batch action: the queue is checked off a whole order at a time,
+    not one item at a time — floor staff confirm an entire order's cutting is
+    done, so every still-pending item across the given orders is flipped
+    cutting_completed=True/cutting_completed_at=now() (offcuts sourced from them
+    stop carrying a pending_source_notice — see glassOffcutService._apply_candidate,
+    which keys off OrderItem.cutting_completed directly), and each order itself
+    is moved to status="completed" in the same pass. Silently skips order ids
+    that don't exist.
+    """
     require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
+    orders = db.exec(select(Order).where(Order.orderId.in_(order_ids))).all()
+    now = datetime.utcnow()
+    updated_items = []
+    updated_orders = []
+    for order in orders:
+        for item in order.orderItems:
+            if not item.cutting_completed:
+                item.cutting_completed = True
+                item.cutting_completed_at = now
+                db.add(item)
+                updated_items.append(item.item_id)
+        order.status = "completed"
+        db.add(order)
+        updated_orders.append(order.orderId)
+
+    db.commit()
+    return {"updated_orders": updated_orders, "updated_items": updated_items}
+
+
+def mark_cutting_complete_for_order(order_id: int, db: Session, current_user) -> dict:
+    """Single-order convenience wrapper around mark_cutting_complete_for_orders_batch
+    (e.g. the cashier reporting "this order's been cut" from the order summary page)."""
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    item_ids = [oi.item_id for oi in order.orderItems if not oi.cutting_completed]
-    if not item_ids:
-        return {"updated": []}
-    return mark_cutting_complete_batch(item_ids, db, current_user)
+    result = mark_cutting_complete_for_orders_batch([order_id], db, current_user)
+    return {"updated": result["updated_items"]}
 
 
-def get_pending_cutting_items(db: Session, current_user, skip: int = 0, limit: int = 100) -> list:
+def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: int = 100) -> list:
     """
-    Items still awaiting a cutting report — order id/customer/product name plus
-    the lineItems needed to render CuttingInstructions, for the cutting-queue page.
+    Orders with at least one item still awaiting a cutting report — the queue is
+    checked off a whole order at a time (see mark_cutting_complete_for_orders_batch),
+    so each row here is one order carrying every one of its still-pending items
+    (id/product name/lineItems needed to render CuttingInstructions), not one row
+    per item.
     """
     require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
     stmt = (
-        select(OrderItem, Order, Product)
-        .join(Order, OrderItem.order_id == Order.orderId)
-        .join(Product, OrderItem.product_id == Product.productId)
+        select(Order)
+        .join(OrderItem, OrderItem.order_id == Order.orderId)
         .where(OrderItem.cutting_completed == False, Order.status != "cancelled")  # noqa: E712
+        .distinct()
         .order_by(Order.created_at.asc())
         .offset(skip).limit(limit)
     )
-    rows = db.exec(stmt).all()
+    orders = db.exec(stmt).all()
     results = []
-    for item, order, product in rows:
-        customer_name = order.guest_name
-        try:
-            if order.customer:
-                customer_name = order.customer.name
-        except Exception:
-            pass
+    for order in orders:
+        pending_items = [oi for oi in order.orderItems if not oi.cutting_completed]
         results.append({
-            "itemId": item.item_id,
             "orderId": order.orderId,
-            "customerName": customer_name,
-            "productName": product.name,
-            "details": item.details,
+            "customerName": order.customer_name,
+            "items": [
+                {"itemId": oi.item_id, "productName": oi.product.name, "details": oi.details}
+                for oi in pending_items
+            ],
         })
     return results
 

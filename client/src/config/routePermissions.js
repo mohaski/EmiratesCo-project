@@ -10,8 +10,10 @@ export const ROUTE_ROLES = {
     '/invoice/review':      ['manager', 'cashier'],
     '/orders':              ['manager', 'cashier', 'ceo', 'admin'],
     '/orders/review':       ['manager', 'cashier', 'ceo', 'admin'],
-    '/collect-payments':    ['cashier', 'manager', 'admin'],
-    '/dues':                ['ceo', 'manager', 'admin'],
+    // Cashier's standalone "Collect Debt" entry — manager/ceo/admin get it
+    // merged with Dues Follow-Up under '/debt-management' instead (see below).
+    '/collect-payments':    ['cashier'],
+    '/debt-management':     ['ceo', 'manager', 'admin'],
     '/inventory':           ['cashier', 'manager'],
     '/add-product':         ['admin', 'ceo'],
     '/manage-products':     ['admin', 'ceo'],

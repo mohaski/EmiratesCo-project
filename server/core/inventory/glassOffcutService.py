@@ -779,13 +779,8 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
         if locked.source_item_id:
             producing_item = db.get(OrderItem, locked.source_item_id)
             if producing_item and not producing_item.cutting_completed:
-                customer_name = None
                 order = db.get(Order, producing_item.order_id)
-                if order is not None:
-                    try:
-                        customer_name = order.customer.name if order.customer else None
-                    except Exception:
-                        customer_name = None
+                customer_name = order.customer_name if order is not None else None
                 pending_source_notice = {
                     "order_id": producing_item.order_id, "item_id": producing_item.item_id,
                     "customer_name": customer_name,

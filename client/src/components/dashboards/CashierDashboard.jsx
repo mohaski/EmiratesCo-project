@@ -25,7 +25,7 @@ const CashierDashboard = () => {
         { label: 'New Sale', sub: 'Start a new transaction', icon: '⚡', path: '/sales', primary: true, color: '#3b82f6' },
         { label: 'Order History', sub: 'View past transactions', icon: '📋', path: '/orders', color: '#a855f7' },
         { label: 'Invoice', sub: 'Generate invoices', icon: '🧾', path: '/invoice', color: '#22c55e' },
-        { label: 'Collect Payments', sub: 'Record a follow-up payment', icon: '💰', path: '/collect-payments', color: '#f59e0b' },
+        { label: 'Collect Debt', sub: 'Record a follow-up payment', icon: '💰', path: '/collect-payments', color: '#f59e0b' },
     ];
 
     const recentTransactions = [

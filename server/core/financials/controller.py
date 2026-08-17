@@ -35,8 +35,7 @@ async def create_payment(
         payment_data.paymentMethod,
         db,
         current_user,
-        payment_data.numberUsed,
-        payment_data.transactionRef,
+        payment_data.paymentDetails,
     )
     background_tasks.add_task(manager.broadcast, "orders_updated")
     return result

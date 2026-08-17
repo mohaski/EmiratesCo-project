@@ -1,13 +1,12 @@
 import { useState, useMemo } from 'react';
 import api from '../../services/api';
+import { ceilAmount } from '../../utils/money';
 
 const METHODS = [
     { id: 'cash', label: 'Cash', icon: '💵' },
     { id: 'mpesa', label: 'M-Pesa', icon: '📱' },
     { id: 'split', label: 'Split', icon: '⚖️' },
 ];
-
-const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export default function PaymentModal({ order, onClose, onSuccess }) {
     const balance = order.balance || 0;
@@ -17,12 +16,12 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState(null);
 
-    const parsedAmount = parseFloat(amount) || 0;
+    const parsedAmount = ceilAmount(parseFloat(amount) || 0);
     const cashExceedsAmount = paymentMethod === 'split' && (parseFloat(cashAmount) || 0) > parsedAmount;
     const isValid = parsedAmount > 0 && parsedAmount <= balance + 0.1 && !cashExceedsAmount;
 
     const remainingAfter = useMemo(() => Math.max(0, balance - parsedAmount), [balance, parsedAmount]);
-    const mpesaAutoAmount = useMemo(() => Math.max(0, round2(parsedAmount - (parseFloat(cashAmount) || 0))), [parsedAmount, cashAmount]);
+    const mpesaAutoAmount = useMemo(() => Math.max(0, ceilAmount(parsedAmount - (parseFloat(cashAmount) || 0))), [parsedAmount, cashAmount]);
 
     const handleSubmit = async () => {
         if (!isValid || submitting) return;
@@ -33,6 +32,7 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                 orderId: order.id,
                 amount: parsedAmount,
                 paymentMethod,
+                paymentDetails: paymentMethod === 'split' ? { cash: parseFloat(cashAmount) || 0, mpesa: mpesaAutoAmount } : null,
             });
             onSuccess?.();
         } catch (err) {
@@ -60,7 +60,7 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
             >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
                     <div>
-                        <h2 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Collect Payment</h2>
+                        <h2 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Collect Debt</h2>
                         <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.25rem 0 0' }}>Order #{order.id} · {order.customer?.name}</p>
                     </div>
                     <button onClick={onClose} style={{
@@ -100,7 +100,7 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                     onChange={e => setAmount(e.target.value)}
                     min="0"
                     max={balance}
-                    step="0.01"
+                    step="1"
                     style={{
                         width: '100%', boxSizing: 'border-box', background: 'rgba(255,255,255,0.05)',
                         border: '1px solid rgba(255,255,255,0.12)', borderRadius: '0.75rem',
@@ -161,7 +161,7 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                             <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>M-Pesa (auto)</label>
                             <input
                                 type="number"
-                                value={mpesaAutoAmount.toFixed(2)}
+                                value={mpesaAutoAmount.toFixed(0)}
                                 readOnly
                                 style={{
                                     width: '100%', boxSizing: 'border-box', background: 'rgba(255,255,255,0.02)',
@@ -173,7 +173,7 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                         </div>
                         {cashExceedsAmount && (
                             <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f87171' }}>
-                                ⚠ Cash exceeds amount collecting (max KSH {parsedAmount.toFixed(2)})
+                                ⚠ Cash exceeds amount collecting (max KSH {parsedAmount.toFixed(0)})
                             </div>
                         )}
                     </div>

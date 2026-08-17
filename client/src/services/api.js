@@ -106,18 +106,27 @@ export const OrderService = {
         });
         return response.data;
     },
-    /** Batch-report a set of OrderItems as cut. Used by both the cutting-queue
-     * multi-select page and OrderSummaryPage's single-item quick-mark. */
+    /** Batch-report a set of OrderItems as cut. Used by OrderSummaryPage's
+     * single-item quick-mark. */
     markCuttingDone: async (itemIds) => {
         const response = await api.put('/orders/cutting-queue/mark-done', { item_ids: itemIds });
         return response.data;
     },
-    /** Marks every still-pending item on one order as cut, in one call. */
+    /** Marks every still-pending item on one order as cut, and the order itself
+     * as completed, in one call. */
     markOrderCuttingDone: async (orderId) => {
         const response = await api.put(`/orders/${orderId}/mark-cutting-done`);
         return response.data;
     },
-    /** Items still awaiting a cutting report, for the cutting-queue page. */
+    /** Order-queue batch report: marks every still-pending item across the given
+     * orders as cut, and each order as completed. Used by the cutting-queue
+     * multi-select page (whole orders, not individual items). */
+    markOrdersCuttingDone: async (orderIds) => {
+        const response = await api.put('/orders/cutting-queue/mark-orders-done', { order_ids: orderIds });
+        return response.data;
+    },
+    /** Orders with at least one item still awaiting a cutting report, for the
+     * order-level cutting-queue page. */
     getCuttingQueue: async (skip = 0, limit = 100) => {
         const response = await api.get(`/orders/cutting-queue?skip=${skip}&limit=${limit}`);
         return response.data;
@@ -262,7 +271,8 @@ export const AttributeService = {
 };
 
 export const FinancialService = {
-    /** paymentData: { orderId, amount, paymentMethod, numberUsed?, transactionRef? } */
+    /** paymentData: { orderId, amount, paymentMethod, paymentDetails? } — paymentDetails is the
+     * cash/mpesa split breakdown (e.g. { cash: 100, mpesa: 200 }), only meaningful when paymentMethod is 'split'. */
     createPayment: async (paymentData) => {
         const response = await api.post('/financials/payments', paymentData);
         return response.data;

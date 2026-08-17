@@ -32,13 +32,13 @@ const CuttingInstructionLine1D = ({ src, theme, renderActions }) => (
                     ? <span>Cut <strong>{fmtLen(src.length_used)}</strong> from <strong>Offcut #{src.offcut_id}</strong> ({fmtLen(src.offcut_length)} available)</span>
                     : <span>Cut <strong>{fmtLen(src.length_used)}</strong> from a <strong>new bar</strong></span>
                 }
-                {src.superseded && <span style={{ color: theme.dim }}> — replaced</span>}
+                {src.superseded && <span style={{ color: theme.dim, fontWeight: theme.dimWeight }}> — replaced</span>}
             </div>
             {renderActions && renderActions(src)}
         </div>
         {src.pending_source_notice && <PendingSourceNotice notice={src.pending_source_notice} theme={theme} />}
         {src.remainder_created > 0 && (
-            <div style={{ fontSize: '9.5px', color: theme.dim, marginTop: '2px' }}>
+            <div style={{ fontSize: '9.5px', color: theme.dim, fontWeight: theme.dimWeight, marginTop: '2px' }}>
                 &gt;&gt; {fmtLen(src.remainder_created)} to stock
             </div>
         )}
@@ -108,7 +108,7 @@ const CutSketch = ({ src, theme }) => {
                         <rect x={m.x} y={m.y} width={m.width} height={m.height}
                             fill="none" stroke={theme.dim} strokeWidth={strokeW}
                             strokeDasharray={r.status === 'scrap' ? `${strokeW * 2},${strokeW * 2}` : undefined} />
-                        <DimLabels m={m} color={theme.dim} weight="400" />
+                        <DimLabels m={m} color={theme.dim} weight={theme.dimWeight} />
                     </g>
                 );
             })}
@@ -144,12 +144,12 @@ const CuttingInstructionLine2D = ({ src, theme, renderActions }) => {
                 {groups.map((g, i) => (
                     <div key={i}>
                         Cut <strong>{g.count > 1 ? `${g.count} x ` : ''}{fmtMm(g.width)} x {fmtMm(g.height)}</strong>
-                        {g.rotated && <span style={{ color: theme.dim }}> (rotated to fit)</span>}
+                        {g.rotated && <span style={{ color: theme.dim, fontWeight: theme.dimWeight }}> (rotated to fit)</span>}
                     </div>
                 ))}
                 {src.pending_source_notice && <PendingSourceNotice notice={src.pending_source_notice} theme={theme} />}
                 {(src.remainders_created || []).map((r, i) => (
-                    <div key={i} style={{ fontSize: '9.5px', color: theme.dim, marginTop: '2px' }}>
+                    <div key={i} style={{ fontSize: '9.5px', color: theme.dim, fontWeight: theme.dimWeight, marginTop: '2px' }}>
                         {r.status === 'scrap'
                             ? <>&gt;&gt; {fmtMm(r.width)} x {fmtMm(r.height)} waste</>
                             : <>&gt;&gt; {fmtMm(r.width)} x {fmtMm(r.height)} to stock{r.is_popular ? ' ★ popular size' : ''}</>

@@ -61,6 +61,9 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [cutLength, setCutLength] = useState(initialDetails?.cutLength || '');
     const [qty, setQty] = useState(initialDetails?.qty || 1);
     const [salesMode] = useState(initialDetails?.salesMode || 'roll');
+    // 'box' | 'pcs' — only meaningful when the active variant is packaged (has both
+    // unitQuantity = pieces per box and priceUnit = price per single piece set).
+    const [saleUnit, setSaleUnit] = useState(initialDetails?.saleUnit || 'box');
 
     const rollOptions = product.rollOptions || (product.priceRoll ? [{ label: 'Standard Roll', length: product.rollLength, price: product.priceRoll }] : []);
     const hasRollOption = rollOptions.length > 0 && !hasVariants;
@@ -98,25 +101,39 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
             if (totalCutPrice > 0) lineItems.push({ type: 'accessory-cut', label: `Cut ${l}${activeItem.unit || ''}`, qty: 1, rate: pCut * l, total: totalCutPrice, meta: { length: l, unit: activeItem.unit || '' } });
             onUpdate(total, { lineItems, attributes: attributesDetail, qtyFull, qtyHalf, cutLength: l > 0 ? l : null, cutQty: 1, trackOffcuts: true, variantId: hasVariants && selectedVariant ? (selectedVariant.variantId || selectedVariant.id) : null, isValid, warning: finalError });
         } else {
+            const canSellPcs = !!(activeItem.unitQuantity > 0 && activeItem.priceUnit > 0);
+            const effectiveSaleUnit = canSellPcs ? saleUnit : 'box';
             if (hasRollOption && salesMode === 'roll') {
                 const price = selectedRoll?.price || 0;
                 total = qty * price;
                 lineItems.push({ type: 'accessory-roll', label: selectedRoll?.label || 'Roll', qty, rate: price, total, meta: { length: selectedRoll?.length } });
                 attributesDetail.push({ label: 'Roll Type', value: selectedRoll?.label });
             } else {
-                const price = activeItem.price || activeItem.priceFull || 0;
-                total = qty * price;
-                if (qty > stock) { finalError = `Only ${stock} items available`; isValid = false; }
-                lineItems.push({ type: 'accessory-unit', label: 'Quantity', qty, rate: price, total, meta: { unit: activeItem.unit } });
+                if (effectiveSaleUnit === 'pcs') {
+                    const price = activeItem.priceUnit || 0;
+                    total = qty * price;
+                    const availablePcs = stock * activeItem.unitQuantity;
+                    if (qty > availablePcs) { finalError = `Only ${availablePcs} pcs available`; isValid = false; }
+                    lineItems.push({ type: 'accessory-pcs', label: 'Pieces', qty, rate: price, total, meta: { unit: 'pcs', unitQuantity: activeItem.unitQuantity } });
+                } else {
+                    const price = activeItem.price || activeItem.priceFull || 0;
+                    total = qty * price;
+                    if (qty > stock) { finalError = `Only ${stock} boxes available`; isValid = false; }
+                    lineItems.push({ type: 'accessory-unit', label: 'Quantity', qty, rate: price, total, meta: { unit: activeItem.unit } });
+                }
             }
-            onUpdate(total, { lineItems, attributes: attributesDetail, qty, salesMode, selectedRoll, variantId: activeItem.variantId || activeItem.id, isValid, warning: finalError });
+            onUpdate(total, { lineItems, attributes: attributesDetail, qty, salesMode, saleUnit: effectiveSaleUnit, selectedRoll, variantId: activeItem.variantId || activeItem.id, isValid, warning: finalError });
         }
         setError(finalError);
-    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, selectedRoll, hasRollOption, onUpdate]);
+    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, saleUnit, selectedRoll, hasRollOption, onUpdate]);
 
     const handleVariantSelect = (key, val) => setSelections(prev => ({ ...prev, [key]: val }));
     const activeItem = selectedVariant || product;
     const trackOffcuts = activeItem.trackOffcuts || activeItem.track_offcuts || product.trackOffcuts || product.track_offcuts;
+    const canSellPcs = !!(activeItem.unitQuantity > 0 && activeItem.priceUnit > 0);
+    // Falls back to 'box' if the active variant doesn't support piece sales (e.g. user
+    // switched to a different, unpackaged variant) without needing an effect to reset it.
+    const effectiveSaleUnit = canSellPcs ? saleUnit : 'box';
 
     const chipBtn = (active) => ({
         padding: '0.3rem 0.875rem', borderRadius: '100px', fontSize: '0.72rem', fontWeight: 700,
@@ -193,15 +210,34 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
             ) : (
                 /* Simple qty */
                 <div style={{ ...sectionStyle, textAlign: 'center', padding: '1.5rem 1rem' }}>
-                    <p style={{ ...labelStyle, marginBottom: '1rem', display: 'block' }}>{hasRollOption ? 'Number of Rolls' : 'Quantity'}</p>
+                    {canSellPcs && !hasRollOption && (
+                        <div style={{ display: 'flex', justifyContent: 'center', gap: '0.375rem', marginBottom: '0.875rem' }}>
+                            <button onClick={() => { setSaleUnit('box'); setQty(1); }} style={chipBtn(saleUnit === 'box')}>Box</button>
+                            <button onClick={() => { setSaleUnit('pcs'); setQty(0); }} style={chipBtn(saleUnit === 'pcs')}>Pcs</button>
+                        </div>
+                    )}
+                    <p style={{ ...labelStyle, marginBottom: '1rem', display: 'block' }}>
+                        {hasRollOption ? 'Number of Rolls' : (effectiveSaleUnit === 'pcs' ? 'Pieces' : 'Quantity')}
+                    </p>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
-                        <button onClick={() => setQty(Math.max(1, qty - 1))} style={{ width: '44px', height: '44px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer', background: 'rgba(255,255,255,0.06)', color: '#94a3b8', fontSize: '1.25rem', fontWeight: 700 }}>-</button>
-                        <span style={{ fontSize: '2.5rem', fontWeight: 900, fontFamily: 'var(--font-mono)', color: '#f1f5f9', width: '80px', textAlign: 'center' }}>{qty}</span>
+                        <button onClick={() => setQty(Math.max(0, qty - 1))} style={{ width: '44px', height: '44px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer', background: 'rgba(255,255,255,0.06)', color: '#94a3b8', fontSize: '1.25rem', fontWeight: 700 }}>-</button>
+                        <input type="number" value={qty === 0 ? '' : qty} onChange={e => setQty(e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0))} placeholder="0"
+                            style={{
+                                fontSize: '2.5rem', fontWeight: 900, fontFamily: 'var(--font-mono)', color: '#f1f5f9',
+                                width: '110px', textAlign: 'center', background: 'transparent', border: 'none', outline: 'none',
+                            }} />
                         <button onClick={() => setQty(qty + 1)} style={{ width: '44px', height: '44px', borderRadius: '10px', border: 'none', cursor: 'pointer', background: 'rgba(34,197,94,0.15)', color: '#4ade80', fontSize: '1.25rem', fontWeight: 700 }}>+</button>
                     </div>
                     <p style={{ fontSize: '0.78rem', color: '#4ade80', fontFamily: 'var(--font-mono)', marginTop: '0.5rem' }}>
-                        KSH{activeItem.price || activeItem.priceFull || 0} per {activeItem.unit || 'unit'}
+                        {effectiveSaleUnit === 'pcs'
+                            ? `KSH${activeItem.priceUnit || 0} per pc`
+                            : `KSH${activeItem.price || activeItem.priceFull || 0} per ${canSellPcs ? 'box' : (activeItem.unit || 'unit')}`}
                     </p>
+                    {canSellPcs && (
+                        <p style={{ fontSize: '0.68rem', color: '#475569', marginTop: '0.25rem' }}>
+                            1 Box = {activeItem.unitQuantity} pcs · {(activeItem.stock * activeItem.unitQuantity).toLocaleString()} pcs available
+                        </p>
+                    )}
                     {hasRollOption && <p style={{ fontSize: '0.68rem', color: '#475569', marginTop: '0.25rem' }}>Roll Length: {product.rollLength}m</p>}
                 </div>
             )}

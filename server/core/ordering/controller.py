@@ -71,15 +71,19 @@ def get_orders_with_balance(
     return orderService.get_orders_with_balance(db, skip, limit)
 
 
-@router.get("/cutting-queue", response_model=List[model.PendingCuttingItem])
+@router.get("/cutting-queue", response_model=List[model.PendingCuttingOrder])
 def get_cutting_queue(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
-    """Items still awaiting a cutting report, for the cutting-queue batch-report screen."""
-    return orderService.get_pending_cutting_items(db, current_user, skip, limit)
+    """Orders with at least one item still awaiting a cutting report, for the
+    order-level cutting-queue batch-report screen. CEO doesn't work the cutting
+    floor — kept out of this queue (unlike the shared per-item/per-order
+    mark-done endpoints below, still used from OrderSummaryPage)."""
+    require_role(["manager", "cashier", "admin"], current_user)
+    return orderService.get_pending_cutting_orders(db, current_user, skip, limit)
 
 
 @router.put("/cutting-queue/mark-done", response_model=model.MarkCuttingDoneResponse)
@@ -89,11 +93,29 @@ async def mark_cutting_done(
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
-    """Batch-report a set of items as cut — used by the cutting-queue page (multi-select)
-    and by OrderSummaryPage's single-item quick-mark (a 1-element list)."""
+    """Batch-report a set of items as cut — used by OrderSummaryPage's
+    single-item quick-mark (a 1-element list)."""
     result = orderService.mark_cutting_complete_batch(body.item_ids, db, current_user)
     background_tasks.add_task(manager.broadcast, "cutting_status_updated")
     return model.MarkCuttingDoneResponse(updated=result["updated"])
+
+
+@router.put("/cutting-queue/mark-orders-done", response_model=model.MarkOrdersCuttingDoneResponse)
+async def mark_orders_cutting_done(
+    body: model.MarkOrdersCuttingDoneRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Order-queue batch-report: mark every still-pending item across the given
+    orders as cut, and each of those orders as completed — used by the
+    cutting-queue page (multi-select of whole orders). CEO kept out, same as
+    the queue's GET above."""
+    require_role(["manager", "cashier", "admin"], current_user)
+    result = orderService.mark_cutting_complete_for_orders_batch(body.order_ids, db, current_user)
+    background_tasks.add_task(manager.broadcast, "cutting_status_updated")
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    return model.MarkOrdersCuttingDoneResponse(**result)
 
 
 # ---------------------------------------------------------------------------
@@ -174,9 +196,11 @@ async def mark_order_cutting_done(
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
-    """Whole-order report: marks every still-pending item on this order as cut in one call."""
+    """Whole-order report: marks every still-pending item on this order as cut,
+    and the order itself as completed, in one call."""
     result = orderService.mark_cutting_complete_for_order(order_id, db, current_user)
     background_tasks.add_task(manager.broadcast, "cutting_status_updated")
+    background_tasks.add_task(manager.broadcast, "orders_updated")
     return model.MarkCuttingDoneResponse(updated=result["updated"])
 
 

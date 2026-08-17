@@ -25,7 +25,7 @@ const ManagerDashboard = () => {
         { label: 'New Sale', sub: 'Start a new transaction', icon: '⚡', path: '/sales', primary: true, color: '#3b82f6' },
         { label: 'Order History', sub: 'View past transactions', icon: '📋', path: '/orders', color: '#a855f7' },
         { label: 'Invoice', sub: 'Generate invoices', icon: '🧾', path: '/invoice', color: '#22c55e' },
-        { label: 'Collect Dues', sub: 'Follow up outstanding balances', icon: '💼', path: '/dues', color: '#f59e0b' },
+        { label: 'Debt Management', sub: 'Collect payments & follow up balances', icon: '💼', path: '/debt-management', color: '#f59e0b' },
         { label: 'Tool Tracking', sub: 'Workers, tools & return status', icon: '🧰', path: '/tools/manage', color: '#06b6d4' },
     ];
 

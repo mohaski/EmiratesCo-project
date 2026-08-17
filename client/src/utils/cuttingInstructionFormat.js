@@ -2,8 +2,11 @@
 // printed worksheet (ReceiptPage, always black-on-white for thermal print)
 // and the manager-facing order review screen (OrderSummaryPage, dark theme).
 
-export const RECEIPT_THEME = { border: '#000', dim: '#333', label: 'inherit' };
-export const REVIEW_THEME = { border: 'rgba(255,255,255,0.12)', dim: '#94a3b8', label: '#64748b' };
+// dim/dimWeight: thermal printers render gray, normal-weight text too faint to
+// read — the receipt theme uses solid black + bold so "dim" only means
+// "secondary", not "hard to print".
+export const RECEIPT_THEME = { border: '#000', dim: '#000', label: 'inherit', dimWeight: 700 };
+export const REVIEW_THEME = { border: 'rgba(255,255,255,0.12)', dim: '#94a3b8', label: '#64748b', dimWeight: 400 };
 
 export const fmtLen = (n) => {
     const num = parseFloat(n);

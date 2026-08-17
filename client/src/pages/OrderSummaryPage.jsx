@@ -85,7 +85,7 @@ const ItemRow = ({ item, canCorrectOffcuts, canMarkCuttingDone, onCorrect, onMar
                 }}>Mark Done</button>
             )}
             <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#f1f5f9', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>
-                KSH {item.totalPrice.toFixed(2)}
+                KSH {item.totalPrice.toFixed(0)}
             </div>
         </div>
 
@@ -108,7 +108,7 @@ const ItemRow = ({ item, canCorrectOffcuts, canMarkCuttingDone, onCorrect, onMar
                         </span>
                         <span style={{ color: '#64748b', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>×{li.qty}</span>
                         <span style={{ color: '#64748b', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>@KSH{(li.rate || 0).toFixed(2)}</span>
-                        <span style={{ color: '#cbd5e1', fontWeight: 700, fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', minWidth: '70px', textAlign: 'right' }}>KSH{(li.total || 0).toFixed(2)}</span>
+                        <span style={{ color: '#cbd5e1', fontWeight: 700, fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', minWidth: '70px', textAlign: 'right' }}>KSH{Math.ceil(li.total || 0)}</span>
                     </div>
                 ))}
             </div>
@@ -348,13 +348,13 @@ export default function OrderSummaryPage() {
                     </Card>
 
                     <Card title="Totals">
-                        <Row label="Subtotal" value={`KSH ${(order.subtotal || 0).toFixed(2)}`} />
-                        {order.discount > 0 && <Row label="Discount" value={`- KSH ${order.discount.toFixed(2)}`} />}
-                        {order.VAT_status && <Row label="VAT" value={`KSH ${vatAmount.toFixed(2)}`} />}
+                        <Row label="Subtotal" value={`KSH ${(order.subtotal || 0).toFixed(0)}`} />
+                        {order.discount > 0 && <Row label="Discount" value={`- KSH ${order.discount.toFixed(0)}`} />}
+                        {order.VAT_status && <Row label="VAT" value={`KSH ${vatAmount.toFixed(0)}`} />}
                         <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', margin: '0.5rem 0' }} />
-                        <Row label="Total" value={`KSH ${(order.total || 0).toFixed(2)}`} strong />
-                        <Row label="Paid" value={`KSH ${(order.amountPaid || 0).toFixed(2)}`} />
-                        <Row label="Balance Due" value={`KSH ${(order.balance || 0).toFixed(2)}`} strong={order.balance > 0} />
+                        <Row label="Total" value={`KSH ${(order.total || 0).toFixed(0)}`} strong />
+                        <Row label="Paid" value={`KSH ${(order.amountPaid || 0).toFixed(0)}`} />
+                        <Row label="Balance Due" value={`KSH ${(order.balance || 0).toFixed(0)}`} strong={order.balance > 0} />
                     </Card>
                 </div>
             </div>

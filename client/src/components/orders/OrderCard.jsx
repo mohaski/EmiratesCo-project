@@ -127,7 +127,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, h
                 }}
                 onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; }}
                 onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
-                >💰 Collect Payment</button>
+                >💰 Collect Debt</button>
             )}
             {!isCancelled && canManage && onCancel && !orderTooOldToCancel && (
                 <button onClick={() => onCancel(order)} style={{

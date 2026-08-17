@@ -31,7 +31,7 @@ const InvoiceReviewPage   = lazy(() => import('./pages/InvoiceReviewPage'));
 const OrdersPage          = lazy(() => import('./pages/OrdersPage'));
 const OrderSummaryPage    = lazy(() => import('./pages/OrderSummaryPage'));
 const CollectPaymentsPage = lazy(() => import('./pages/CollectPaymentsPage'));
-const DuesPage            = lazy(() => import('./pages/DuesPage'));
+const DebtManagementPage  = lazy(() => import('./pages/DebtManagementPage'));
 const ToolCheckoutPage    = lazy(() => import('./pages/ToolCheckoutPage'));
 const ManagerToolsPage    = lazy(() => import('./pages/ManagerToolsPage'));
 const UserManagementPage  = lazy(() => import('./pages/UserManagementPage'));
@@ -105,7 +105,7 @@ function App() {
                     <Route path="/orders"              element={<OrdersPage />} />
                     <Route path="/orders/review"       element={<OrderSummaryPage />} />
                     <Route path="/collect-payments"    element={<CollectPaymentsPage />} />
-                    <Route path="/dues"                element={<DuesPage />} />
+                    <Route path="/debt-management"     element={<DebtManagementPage />} />
                     <Route path="/invoice"             element={<InvoiceGenPage />} />
                     <Route path="/invoice/review"      element={<InvoiceReviewPage />} />
                     <Route path="/tools"               element={<ToolCheckoutPage />} />

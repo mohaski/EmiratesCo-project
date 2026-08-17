@@ -193,7 +193,7 @@ const CeoDashboard = () => {
             value: `KSH ${totalDue.toLocaleString()}`,
             subtext: `${duesCount} account${duesCount === 1 ? '' : 's'}`,
             color: '#f59e0b',
-            onClick: () => navigate('/dues'),
+            onClick: () => navigate('/debt-management'),
         },
         {
             icon: '👥',
@@ -420,7 +420,7 @@ const CeoDashboard = () => {
                     { label: 'Avg. Order Value', value: 'KSH 924', icon: '📊', trend: '+8%', color: '#06b6d4' },
                     { label: 'Customer Satisfaction', value: '96.4%', icon: '⭐', trend: '+1.2%', color: '#f59e0b' },
                     { label: 'Stock Turnover', value: '4.2x', icon: '🔄', trend: '+0.3x', color: '#22c55e' },
-                    { label: 'Outstanding Credits', value: `KSH ${totalDue.toLocaleString()}`, icon: '💼', color: '#a855f7', onClick: () => navigate('/dues') },
+                    { label: 'Outstanding Credits', value: `KSH ${totalDue.toLocaleString()}`, icon: '💼', color: '#a855f7', onClick: () => navigate('/debt-management') },
                 ].map((kpi, i) => (
                     <div key={i} onClick={kpi.onClick} style={{
                         background: 'rgba(255,255,255,0.03)',

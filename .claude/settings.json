@@ -140,7 +140,17 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('core/ordering/orderService.py', encoding='utf-8'\\).read\\(\\)\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('core/inventory/inventoryService.py', encoding='utf-8'\\).read\\(\\)\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('core/ordering/model.py', encoding='utf-8'\\).read\\(\\)\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('core/ordering/controller.py', encoding='utf-8'\\).read\\(\\)\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('core/ordering/controller.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "PowerShell(cd \"c:\\\\Users\\\\mohas\\\\Desktop\\\\EmiratesCo project\\\\server\"; powershell.exe -ExecutionPolicy Bypass -File .\\\\backup_db.ps1)",
+      "Bash(python migrate_payment_reason_and_split.py)",
+      "Bash(nssm restart *)",
+      "PowerShell(Restart-Service EmiratesCoAPI)",
+      "PowerShell(Get-Process -Id 16860)",
+      "PowerShell(\\(Get-Process -Id 16860\\).StartTime)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId=16860\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('core/ordering/orderService.py'\\).read\\(\\)\\); ast.parse\\(open\\('core/ordering/model.py'\\).read\\(\\)\\); ast.parse\\(open\\('core/ordering/controller.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(node --check src/components/orders/CuttingQueueSection.jsx)",
+      "Bash(python migrate_rename_guest_name_to_customer_name.py)"
     ],
     "additionalDirectories": [
       "C:\\Users\\mohas\\AppData\\Local\\Temp"

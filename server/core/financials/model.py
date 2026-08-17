@@ -1,12 +1,12 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 
 class RecordPaymentRequest(BaseModel):
     orderId: int
     amount: float
     paymentMethod: str
-    numberUsed: Optional[str] = None
-    transactionRef: Optional[str] = None
+    # Split breakdown for this payment event, e.g. {"cash": 100, "mpesa": 200} — only meaningful when paymentMethod == "split"
+    paymentDetails: Optional[Dict[str, Any]] = None
 
 
 class RecordPaymentResponse(BaseModel):

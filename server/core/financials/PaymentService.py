@@ -8,7 +8,7 @@ from sqlmodel import Session, select
 from loggiing import logger
 from sqlalchemy import func
 from datetime import datetime
-from utils import require_role
+from utils import require_role, ceil_amount
 
 from . import model
 
@@ -121,27 +121,35 @@ def record_payment(
     payment_method: str,
     db: Session,
     current_user,
-    number_used: str | None = None,
-    transaction_ref: str | None = None,
+    payment_details: dict | None = None,
 ) -> model.RecordPaymentResponse:
     """
-    Single transactional entry point for "money was collected against this order":
-    creates the Payment row, recomputes Order.amountPayed/balance/payment_status,
-    and syncs the associated Credit row — all in one commit.
+    Single transactional entry point for "money was collected against this
+    order" AFTER checkout — this is the Collect Payments / Dues page path,
+    never the initial order-creation payment (that's recorded inline by
+    orderService.create_order/update_order instead), so every Payment row
+    created here is tagged reason='debt'. Creates the Payment row, recomputes
+    Order.amountPayed/balance/payment_status, and syncs the associated Credit
+    row — all in one commit.
     """
     require_role(["cashier", "manager", "ceo", "admin"], current_user)
 
     try:
+        if amount is None or amount <= 0:
+            raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+
         order = db.exec(select(Order).where(Order.orderId == order_id)).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         if order.status == "cancelled":
             raise HTTPException(status_code=400, detail="Cannot record a payment against a cancelled order")
 
-        if amount is None or amount <= 0:
-            raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
         if amount > (order.balance or 0) + 0.10:
             raise HTTPException(status_code=400, detail="Payment exceeds the outstanding balance")
+
+        # Ceil to a whole currency unit, but never past what's actually owed
+        # (rounding up a near-full payment must not manufacture a negative balance).
+        amount = min(float(ceil_amount(amount)), order.balance or amount)
 
         pay_method = (payment_method or "cash").lower()
         if pay_method not in {"cash", "mpesa", "split", "number"}:
@@ -151,8 +159,8 @@ def record_payment(
             orderId=order_id,
             amount=amount,
             payment_method=pay_method,
-            number_used=number_used,
-            transaction_ref=transaction_ref,
+            reason="debt",
+            payment_details=payment_details,
             recorded_by=current_user.userId,
         )
         db.add(new_payment)

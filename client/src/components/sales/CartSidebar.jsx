@@ -174,14 +174,14 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                     <div style={{ marginBottom: '0.875rem', paddingBottom: '0.875rem', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#475569', marginBottom: '4px' }}>
                             <span>Original Paid</span>
-                            <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{originalTotal.toFixed(2)}</span>
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{originalTotal.toFixed(0)}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span style={{ fontSize: '0.78rem', fontWeight: 700, color: isOwing ? '#fbbf24' : isRefund ? '#60a5fa' : '#4ade80' }}>
                                 {isOwing ? 'Balance Due' : isRefund ? 'Refund Due' : 'Balanced'}
                             </span>
                             <span style={{ fontSize: '1.1rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: isOwing ? '#fbbf24' : isRefund ? '#60a5fa' : '#4ade80' }}>
-                                {isBalanced ? '✓' : `KSH${Math.abs(balance).toFixed(2)}`}
+                                {isBalanced ? '✓' : `KSH${Math.abs(balance).toFixed(0)}`}
                             </span>
                         </div>
                     </div>
@@ -208,12 +208,12 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                                     }} />
                                 </button>
                             </div>
-                            <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{subTotal.toFixed(2)}</span>
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{subTotal.toFixed(0)}</span>
                         </div>
                         {enableTax && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem', color: '#64748b', marginBottom: '0.375rem' }}>
                                 <span>VAT (16%)</span>
-                                <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{vat.toFixed(2)}</span>
+                                <span style={{ fontFamily: 'var(--font-mono)' }}>KSH{vat.toFixed(0)}</span>
                             </div>
                         )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: '0.625rem', borderTop: '1px solid rgba(255,255,255,0.07)', marginTop: '0.375rem' }}>

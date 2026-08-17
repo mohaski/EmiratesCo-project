@@ -53,7 +53,7 @@ const InvoiceItemRow = ({ item, index, productDef }) => {
                 )}
             </td>
             <td style={{ padding: '12px 0', textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, color: '#1e293b', verticalAlign: 'top', fontSize: '0.875rem' }}>
-                {item.totalPrice.toFixed(2)}
+                {Math.ceil(item.totalPrice || 0)}
             </td>
         </tr>
     );
