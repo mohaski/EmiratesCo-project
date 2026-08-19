@@ -17,15 +17,35 @@ const LeaderRow = ({ left, right }) => (
     </div>
 );
 
-const ReceiptItemRow = ({ item, index }) => (
+// Labels that only ever describe a variant's SIZE/pack, not its physical
+// identity (glass sheet "Dimensions", profile/accessory bar "Length" — see
+// server/core/inventory/poolKey.py). Once a cut is involved, the actual
+// source is whatever the pooled offcut engine picked — shown accurately by
+// CuttingInstructions below — so the nominal variant's own size is not just
+// redundant but can be outright misleading (a pooled offcut may come from a
+// differently-sized sheet/bar entirely). Kept for a pure full-sheet/full-bar
+// line, which has no CuttingInstructions of its own (full sales aren't cut —
+// see inventoryService.py's dispatcher) and where the size is the only way
+// to tell which physical stock to pull, since a product can stock more than
+// one sheet size per thickness.
+const SIZE_ONLY_LABELS = new Set(['Dimensions', 'Length']);
+
+const ReceiptItemRow = ({ item, index }) => {
+    const hasPooledCut = (item.details?.lineItems || []).some(li => {
+        const t = li.type || '';
+        return t === 'glass-cut' || t.includes('cut') || t.includes('half');
+    });
+    const visibleAttributes = (item.details?.attributes || []).filter(attr => !hasPooledCut || !SIZE_ONLY_LABELS.has(attr.label));
+
+    return (
     <div>
         <div style={{ fontWeight: 700, marginTop: '6px' }}>
             {String(index + 1).padStart(2, '0')} &middot; {item.name}
         </div>
 
-        {item.details?.attributes && item.details.attributes.length > 0 && (
+        {visibleAttributes.length > 0 && (
             <div style={{ fontSize: '10px', color: '#000', fontWeight: 700, margin: '1px 0 4px' }}>
-                {item.details.attributes.map((attr, idx) => (
+                {visibleAttributes.map((attr, idx) => (
                     <span key={idx}>
                         {idx > 0 && <span style={{ margin: '0 4px' }}>&middot;</span>}
                         {attr.label}: {attr.value}
@@ -44,7 +64,8 @@ const ReceiptItemRow = ({ item, index }) => (
             </div>
         ))}
     </div>
-);
+    );
+};
 
 const Rule = ({ dashed = true, style }) => (
     <div style={{ borderTop: dashed ? '1px dashed #000' : '1px solid #000', margin: '8px 0', ...style }} />
@@ -137,7 +158,7 @@ export default function ReceiptPage() {
                 onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)'; }}>
                     ← Back to Orders
                 </button>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                     {loadError && <span style={{ color: '#f87171', fontSize: '0.78rem', fontWeight: 600 }}>{loadError}</span>}
                     {isLoading && <span style={{ color: '#64748b', fontSize: '0.82rem' }}>Preparing receipt…</span>}
                     <button onClick={handlePrint} disabled={isLoading} style={{
@@ -167,7 +188,7 @@ export default function ReceiptPage() {
                             <div
                                 className="receipt-tape print:shadow-none"
                                 style={{
-                                    width: TAPE_WIDTH, background: '#ffffff', color: '#000000',
+                                    width: `min(${TAPE_WIDTH}, 100%)`, boxSizing: 'border-box', background: '#ffffff', color: '#000000',
                                     fontFamily: MONO, fontSize: '11.5px', lineHeight: 1.5,
                                     padding: '14px 12px', boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
                                 }}

@@ -26,13 +26,14 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem',
         }}>
             <div style={{
-                width: '100%', maxWidth: '580px',
+                width: '100%', maxWidth: '580px', maxHeight: 'min(680px, 92vh)',
                 background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
                 border: '1px solid rgba(245,158,11,0.15)', borderRadius: '1.5rem', overflow: 'hidden',
                 boxShadow: '0 32px 80px rgba(0,0,0,0.7)', animation: 'fadeInScale 0.2s ease',
+                display: 'flex', flexDirection: 'column',
             }}>
                 {/* Header */}
-                <div style={{ padding: '1.75rem 2rem 1.25rem', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                <div style={{ padding: '1.75rem 2rem 1.25rem', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.375rem' }}>
                         <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>📄</div>
                         <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Invoice Details</h2>
@@ -40,7 +41,7 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
                     <p style={{ fontSize: '0.78rem', color: '#475569', margin: 0 }}>Who is this quotation for?</p>
                 </div>
 
-                <div style={{ padding: '1.5rem 2rem' }}>
+                <div style={{ padding: '1.5rem 2rem', overflowY: 'auto' }} className="custom-scrollbar">
                     {/* Search existing */}
                     <div style={{ marginBottom: '1.25rem' }}>
                         <label style={labelStyle}>Search Client</label>
@@ -84,7 +85,7 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
                     </div>
 
                     {/* New client */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
                         <div>
                             <label style={labelStyle}>New Client</label>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>

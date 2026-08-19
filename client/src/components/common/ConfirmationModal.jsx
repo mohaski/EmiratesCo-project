@@ -18,7 +18,7 @@ export default function ConfirmationModal({ isOpen, onClose, onConfirm, title, m
                 animation: 'fadeInScale 0.2s ease',
             }}>
                 {/* Icon + Title */}
-                <div style={{
+                <div className="modal-header-pad" style={{
                     padding: '1.5rem 1.75rem 1.25rem',
                     borderBottom: '1px solid rgba(255,255,255,0.07)',
                     background: isDanger ? 'linear-gradient(135deg, rgba(239,68,68,0.07), rgba(0,0,0,0))' : 'linear-gradient(135deg, rgba(59,130,246,0.07), rgba(0,0,0,0))',
@@ -34,10 +34,10 @@ export default function ConfirmationModal({ isOpen, onClose, onConfirm, title, m
                     </div>
                 </div>
 
-                <div style={{ padding: '1.25rem 1.75rem 1.5rem' }}>
+                <div className="modal-body-pad" style={{ padding: '1.25rem 1.75rem 1.5rem' }}>
                     <p style={{ fontSize: '0.875rem', color: '#64748b', lineHeight: 1.6, margin: '0 0 1.5rem' }}>{message}</p>
 
-                    <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                    <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                         <button onClick={onClose} style={{
                             padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
                             background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)',

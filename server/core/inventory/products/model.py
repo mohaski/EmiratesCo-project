@@ -29,7 +29,7 @@ class CategoryResponse(BaseModel):
 
 class VariantCreate(BaseModel):
     attributes: Dict[str, Any] = {}
-    stock_quantity: float = 0.0
+    stock_quantity: int = 0
     price: float = 0.0
     price_half: Optional[float] = None
     price_unit: Optional[float] = None
@@ -52,7 +52,7 @@ class VariantResponse(BaseModel):
     variantId: int
     name: Optional[str]
     attributes: Dict[str, Any]
-    stock_quantity: float
+    stock_quantity: int
     price: float
     price_half: Optional[float]
     price_unit: Optional[float]
@@ -84,6 +84,11 @@ class ProductCreate(BaseModel):
 
     applicable_attributes: List[str] = []
     has_dimensions: bool = False
+    # Which of applicable_attributes (plus "Dimensions" when has_dimensions=True) to
+    # ignore when deciding whether two variants share an offcut/stock pool — see
+    # core/inventory/poolKey.py. None keeps the automatic rule (ignore "Dimensions"
+    # and any custom-typed attribute); explicit (even []) always wins from then on.
+    pool_ignored_attributes: Optional[List[str]] = None
 
     # 2D (glass) offcut tuning — required when has_dimensions=True (see
     # service.create_product's validation); ignored for 1D/simple products.
@@ -137,6 +142,7 @@ class ProductResponse(BaseModel):
 
     applicable_attributes: List[str] = []
     has_dimensions: bool = False
+    pool_ignored_attributes: Optional[List[str]] = None
 
     min_usable_dimension: Optional[float] = None
     allow_rotation: bool = True

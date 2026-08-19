@@ -92,7 +92,7 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
     );
 
     return (
-        <div style={{ padding: '1.5rem 2rem' }}>
+        <div style={{ padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 4vw, 2rem)' }}>
             {error && (
                 <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', padding: '0.75rem 1rem', borderRadius: '0.75rem', fontSize: '0.8rem', fontWeight: 600, marginBottom: '1rem' }}>
                     {error}
@@ -112,7 +112,8 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
                     background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
                     borderRadius: '1rem', overflow: 'hidden',
                 }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <div className="table-scroll">
+                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '760px' }}>
                         <thead>
                             <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                                 <SortHeader field="customerName" label="Customer" />
@@ -165,6 +166,7 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
                             })}
                         </tbody>
                     </table>
+                    </div>
                 </div>
             )}
         </div>

@@ -150,7 +150,19 @@
       "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId=16860\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('core/ordering/orderService.py'\\).read\\(\\)\\); ast.parse\\(open\\('core/ordering/model.py'\\).read\\(\\)\\); ast.parse\\(open\\('core/ordering/controller.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
       "Bash(node --check src/components/orders/CuttingQueueSection.jsx)",
-      "Bash(python migrate_rename_guest_name_to_customer_name.py)"
+      "Bash(python migrate_rename_guest_name_to_customer_name.py)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), f\\) for f in ['entities/stockInputSession.py','core/inventory/stockSessions/model.py','core/inventory/stockSessions/service.py','core/inventory/stockSessions/controller.py']]\")",
+      "Bash(python -c \"import main\")",
+      "Bash(python -c \"import main; print\\('IMPORT_OK'\\)\")",
+      "Bash(python -c \"import main; schema = main.app.openapi\\(\\); print\\([p for p in schema['paths'] if 'stock-sessions' in p]\\); print\\('OPENAPI_OK'\\)\")",
+      "Bash(python migrate_stock_input_session_offcuts.py)",
+      "Bash(python -c \"import main; print\\('BACKEND_OK'\\)\")",
+      "Bash(nssm status *)",
+      "Bash(powershell -Command \"Get-Service EmiratesCoAPI\")",
+      "PowerShell(Restart-Service -Name EmiratesCoAPI)",
+      "PowerShell(Get-Service -Name EmiratesCoAPI)",
+      "Read(//c//**)",
+      "Bash(echo \"EXIT_CODE=$?\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\mohas\\AppData\\Local\\Temp"

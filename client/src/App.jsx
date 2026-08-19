@@ -23,8 +23,7 @@ const CheckoutPage        = lazy(() => import('./pages/CheckoutPage'));
 const ReceiptPage         = lazy(() => import('./pages/ReceiptPage'));
 const DashboardPage       = lazy(() => import('./pages/DashboardPage'));
 const InventoryPage       = lazy(() => import('./pages/InventoryPage'));
-const AddProductPage      = lazy(() => import('./pages/AddProductPage'));
-const AdminProductsPage   = lazy(() => import('./pages/AdminProductsPage'));
+const ProductManagementPage = lazy(() => import('./pages/ProductManagementPage'));
 const RoleSelectionPage   = lazy(() => import('./pages/RoleSelectionPage'));
 const InvoiceGenPage      = lazy(() => import('./pages/InvoiceGenPage'));
 const InvoiceReviewPage   = lazy(() => import('./pages/InvoiceReviewPage'));
@@ -35,6 +34,7 @@ const DebtManagementPage  = lazy(() => import('./pages/DebtManagementPage'));
 const ToolCheckoutPage    = lazy(() => import('./pages/ToolCheckoutPage'));
 const ManagerToolsPage    = lazy(() => import('./pages/ManagerToolsPage'));
 const UserManagementPage  = lazy(() => import('./pages/UserManagementPage'));
+const ActivityLogPage     = lazy(() => import('./pages/ActivityLogPage'));
 
 // Minimal spinner shown during lazy-load transitions
 const PageLoader = () => (
@@ -100,8 +100,7 @@ function App() {
                     <Route path="/"                    element={<DashboardPage />} />
                     <Route path="/sales"               element={<SalesDashboard />} />
                     <Route path="/inventory"           element={<InventoryPage />} />
-                    <Route path="/add-product"         element={<AddProductPage />} />
-                    <Route path="/manage-products"     element={<AdminProductsPage />} />
+                    <Route path="/product-management"  element={<ProductManagementPage />} />
                     <Route path="/orders"              element={<OrdersPage />} />
                     <Route path="/orders/review"       element={<OrderSummaryPage />} />
                     <Route path="/collect-payments"    element={<CollectPaymentsPage />} />
@@ -111,6 +110,7 @@ function App() {
                     <Route path="/tools"               element={<ToolCheckoutPage />} />
                     <Route path="/tools/manage"        element={<ManagerToolsPage />} />
                     <Route path="/users"               element={<UserManagementPage />} />
+                    <Route path="/activity"             element={<ActivityLogPage />} />
                   </Route>
                 </Routes>
               </Suspense>

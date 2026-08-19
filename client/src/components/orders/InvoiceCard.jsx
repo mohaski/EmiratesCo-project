@@ -59,7 +59,7 @@ const InvoiceCard = memo(({ invoice, onView, onConvert, highlighted }) => {
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             {invoice.status !== 'converted' && (
                 <button onClick={() => onConvert(invoice)} style={{
                     padding: '0.5rem 1rem', borderRadius: '0.625rem',

@@ -191,7 +191,13 @@ export function CheckoutTab() {
     }
 
     return (
-        <div style={{ padding: '1.75rem 2rem', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 320px', gap: '1.5rem', alignItems: 'start' }}>
+        <>
+            <style>{`
+                @media (max-width: 767px) {
+                    .tool-checkout-grid { grid-template-columns: minmax(0, 1fr) !important; padding: 1.25rem 1rem !important; }
+                }
+            `}</style>
+            <div className="tool-checkout-grid" style={{ padding: '1.75rem 2rem', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 320px', gap: '1.5rem', alignItems: 'start' }}>
             {/* Tool picker */}
             <div style={{ ...cardStyle, padding: '1.5rem' }}>
                 <h3 style={{ fontSize: '0.68rem', fontWeight: 700, color: '#475569', letterSpacing: '0.1em', textTransform: 'uppercase', margin: '0 0 1rem' }}>
@@ -273,7 +279,8 @@ export function CheckoutTab() {
                     </button>
                 </div>
             </div>
-        </div>
+            </div>
+        </>
     );
 }
 
@@ -355,7 +362,7 @@ export function ReturnTab() {
                 }}>← Back to open loans</button>
 
                 <div style={{ ...cardStyle, padding: '1.5rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                         <div>
                             <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#f1f5f9' }}>{selectedLoan.workerName}</div>
                             <div style={{ fontSize: '0.75rem', color: '#475569' }}>Issued {new Date(selectedLoan.issued_at).toLocaleString()}</div>
@@ -409,9 +416,9 @@ export function ReturnTab() {
 
     return (
         <div style={{ padding: '1.75rem 2rem', maxWidth: '820px' }}>
-            <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem' }}>
+            <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
                 <input
-                    style={inputStyle}
+                    style={{ ...inputStyle, flex: '1 1 200px', minWidth: 0, width: 'auto' }}
                     placeholder="Search by worker name…"
                     value={query}
                     onChange={e => setQuery(e.target.value)}
@@ -429,7 +436,7 @@ export function ReturnTab() {
                         <button key={loan.loanId} onClick={() => openLoan(loan)} style={{
                             display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
                             padding: '1rem 1.5rem', background: 'transparent', border: 'none', borderBottom: '1px solid rgba(255,255,255,0.05)',
-                            cursor: 'pointer', textAlign: 'left',
+                            cursor: 'pointer', textAlign: 'left', flexWrap: 'wrap', gap: '0.5rem',
                         }}>
                             <div>
                                 <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{loan.workerName}</div>

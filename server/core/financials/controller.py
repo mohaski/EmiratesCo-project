@@ -63,6 +63,20 @@ def get_date_cash_total(
     require_role(["cashier", "manager", "ceo", "admin"], current_user)
     return PaymentService.calculate_cash_payments_for_certain_date(date, db)
 
+@router.get("/summary", response_model=model.FinancialSummaryResponse)
+def get_financial_summary(
+    period: str = Query("day", description="'day' | 'month' | 'year'"),
+    date: str = Query(None, description="Anchor date YYYY-MM-DD, defaults to today"),
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """
+    CEO oversight: money received in the given period, broken down by payment
+    method, plus order volume/status counts for the same window.
+    """
+    require_role(["ceo", "admin"], current_user)
+    return PaymentService.get_financial_summary(period, date, db)
+
 # ---------------------------------------------------------------------------
 # Credit Endpoints
 # ---------------------------------------------------------------------------

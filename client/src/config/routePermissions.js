@@ -14,12 +14,12 @@ export const ROUTE_ROLES = {
     // merged with Dues Follow-Up under '/debt-management' instead (see below).
     '/collect-payments':    ['cashier'],
     '/debt-management':     ['ceo', 'manager', 'admin'],
-    '/inventory':           ['cashier', 'manager'],
-    '/add-product':         ['admin', 'ceo'],
-    '/manage-products':     ['admin', 'ceo'],
+    '/inventory':           ['cashier', 'manager', 'ceo'],
+    '/product-management':  ['admin', 'ceo'],
     // Manager gets everything (checkout, return, loans, catalog) as tabs on one page — see '/tools/manage'.
     '/tools':               ['cashier'],
     '/tools/manage':        ['manager'],
     '/change-password':     ['admin', 'ceo', 'manager', 'cashier'],
     '/users':               ['ceo', 'admin'],
+    '/activity':            ['ceo', 'admin'],
 };

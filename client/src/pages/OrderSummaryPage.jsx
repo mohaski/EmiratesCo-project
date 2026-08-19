@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
@@ -158,6 +158,14 @@ export default function OrderSummaryPage() {
     const [showCancel, setShowCancel] = useState(false);
     const [correcting, setCorrecting] = useState(null); // {itemId, lineIdx, eventIdx, event}
 
+    const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+    useEffect(() => {
+        const h = () => setWindowWidth(window.innerWidth);
+        window.addEventListener('resize', h, { passive: true });
+        return () => window.removeEventListener('resize', h);
+    }, []);
+    const isMobile = windowWidth < 768;
+
     const [order, setOrder] = useState(location.state?.order || null);
     const canCorrectOffcuts = ['manager', 'ceo', 'admin'].includes(user?.role);
     const canMarkCuttingDone = ['cashier', 'admin'].includes(user?.role);
@@ -252,7 +260,7 @@ export default function OrderSummaryPage() {
         <div style={{ minHeight: '100%', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
             {/* Header */}
             <div style={{
-                padding: '1.5rem 2rem', borderBottom: '1px solid rgba(255,255,255,0.07)',
+                padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 4vw, 2rem)', borderBottom: '1px solid rgba(255,255,255,0.07)',
                 background: 'rgba(9,14,26,0.8)', backdropFilter: 'blur(20px)',
                 position: 'sticky', top: 0, zIndex: 20,
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap',
@@ -263,8 +271,8 @@ export default function OrderSummaryPage() {
                         color: '#475569', fontSize: '0.78rem', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase',
                         marginBottom: '0.5rem', padding: 0,
                     }}>← Back to Order History</button>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <h1 style={{ fontSize: '1.375rem', fontWeight: 800, color: '#f1f5f9', margin: 0, letterSpacing: '-0.025em' }}>Order {order.orderId}</h1>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <h1 style={{ fontSize: 'clamp(1.1rem, 4vw, 1.375rem)', fontWeight: 800, color: '#f1f5f9', margin: 0, letterSpacing: '-0.025em' }}>Order {order.orderId}</h1>
                         <span style={{
                             fontSize: '0.65rem', fontWeight: 700, padding: '2px 10px', borderRadius: '100px',
                             background: statusColor.bg, border: `1px solid ${statusColor.border}`, color: statusColor.text,
@@ -278,7 +286,7 @@ export default function OrderSummaryPage() {
 
                 {!isCancelled && (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.375rem' }}>
-                        <div style={{ display: 'flex', gap: '0.625rem' }}>
+                        <div style={{ display: 'flex', gap: '0.625rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                             {canMarkCuttingDone && anyItemPending && (
                                 <button onClick={handleMarkOrderDone} style={{
                                     padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
@@ -315,11 +323,15 @@ export default function OrderSummaryPage() {
             </div>
 
             {/* Body */}
-            <div style={{ padding: '1.75rem 2rem', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: '1.5rem', alignItems: 'start' }}>
+            <div style={{
+                padding: 'clamp(1rem, 4vw, 1.75rem) clamp(1rem, 4vw, 2rem)', display: 'grid',
+                gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) 320px', gap: '1.5rem', alignItems: 'start',
+            }}>
                 {/* Items */}
                 <div style={{
                     background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
-                    borderRadius: '1.25rem', padding: '0.5rem 1.5rem',
+                    borderRadius: '1.25rem', padding: '0.5rem clamp(1rem, 4vw, 1.5rem)',
+                    minWidth: 0,
                 }}>
                     <h3 style={{ fontSize: '0.68rem', fontWeight: 700, color: '#475569', letterSpacing: '0.1em', textTransform: 'uppercase', margin: '1rem 0 0' }}>
                         Items ({items.length})

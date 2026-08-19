@@ -93,7 +93,7 @@ function WorkerLoansTab() {
 
     return (
         <div style={{ padding: '1.75rem 2rem' }}>
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
                 {['', 'out', 'partially_returned', 'returned'].map(s => (
                     <button key={s || 'all'} onClick={() => setStatusFilter(s)} style={{
                         padding: '0.4rem 0.9rem', borderRadius: '100px', border: '1px solid rgba(255,255,255,0.09)',
@@ -107,6 +107,7 @@ function WorkerLoansTab() {
             </div>
 
             <div style={{ ...cardStyle, overflow: 'hidden' }}>
+                <div className="table-scroll">
                 <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
                     <thead>
                         <tr>
@@ -141,6 +142,7 @@ function WorkerLoansTab() {
                         ))}
                     </tbody>
                 </table>
+                </div>
             </div>
         </div>
     );
@@ -263,6 +265,7 @@ function ToolCatalogTab() {
         <div style={{ padding: '1.75rem 2rem' }}>
             <AddToolForm onAdded={fetchTools} />
             <div style={{ ...cardStyle, overflow: 'hidden' }}>
+                <div className="table-scroll">
                 <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
                     <thead>
                         <tr>
@@ -283,6 +286,7 @@ function ToolCatalogTab() {
                         ))}
                     </tbody>
                 </table>
+                </div>
             </div>
         </div>
     );
@@ -321,11 +325,11 @@ export default function ManagerToolsPage() {
                 <h1 style={{ fontSize: '1.375rem', fontWeight: 800, color: '#f1f5f9', margin: '0 0 1rem', letterSpacing: '-0.025em' }}>
                     🧰 Tool Tracking
                 </h1>
-                <div style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255,255,255,0.04)', borderRadius: '0.75rem', padding: '4px', width: 'fit-content' }}>
+                <div className="scrollbar-hide" style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255,255,255,0.04)', borderRadius: '0.75rem', padding: '4px', width: 'fit-content', maxWidth: '100%', overflowX: 'auto' }}>
                     {TABS.map(([key, label]) => (
                         <button key={key} onClick={() => setTab(key)} style={{
                             padding: '0.5rem 1.25rem', borderRadius: '0.55rem', border: 'none', cursor: 'pointer',
-                            fontSize: '0.8rem', fontWeight: 700,
+                            fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0,
                             background: tab === key ? 'rgba(59,130,246,0.2)' : 'transparent',
                             color: tab === key ? '#60a5fa' : '#64748b',
                         }}>{label}</button>

@@ -109,7 +109,7 @@ export default function UserManagementPage() {
             )}
 
             <div style={{
-                padding: '1.5rem 2rem',
+                padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 5vw, 2rem)',
                 borderBottom: '1px solid rgba(255,255,255,0.07)',
                 background: 'rgba(9,14,26,0.8)',
                 backdropFilter: 'blur(20px)',
@@ -156,7 +156,7 @@ export default function UserManagementPage() {
                 </div>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }} className="custom-scrollbar">
+            <div style={{ flex: 1, overflowY: 'auto', padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 5vw, 2rem)' }} className="custom-scrollbar">
                 {loading ? (
                     <div style={{ textAlign: 'center', padding: '2rem', color: '#475569', fontSize: '0.875rem' }}>Loading...</div>
                 ) : rows.length === 0 ? (
@@ -171,7 +171,8 @@ export default function UserManagementPage() {
                         background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
                         borderRadius: '1rem', overflow: 'hidden',
                     }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                        <div className="table-scroll">
+                        <table style={{ width: '100%', minWidth: '640px', borderCollapse: 'collapse' }}>
                             <thead>
                                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                                     {['Name', 'Username', 'Email', 'Role', 'Status', 'Actions'].map(h => (
@@ -245,6 +246,7 @@ export default function UserManagementPage() {
                                 })}
                             </tbody>
                         </table>
+                        </div>
                     </div>
                 )}
             </div>

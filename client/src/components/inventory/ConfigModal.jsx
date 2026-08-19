@@ -44,12 +44,12 @@ const ConfigModal = ({ isOpen, onClose, activeTab, onTabChange, config, selected
                 animation: 'fadeInScale 0.2s ease',
             }}>
                 {/* Header */}
-                <div style={{ padding: '1.5rem 2rem', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+                <div className="modal-header-pad" style={{ padding: '1.5rem 2rem', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', gap: '0.75rem' }}>
                     <div>
                         <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: '0 0 4px' }}>Manage Options</h3>
                         <p style={{ fontSize: '0.72rem', color: '#64748b', margin: 0 }}>Configure categories and attributes.</p>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                         {onAddCategory && (
                             <button onClick={openNewClassForm}
                                 style={{ padding: '0.375rem 0.875rem', borderRadius: '0.625rem', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.06)', color: '#94a3b8', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 700 }}>
@@ -136,7 +136,7 @@ const ConfigModal = ({ isOpen, onClose, activeTab, onTabChange, config, selected
                 </div>
 
                 {/* Content */}
-                <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 2rem' }} className="custom-scrollbar">
+                <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 2rem' }} className="custom-scrollbar modal-body-pad">
                     {/* Parent selector for subcats */}
                     {activeTab === 'subcats' && (
                         <div style={{ marginBottom: '1rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem', padding: '1rem' }}>
@@ -223,7 +223,7 @@ const ConfigModal = ({ isOpen, onClose, activeTab, onTabChange, config, selected
                     )}
                 </div>
 
-                <div style={{ padding: '1rem 2rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+                <div className="modal-footer-pad" style={{ padding: '1rem 2rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
                     <button onClick={onClose} style={{ padding: '0.625rem 1.75rem', borderRadius: '0.875rem', border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: '#fff', fontWeight: 700, fontSize: '0.875rem', boxShadow: '0 4px 16px rgba(59,130,246,0.3)' }}>Done</button>
                 </div>
             </div>

@@ -7,6 +7,7 @@ from entities.offcuts import Offcut
 from entities.orderItems import OrderItem
 from entities.orders import Order
 from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines
+from core.inventory.poolKey import load_attribute_types, pool_key_from_attributes, compute_pool_key, pool_sibling_variants
 from loggiing import logger
 
 
@@ -90,6 +91,8 @@ def _process_line_items(
     track = product.track_offcuts
     full_len = _get_full_length(product, variant)
     cuttable = False
+    attribute_types = load_attribute_types(db)
+    pool_key = pool_key_from_attributes(variant.attributes if variant else None, attribute_types, product.pool_ignored_attributes)
 
     # 2D glass cuts are resolved as one batch across all glass-cut lines in this
     # item (see glassOffcutService.resolve_glass_cut_lines) rather than line-by-line,
@@ -140,7 +143,7 @@ def _process_line_items(
                 _deduct_full_stock(db, product, variant, qty)
             elif track:
                 half_len = full_len / 2.0
-                _process_cut_with_offcuts(db, product, variant, half_len, qty, full_len, line, item_id)
+                _process_cut_with_offcuts(db, product, variant, half_len, qty, full_len, line, item_id, pool_key)
                 cuttable = True
             else:
                 _deduct_full_stock(db, product, variant, qty)
@@ -160,10 +163,10 @@ def _process_line_items(
                 manual_selection = line.get("offcut_selection")
                 if manual_selection:
                     line["offcut_sources"] = apply_manual_cut_selection(
-                        db, product, variant, manual_selection, cut_len * qty, full_len, item_id
+                        db, product, variant, manual_selection, cut_len * qty, full_len, item_id, pool_key
                     )
                 else:
-                    _process_cut_with_offcuts(db, product, variant, cut_len, qty, full_len, line, item_id)
+                    _process_cut_with_offcuts(db, product, variant, cut_len, qty, full_len, line, item_id, pool_key)
                 cuttable = True
             else:
                 _deduct_full_stock(db, product, variant, qty)
@@ -172,13 +175,22 @@ def _process_line_items(
             _deduct_simple_stock(db, product, variant, qty)
 
         elif l_type == "accessory-pcs":
-            # Piece sale against a box-packaged variant: qty is a piece count,
-            # stock is tracked in boxes, so deduct the box-equivalent.
-            pieces_per_box = (variant.unit_quantity if variant else None) or 1
-            _deduct_simple_stock(db, product, variant, qty / pieces_per_box)
+            # Piece sale: qty is already a piece count. A piece doesn't care
+            # which sealed box it came from, so this draws from the whole
+            # pool — already-loose pieces first (a shared leftover pool, plus
+            # any inherently unpackaged sibling variant), only opening a
+            # sealed box (smallest pack size first) if that's not enough. See
+            # _deduct_packaged_stock_pooled / core/inventory/poolKey.py.
+            _deduct_packaged_stock_pooled(db, product, variant, qty, pool_key, line)
 
         elif "unit" in l_type:
-            _deduct_simple_stock(db, product, variant, qty)
+            # Pack/box sale: the customer receives actual sealed boxes of
+            # THIS variant's own pack size, so unlike a piece sale this never
+            # substitutes a different pack size or draws from the loose pool
+            # — it's a plain deduction, just expressed in pieces (this
+            # variant's own pack size, 1 for an unpackaged variant).
+            pieces_per_unit = (variant.unit_quantity if variant else None) or 1
+            _deduct_simple_stock(db, product, variant, qty * pieces_per_unit)
 
         else:
             logger.warning(f"Unknown line item type '{l_type}'; performing simple deduction.")
@@ -300,6 +312,239 @@ def _deduct_simple_stock(
         db.add(product)
 
 
+# ── Packaged-accessory piece pooling: loose pool + box-opening ───────────────
+#
+# A packaged accessory variant (e.g. "Wood Screw / 2 inches / Box of 1000pcs")
+# stores stock_quantity in pieces, but ALWAYS as a whole number of sealed boxes
+# — a box is atomic, sealed or not, never partially consumed in place (unlike
+# the old pooled model this replaces, which would freely leave a variant at a
+# fictional "0.45 boxes"). "Already loose" pieces — leftover from a
+# previously opened box, or a sibling variant that was never packaged in the
+# first place (e.g. a plain "Single pcs" variant with no unit_quantity) — live
+# in a single shared pool per pool_key (core/inventory/poolKey.py), reusing
+# the SAME Offcut table/column every other offcut pool uses, with `length`
+# repurposed as a piece count (these products are never has_dimensions=True,
+# so there's no clash with 2D width/height usage).
+#
+# A piece sale (_deduct_packaged_stock_pooled) draws loose pieces first, and
+# only opens a sealed box — smallest pack size first, to minimize what's left
+# over — once the loose pool (and every unpackaged sibling) is exhausted.
+# Whatever's left over from an opened box beyond what this sale needed goes
+# straight back into the loose pool for the next sale. A box/pack sale
+# (dispatched separately in _process_line_items) does NOT go through this —
+# a customer buying "2 boxes" needs actual sealed boxes of that exact pack
+# size, not a pile of loose pieces reconstituted from various openings.
+
+def _find_loose_pcs_offcut(db: Session, product: Product, pool_key: str) -> Optional[Offcut]:
+    """The single row (if any) holding this pool's already-loose pieces."""
+    return db.exec(
+        select(Offcut).where(
+            Offcut.product_id == product.productId,
+            Offcut.pool_key == pool_key,
+            Offcut.status == "available",
+            Offcut.width.is_(None),
+        ).with_for_update()
+    ).first()
+
+
+def _add_loose_pcs(db: Session, product: Product, pool_key: str, pieces: int, variant_id: Optional[int] = None) -> None:
+    if pieces <= 0:
+        return
+    existing = _find_loose_pcs_offcut(db, product, pool_key)
+    if existing:
+        existing.length += pieces
+        if variant_id is not None:
+            existing.variant_id = variant_id
+        db.add(existing)
+    else:
+        db.add(Offcut(
+            product_id=product.productId, variant_id=variant_id, pool_key=pool_key,
+            length=pieces, quantity=1, status="available",
+        ))
+
+
+def _take_loose_pcs(db: Session, product: Product, pool_key: str, pieces: int) -> tuple:
+    """Consume up to `pieces` from the loose pool. Returns (taken, offcut_id)."""
+    existing = _find_loose_pcs_offcut(db, product, pool_key)
+    if not existing or existing.length <= 0:
+        return 0, None
+    taken = min(int(existing.length), pieces)
+    existing.length -= taken
+    offcut_id = existing.offcutId
+    if existing.length <= 0:
+        db.delete(existing)
+    else:
+        db.add(existing)
+    return taken, offcut_id
+
+
+def _remove_loose_pcs(db: Session, product: Product, pool_key: str, pieces: int) -> None:
+    """Reverses _add_loose_pcs — removes exactly the pieces a since-reversed
+    box-opening added, not a flat re-take (the pool may have moved since)."""
+    existing = _find_loose_pcs_offcut(db, product, pool_key)
+    if not existing:
+        return
+    existing.length = max(0, existing.length - pieces)
+    if existing.length <= 0:
+        db.delete(existing)
+    else:
+        db.add(existing)
+
+
+def _deduct_packaged_stock_pooled(
+    db: Session,
+    product: Product,
+    variant: Optional[Variant],
+    qty_pieces: float,
+    pool_key: Optional[str] = None,
+    line_item_dict: Optional[dict] = None,
+) -> None:
+    """
+    Fulfil a piece-count sale for a packaged (count-tracked) accessory:
+      1. Draw from whatever's already loose — the shared opened-box pool,
+         plus any pool-sibling variant that's inherently unpackaged
+         (unit_quantity unset/<=1, so its own stock_quantity already IS
+         individual pieces, not sealed boxes).
+      2. If that's not enough, open sealed boxes to cover the shortfall,
+         smallest pack size first — a box is opened by decrementing its own
+         variant's stock_quantity by exactly its own unit_quantity (never
+         partially). Whatever's left over from an opened box beyond what
+         THIS sale needed goes back into the loose pool for next time.
+      3. Raises ValueError if every loose piece and every sealed box across
+         the whole pool still isn't enough.
+    Records exactly what was drawn from into line_item_dict['stock_sources']
+    so a later restore can reverse it precisely — see
+    _restore_packaged_stock_pooled.
+    """
+    if not variant:
+        _deduct_simple_stock(db, product, variant, qty_pieces)
+        return
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
+    remaining = round(qty_pieces)
+    sources = []
+    product_locked = _lock_product(db, product)
+
+    self_locked = _lock_variant(db, variant)
+    pool_variants = [self_locked] + [_lock_variant(db, sib) for sib in pool_sibling_variants(db, self_locked, pool_key)]
+
+    # ── Tier 1: already loose ────────────────────────────────────────────
+    for v in (pv for pv in pool_variants if not ((pv.unit_quantity or 0) > 1)):
+        if remaining <= 0:
+            break
+        take = min(v.stock_quantity, remaining)
+        if take <= 0:
+            continue
+        v.stock_quantity -= take
+        db.add(v)
+        remaining -= take
+        product_locked.stock_quantity = max(0, (product_locked.stock_quantity or 0) - take)
+        sources.append({"source": "loose_variant", "variant_id": v.variantId, "stock_used": take})
+
+    if remaining > 0:
+        taken, offcut_id = _take_loose_pcs(db, product, pool_key, remaining)
+        if taken > 0:
+            remaining -= taken
+            product_locked.stock_quantity = max(0, (product_locked.stock_quantity or 0) - taken)
+            sources.append({"source": "loose_pool", "offcut_id": offcut_id, "stock_used": taken})
+
+    # ── Tier 2: open sealed boxes, smallest pack size first ──────────────
+    if remaining > 0:
+        boxable = sorted(
+            (v for v in pool_variants if (v.unit_quantity or 0) > 1 and v.stock_quantity >= v.unit_quantity),
+            key=lambda v: v.unit_quantity,
+        )
+        for box_variant in boxable:
+            while remaining > 0 and box_variant.stock_quantity >= box_variant.unit_quantity:
+                box_size = round(box_variant.unit_quantity)
+                box_variant.stock_quantity -= box_size
+                db.add(box_variant)
+                take = min(box_size, remaining)
+                remaining -= take
+                leftover = box_size - take
+                if leftover > 0:
+                    _add_loose_pcs(db, product, pool_key, leftover, variant_id=box_variant.variantId)
+                product_locked.stock_quantity = max(0, (product_locked.stock_quantity or 0) - take)
+                sources.append({
+                    "source": "box", "variant_id": box_variant.variantId,
+                    "box_size": box_size, "stock_used": take, "remainder_to_pool": leftover,
+                })
+            if remaining <= 0:
+                break
+
+    db.add(product_locked)
+
+    if remaining > 0:
+        raise ValueError(
+            f"Insufficient stock for '{variant.name or product.name}'. "
+            f"Short by {remaining} piece(s) (checked across shared pack sizes, including sealed boxes)."
+        )
+
+    if line_item_dict is not None:
+        line_item_dict["stock_sources"] = sources
+
+
+def _restore_packaged_stock_pooled(
+    db: Session,
+    product: Product,
+    variant: Optional[Variant],
+    qty_pieces: float,
+    line_item_dict: Optional[dict] = None,
+    pool_key: Optional[str] = None,
+) -> None:
+    """Reverses _deduct_packaged_stock_pooled. Replays the exact recorded
+    stock_sources: puts loose takes back where they came from, and re-seals
+    each opened box (restores its variant's stock_quantity by the box's full
+    size, removing exactly the leftover that opening it added to the pool —
+    not a flat re-take, since other sales may have drawn the pool down
+    further since). Falls back to a flat restore onto `variant` alone for
+    legacy data predating this (or predating pooling entirely) and for a
+    variantless product."""
+    sources = (line_item_dict or {}).get("stock_sources")
+    if not sources:
+        _restore_simple_stock(db, product, variant, qty_pieces)
+        return
+
+    if pool_key is None and variant:
+        pool_key = compute_pool_key(db, variant)
+    product_locked = _lock_product(db, product)
+
+    for s in sources:
+        src_type = s.get("source")
+        stock_used = round(s.get("stock_used", 0))
+
+        if src_type == "loose_variant":
+            v = db.get(Variant, s.get("variant_id"))
+            if v and stock_used:
+                v.stock_quantity += stock_used
+                db.add(v)
+        elif src_type == "loose_pool":
+            if stock_used > 0 and pool_key is not None:
+                _add_loose_pcs(db, product, pool_key, stock_used)
+        elif src_type == "box":
+            box_variant = db.get(Variant, s.get("variant_id"))
+            box_size = round(s.get("box_size", 0))
+            remainder = round(s.get("remainder_to_pool", 0))
+            if box_variant and box_size > 0:
+                locked = _lock_variant(db, box_variant)
+                locked.stock_quantity += box_size
+                db.add(locked)
+            if remainder > 0 and pool_key is not None:
+                _remove_loose_pcs(db, product, pool_key, remainder)
+        else:
+            # Legacy shape predating the box-opening model — {"variant_id", "stock_used"}
+            v = db.get(Variant, s.get("variant_id"))
+            if v and stock_used:
+                v.stock_quantity += stock_used
+                db.add(v)
+
+        if stock_used:
+            product_locked.stock_quantity = (product_locked.stock_quantity or 0) + stock_used
+
+    db.add(product_locked)
+
+
 # ── Offcut best-fit algorithm ─────────────────────────────────────────────────
 
 def _fulfill_one_cut_via_best_fit(
@@ -309,6 +554,7 @@ def _fulfill_one_cut_via_best_fit(
     required_length: float,
     full_length: float,
     item_id: Optional[int] = None,
+    pool_key: Optional[str] = None,
 ) -> dict:
     """
     Fulfil a single cut of required_length:
@@ -324,7 +570,15 @@ def _fulfill_one_cut_via_best_fit(
     was itself still awaiting cutting confirmation, the returned dict carries a
     `pending_source_notice` (advisory only — see the 2D equivalent in
     glassOffcutService._apply_candidate).
+
+    `pool_key` scopes the offcut search to every variant sharing the same
+    non-size attributes (see core/inventory/poolKey.py), not just this exact
+    variant — callers in a hot loop should compute it once and pass it down;
+    left None (e.g. a direct/test call) it's computed here from `variant`.
     """
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
     stmt = (
         select(Offcut)
         .where(
@@ -332,14 +586,11 @@ def _fulfill_one_cut_via_best_fit(
             Offcut.status == "available",
             Offcut.length >= required_length,
             Offcut.quantity > 0,
+            Offcut.pool_key == pool_key,
         )
         .order_by(Offcut.length.asc())  # smallest fit first → least waste
         .with_for_update()  # prevent two concurrent cuts from claiming the same offcut
     )
-    if variant:
-        stmt = stmt.where(Offcut.variant_id == variant.variantId)
-    else:
-        stmt = stmt.where(Offcut.variant_id == None)  # noqa: E711
 
     best_offcut = db.exec(stmt).first()
 
@@ -356,7 +607,7 @@ def _fulfill_one_cut_via_best_fit(
             db.add(best_offcut)
 
         if remainder > 0.01:
-            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id)
+            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key)
 
         result = {
             "source": "offcut",
@@ -393,7 +644,7 @@ def _fulfill_one_cut_via_best_fit(
     _deduct_full_stock(db, product, variant, 1)
     remainder = round(full_length - required_length, 4)
     if remainder > 0.01:
-        _upsert_offcut(db, product, variant, remainder, source_item_id=item_id)
+        _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key)
 
     return {
         "source": "full_bar",
@@ -413,6 +664,7 @@ def _process_cut_with_offcuts(
     full_length: float,
     line_item_dict: Optional[dict] = None,
     item_id: Optional[int] = None,
+    pool_key: Optional[str] = None,
 ) -> None:
     """
     Best-fit algorithm for cut-piece deduction (only called when track_offcuts=True).
@@ -424,8 +676,11 @@ def _process_cut_with_offcuts(
     if required_length <= 0:
         return
 
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
     sources = [
-        _fulfill_one_cut_via_best_fit(db, product, variant, required_length, full_length, item_id)
+        _fulfill_one_cut_via_best_fit(db, product, variant, required_length, full_length, item_id, pool_key)
         for _ in range(qty_cuts)
     ]
 
@@ -474,6 +729,7 @@ def _restore_simple_stock(db, product, variant, qty: float) -> None:
 def _restore_line_items(db, product, variant, line_items: list) -> None:
     track = product.track_offcuts
     full_len = _get_full_length(product, variant)
+    pool_key = compute_pool_key(db, variant)
 
     glass_cut_lines = [l for l in line_items if l.get("type", "") == "glass-cut" and int(l.get("qty", 0)) > 0]
     if glass_cut_lines and track:
@@ -500,12 +756,12 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
             else:
                 sources = line.get("offcut_sources")
                 if sources:
-                    restore_specific_offcut_sources(db, product, variant, sources)
+                    restore_specific_offcut_sources(db, product, variant, sources, pool_key)
                 else:
                     for _ in range(qty):
                         _restore_simple_stock(db, product, variant, 1)
                         half_len = round(full_len / 2.0, 4)
-                        _remove_offcut(db, product, variant, half_len)
+                        _remove_offcut(db, product, variant, half_len, pool_key)
 
         elif "cut" in l_type:
             meta = line.get("meta", {})
@@ -519,37 +775,39 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
                 sources = line.get("offcut_sources")
                 if sources:
                     # Use the exact recorded sources — mirrors restore_specific_offcut_sources
-                    restore_specific_offcut_sources(db, product, variant, sources)
+                    restore_specific_offcut_sources(db, product, variant, sources, pool_key)
                 else:
                     # No source record (legacy) — fall back to full-bar assumption
                     for _ in range(qty):
                         _restore_simple_stock(db, product, variant, 1)
                         remainder = round(full_len - cut_len, 4)
                         if remainder > 0.01:
-                            _remove_offcut(db, product, variant, remainder)
+                            _remove_offcut(db, product, variant, remainder, pool_key)
 
         elif l_type == "accessory-pcs":
-            pieces_per_box = (variant.unit_quantity if variant else None) or 1
-            _restore_simple_stock(db, product, variant, qty / pieces_per_box)
+            _restore_packaged_stock_pooled(db, product, variant, qty, line, pool_key)
 
-        elif "roll" in l_type or "meter" in l_type or "unit" in l_type:
+        elif "roll" in l_type or "meter" in l_type:
             _restore_simple_stock(db, product, variant, qty)
+
+        elif "unit" in l_type:
+            pieces_per_unit = (variant.unit_quantity if variant else None) or 1
+            _restore_simple_stock(db, product, variant, qty * pieces_per_unit)
 
         else:
             _restore_simple_stock(db, product, variant, qty)
 
 
-def _remove_offcut(db, product, variant, length: float) -> None:
+def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] = None) -> None:
     """Decrement (or delete) an offcut that was previously created as a remainder."""
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
     stmt = select(Offcut).where(
         Offcut.product_id == product.productId,
         Offcut.length >= length - 0.01,
         Offcut.length <= length + 0.01,
+        Offcut.pool_key == pool_key,
     ).with_for_update()
-    if variant:
-        stmt = stmt.where(Offcut.variant_id == variant.variantId)
-    else:
-        stmt = stmt.where(Offcut.variant_id == None)  # noqa: E711
 
     existing = db.exec(stmt).first()
     if existing:
@@ -567,6 +825,7 @@ def restore_specific_offcut_sources(
     product: Product,
     variant: Optional[Variant],
     sources: list,
+    pool_key: Optional[str] = None,
 ) -> None:
     """
     Undo the exact offcut/stock consumption recorded in a cut line's offcut_sources.
@@ -580,6 +839,9 @@ def restore_specific_offcut_sources(
     created alongside it is a fully separate, independent entry that gets
     restored on its own merits in the same pass.
     """
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
     for src in sources:
         remainder = float(src.get("remainder_created", 0))
 
@@ -597,6 +859,7 @@ def restore_specific_offcut_sources(
                     db.add(Offcut(
                         product_id=product.productId,
                         variant_id=variant.variantId if variant else None,
+                        pool_key=pool_key,
                         length=oc_len,
                         quantity=1,
                     ))
@@ -606,7 +869,7 @@ def restore_specific_offcut_sources(
 
         # Remove the remainder offcut that was created by this cut
         if remainder > 0.01:
-            _remove_offcut(db, product, variant, remainder)
+            _remove_offcut(db, product, variant, remainder, pool_key)
 
 
 def _consume_offcut_sources(
@@ -615,6 +878,7 @@ def _consume_offcut_sources(
     variant: Optional[Variant],
     sources: list,
     item_id: Optional[int] = None,
+    pool_key: Optional[str] = None,
 ) -> list:
     """
     Consume a list of caller-specified offcuts.  Uses SELECT FOR UPDATE to
@@ -624,6 +888,8 @@ def _consume_offcut_sources(
     Returns: list of recorded source dicts (same shape as offcut_sources).
     Raises ValueError if any offcut is unavailable or too short.
     """
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
     result = []
     for s in sources:
         oc_id = int(s["offcut_id"])
@@ -655,7 +921,7 @@ def _consume_offcut_sources(
             db.add(locked)
 
         if remainder > 0.01:
-            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id)
+            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key)
 
         entry = {
             "source": "offcut",
@@ -679,6 +945,7 @@ def apply_manual_cut_selection(
     required_total_length: float,
     full_length: float,
     item_id: Optional[int] = None,
+    pool_key: Optional[str] = None,
 ) -> list:
     """
     Consume cashier-specified offcuts for a cut at order-creation time.
@@ -692,6 +959,9 @@ def apply_manual_cut_selection(
     Raises ValueError if over-selected, an offcut is unavailable, or the
     shortfall can't be covered by a single fresh bar.
     """
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
     selected_total = sum(float(s["length_used"]) for s in selected_sources)
     if selected_total > required_total_length + 0.02:
         raise ValueError(
@@ -699,11 +969,11 @@ def apply_manual_cut_selection(
             f"the required cut ({required_total_length:.2f} ft)"
         )
 
-    result = _consume_offcut_sources(db, product, variant, selected_sources, item_id)
+    result = _consume_offcut_sources(db, product, variant, selected_sources, item_id, pool_key)
 
     shortfall = round(required_total_length - selected_total, 4)
     if shortfall > 0.01:
-        result.append(_fulfill_one_cut_via_best_fit(db, product, variant, shortfall, full_length, item_id))
+        result.append(_fulfill_one_cut_via_best_fit(db, product, variant, shortfall, full_length, item_id, pool_key))
 
     return result
 
@@ -714,24 +984,27 @@ def _upsert_offcut(
     variant: Optional[Variant],
     length: float,
     source_item_id: Optional[int] = None,
+    pool_key: Optional[str] = None,
 ) -> None:
     """
     Create a new offcut record or increment the quantity if one of the
-    same length (±1mm tolerance) already exists.
+    same length (±1mm tolerance) already exists IN THE SAME POOL (see
+    core/inventory/poolKey.py — every variant sharing the same non-size
+    attributes as `variant`, not just `variant` itself).
 
     `source_item_id` tags which OrderItem's cutting job produced this remainder
     (see the 2D equivalent, glassOffcutService._upsert_glass_offcut, for the full
     merge-policy rationale — overwritten on merge only when a real id is given).
     """
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
     stmt = select(Offcut).where(
         Offcut.product_id == product.productId,
         Offcut.length >= length - 0.001,
         Offcut.length <= length + 0.001,
+        Offcut.pool_key == pool_key,
     ).with_for_update()
-    if variant:
-        stmt = stmt.where(Offcut.variant_id == variant.variantId)
-    else:
-        stmt = stmt.where(Offcut.variant_id == None)  # noqa: E711
 
     existing = db.exec(stmt).first()
     if existing:
@@ -743,6 +1016,7 @@ def _upsert_offcut(
         db.add(Offcut(
             product_id=product.productId,
             variant_id=variant.variantId if variant else None,
+            pool_key=pool_key,
             length=length,
             quantity=1,
             source_item_id=source_item_id,

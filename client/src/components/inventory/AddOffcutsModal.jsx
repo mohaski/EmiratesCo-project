@@ -85,7 +85,7 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
                 animation: 'fadeInScale 0.2s ease',
             }}>
                 {/* Header */}
-                <div style={{
+                <div className="modal-header-pad" style={{
                     padding: '1.5rem 2rem', textAlign: 'center', flexShrink: 0,
                     borderBottom: '1px solid rgba(255,255,255,0.07)',
                     background: 'linear-gradient(135deg, rgba(6,182,212,0.08), rgba(59,130,246,0.04))',
@@ -100,7 +100,7 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
                     <p style={{ fontSize: '0.78rem', color: '#64748b', margin: 0 }}>{product.name}</p>
                 </div>
 
-                <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }} className="custom-scrollbar">
+                <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }} className="custom-scrollbar modal-body-pad">
                     {/* Variant selector */}
                     {variants.length > 0 && (
                         <div style={{ marginBottom: '1.5rem' }}>
@@ -136,7 +136,7 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
                             const invalid = !isRowValid(row);
                             return (
                                 <div key={idx} style={{
-                                    display: 'flex', alignItems: 'center', gap: '0.625rem',
+                                    display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap',
                                     padding: '0.75rem 1rem', borderRadius: '0.875rem',
                                     background: 'rgba(255,255,255,0.03)', border: `1px solid ${invalid && (row.width || row.height || row.length) ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)'}`,
                                 }}>
@@ -178,7 +178,7 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
                 </div>
 
                 {/* Footer */}
-                <div style={{ padding: '1.125rem 2rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', gap: '0.75rem', flexShrink: 0 }}>
+                <div className="modal-footer-pad" style={{ padding: '1.125rem 2rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', gap: '0.75rem', flexShrink: 0 }}>
                     <button onClick={onClose} style={{
                         flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.08)',
                         background: 'transparent', color: '#64748b', fontWeight: 700, cursor: 'pointer', fontSize: '0.875rem',

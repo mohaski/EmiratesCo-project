@@ -40,6 +40,17 @@ class Product(SQLModel, table=True):
     # Whether Length x Width "Dimensions" is a generating attribute for this product's variants.
     has_dimensions: bool = Field(default=False)
 
+    # Which of this product's own generating attributes (applicable_attributes, plus
+    # "Dimensions" when has_dimensions=True) are ignored when deciding whether two
+    # variants share the same offcut/stock pool — see core/inventory/poolKey.py.
+    # Explicitly set at product-creation time (AddProductPage's Attributes step);
+    # None (the default for any product created before this existed) falls back to
+    # the automatic rule: ignore "Dimensions" and any attribute whose AttributeClass
+    # type is "custom" (profile/accessory "Length", accessory "Unit"/pack-size).
+    # An explicit [] means "pool by every attribute" (no two differing variants ever
+    # share a pool) — a deliberate choice, not "not configured".
+    pool_ignored_attributes: Optional[List[str]] = Field(default=None, sa_column=Column(JSON, nullable=True))
+
     # ── 2D (glass) offcut tuning — only meaningful when track_offcuts is True and
     # has_dimensions is True (2D length x width cuts, as opposed to 1D length-only) ──
     # Below this size in mm on either side, a remainder is scrap, not a usable offcut.

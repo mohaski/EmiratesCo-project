@@ -140,9 +140,9 @@ export default function CuttingQueueSection({ onCountChange }) {
             {/* Sticky submit bar */}
             {selected.size > 0 && (
                 <div style={{
-                    position: 'sticky', bottom: 0, padding: '1rem 2rem', margin: '0 -2rem', borderTop: '1px solid rgba(255,255,255,0.07)',
+                    position: 'sticky', bottom: 0, padding: '1rem clamp(1rem, 5vw, 2rem)', margin: '0 calc(-1 * clamp(1rem, 5vw, 2rem))', borderTop: '1px solid rgba(255,255,255,0.07)',
                     background: 'rgba(9,14,26,0.92)', backdropFilter: 'blur(20px)',
-                    display: 'flex', justifyContent: 'flex-end', gap: '0.75rem',
+                    display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', flexWrap: 'wrap',
                 }}>
                     <button onClick={handleSubmit} disabled={submitting} style={{
                         padding: '0.75rem 1.75rem', borderRadius: '0.875rem', border: 'none',

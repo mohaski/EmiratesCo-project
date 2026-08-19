@@ -42,11 +42,15 @@ def get_audit_history(
     entity_type: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
+    user_id: Optional[str] = None,
+    since: Optional[str] = Query(None, description="Inclusive lower bound, YYYY-MM-DD"),
+    until: Optional[str] = Query(None, description="Inclusive upper bound, YYYY-MM-DD"),
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
-    """Return edit history records for CEO/admin review."""
-    return orderService.get_audit_history(entity_type, db, skip, limit)
+    """CEO/admin-only activity feed spanning every module that writes to edit_history."""
+    require_role(["ceo", "admin"], current_user)
+    return orderService.get_audit_history(entity_type, db, skip, limit, user_id, since, until)
 
 
 @router.get("/customer/{customer_id}", response_model=List[model.OrderResponse])

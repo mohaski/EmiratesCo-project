@@ -1,9 +1,7 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import CeoDashboard from '../components/dashboards/CeoDashboard';
-import ManagerDashboard from '../components/dashboards/ManagerDashboard';
-import CashierDashboard from '../components/dashboards/CashierDashboard';
 
 const GREETING = () => {
     const h = new Date().getHours();
@@ -12,28 +10,26 @@ const GREETING = () => {
     return 'Good evening';
 };
 
-// Keys are lower-cased to match the lower-cased `role` lookup below (and the
-// lower-case comparisons in renderDashboard) — mixed-case keys here would never match.
+// Keys are lower-cased to match the lower-cased `role` lookup below —
+// mixed-case keys here would never match. Manager/cashier have no dashboard
+// (see the redirect below) so they don't need an entry here.
 const ROLE_META = {
     ceo:          { label: 'Executive Dashboard',  sub: 'Strategic overview of operations and revenue.' },
     admin:        { label: 'Admin Dashboard',       sub: 'Full system control and configuration.' },
-    manager:      { label: 'Sales Dashboard',       sub: 'POS terminal and transaction management.' },
-    cashier:      { label: 'Sales Dashboard',       sub: 'Process sales and view your orders.' },
 };
 
 export default function DashboardPage() {
     const { user } = useAuth();
-    const navigate = useNavigate();
     const role = user?.role?.toLowerCase();
+
+    // Manager and cashier have no dashboard — send them straight to the
+    // page they actually work in.
+    if (role === 'manager' || role === 'cashier') {
+        return <Navigate to="/sales" replace />;
+    }
 
     const meta = ROLE_META[role] || { label: 'Dashboard', sub: 'Welcome back.' };
     const firstName = user?.firstName || user?.name?.split(' ')[0] || 'there';
-
-    const renderDashboard = () => {
-        if (role === 'ceo' || role === 'admin') return <CeoDashboard />;
-        if (role === 'manager') return <ManagerDashboard />;
-        return <CashierDashboard />;
-    };
 
     return (
         <div style={{ minHeight: '100%', background: 'var(--color-bg)', color: 'var(--color-text)', position: 'relative' }}>
@@ -92,7 +88,7 @@ export default function DashboardPage() {
 
             {/* Dashboard Body */}
             <div style={{ padding: '2rem 2.5rem', maxWidth: '1400px', margin: '0 auto' }}>
-                {renderDashboard()}
+                <CeoDashboard />
             </div>
         </div>
     );

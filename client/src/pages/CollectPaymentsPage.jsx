@@ -48,7 +48,7 @@ export function CollectDebtTab({ searchQuery = '', onCountChange }) {
     }, [fetchOutstanding]);
 
     return (
-        <div style={{ padding: '1.5rem 2rem' }}>
+        <div style={{ padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 4vw, 2rem)' }}>
             {error && (
                 <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#fca5a5', padding: '0.75rem 1rem', borderRadius: '0.75rem', fontSize: '0.8rem', fontWeight: 600, marginBottom: '1rem' }}>
                     {error}
@@ -94,7 +94,7 @@ export default function CollectPaymentsPage() {
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--color-bg)' }}>
             {/* Header */}
             <div style={{
-                padding: '1.5rem 2rem',
+                padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 4vw, 2rem)',
                 borderBottom: '1px solid rgba(255,255,255,0.07)',
                 background: 'rgba(9,14,26,0.8)',
                 backdropFilter: 'blur(20px)',
@@ -104,14 +104,14 @@ export default function CollectPaymentsPage() {
                 <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.25rem' }}>
                         <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 8px rgba(34,197,94,0.8)' }} />
-                        <h1 style={{ fontSize: '1.375rem', fontWeight: 800, color: '#f1f5f9', margin: 0, letterSpacing: '-0.025em' }}>Collect Debt</h1>
+                        <h1 style={{ fontSize: 'clamp(1.15rem, 4vw, 1.375rem)', fontWeight: 800, color: '#f1f5f9', margin: 0, letterSpacing: '-0.025em' }}>Collect Debt</h1>
                     </div>
                     <p style={{ fontSize: '0.78rem', color: '#475569', margin: 0, marginLeft: '1.25rem', fontWeight: 500 }}>
                         {count} order{count === 1 ? '' : 's'} outstanding
                     </p>
                 </div>
 
-                <div style={{ position: 'relative', minWidth: '280px' }}>
+                <div style={{ position: 'relative', width: 'min(280px, 100%)' }}>
                     <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: '#475569', fontSize: '0.875rem' }}>🔍</span>
                     <input
                         type="text"

@@ -1,4 +1,6 @@
 import { useState, useEffect, useMemo, memo } from 'react';
+import { useAttributes } from '../../../context/AttributeContext';
+import { poolSiblings } from '../../../utils/poolKey';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -11,6 +13,12 @@ const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', let
 
 const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const hasVariants = product.variants && product.variants.length > 0;
+    const { attributeClasses } = useAttributes();
+    const attributeTypesMap = useMemo(() => {
+        const m = {};
+        attributeClasses.forEach(c => { m[c.name] = c.type; });
+        return m;
+    }, [attributeClasses]);
 
     const [selections, setSelections] = useState(() => {
         if (initialDetails?.selectedAttributes) return initialDetails.selectedAttributes;
@@ -85,6 +93,22 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
         const stock = activeItem.stock || 0;
 
+        // Pooled piece-equivalent stock across sibling variants that share every
+        // attribute except the pack-size one — a piece sale doesn't care which
+        // sealed box (or already-loose stock) a piece comes from, so this sums
+        // every pool member's own stock as a rough upper bound (the real backend
+        // check also lets a sealed box get OPENED to cover a shortfall — see
+        // inventoryService.py's _deduct_packaged_stock_pooled — but that box's
+        // own stock is already included in this sum, so this stays accurate,
+        // just possibly conservative if a shared loose-pieces pool from an
+        // earlier opened box exists server-side that this client-side estimate
+        // can't see). Only used for the PCS branch below — a box/pack sale
+        // never pools, see that branch's own comment. See utils/poolKey.js.
+        const poolMembers = hasVariants && selectedVariant
+            ? [selectedVariant, ...poolSiblings(product.variants, selectedVariant, attributeTypesMap, product.poolIgnoredAttributes)]
+            : [activeItem];
+        const pooledPieces = poolMembers.reduce((sum, v) => sum + (v.stock || 0), 0);
+
         if (trackOffcuts) {
             const pFull = activeItem.priceFull || activeItem.price || 0;
             const pHalf = activeItem.priceHalf || 0;
@@ -112,20 +136,28 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                 if (effectiveSaleUnit === 'pcs') {
                     const price = activeItem.priceUnit || 0;
                     total = qty * price;
-                    const availablePcs = stock * activeItem.unitQuantity;
+                    const availablePcs = pooledPieces;
                     if (qty > availablePcs) { finalError = `Only ${availablePcs} pcs available`; isValid = false; }
                     lineItems.push({ type: 'accessory-pcs', label: 'Pieces', qty, rate: price, total, meta: { unit: 'pcs', unitQuantity: activeItem.unitQuantity } });
                 } else {
+                    // Box/pack sale: the customer gets actual sealed boxes of THIS
+                    // variant's own pack size, so unlike a piece sale this checks
+                    // (and the backend deducts) only against this variant's own
+                    // sealed stock — never pooled or substituted from a sibling
+                    // pack size or the loose-pieces pool. See
+                    // inventoryService.py's _deduct_packaged_stock_pooled
+                    // docstring for why a piece sale is different.
                     const price = activeItem.price || activeItem.priceFull || 0;
                     total = qty * price;
-                    if (qty > stock) { finalError = `Only ${stock} boxes available`; isValid = false; }
+                    const availableOwnUnit = stock / (activeItem.unitQuantity || 1);
+                    if (qty > availableOwnUnit) { finalError = `Only ${availableOwnUnit} boxes available`; isValid = false; }
                     lineItems.push({ type: 'accessory-unit', label: 'Quantity', qty, rate: price, total, meta: { unit: activeItem.unit } });
                 }
             }
             onUpdate(total, { lineItems, attributes: attributesDetail, qty, salesMode, saleUnit: effectiveSaleUnit, selectedRoll, variantId: activeItem.variantId || activeItem.id, isValid, warning: finalError });
         }
         setError(finalError);
-    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, saleUnit, selectedRoll, hasRollOption, onUpdate]);
+    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, saleUnit, selectedRoll, hasRollOption, onUpdate, attributeTypesMap]);
 
     const handleVariantSelect = (key, val) => setSelections(prev => ({ ...prev, [key]: val }));
     const activeItem = selectedVariant || product;
@@ -134,6 +166,11 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
     // Falls back to 'box' if the active variant doesn't support piece sales (e.g. user
     // switched to a different, unpackaged variant) without needing an effect to reset it.
     const effectiveSaleUnit = canSellPcs ? saleUnit : 'box';
+    // Same pooled-piece figure the validation effect above computes — see there for why.
+    const displayPoolMembers = hasVariants && selectedVariant
+        ? [selectedVariant, ...poolSiblings(product.variants, selectedVariant, attributeTypesMap, product.poolIgnoredAttributes)]
+        : [activeItem];
+    const displayPooledPieces = displayPoolMembers.reduce((sum, v) => sum + (v.stock || 0), 0);
 
     const chipBtn = (active) => ({
         padding: '0.3rem 0.875rem', borderRadius: '100px', fontSize: '0.72rem', fontWeight: 700,
@@ -162,7 +199,7 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
             )}
 
             {trackOffcuts ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
                     {/* Standard lengths */}
                     <div style={sectionStyle}>
                         <p style={{ ...labelStyle, marginBottom: '0.875rem', display: 'block' }}>📏 Standard</p>
@@ -235,7 +272,7 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                     </p>
                     {canSellPcs && (
                         <p style={{ fontSize: '0.68rem', color: '#475569', marginTop: '0.25rem' }}>
-                            1 Box = {activeItem.unitQuantity} pcs · {(activeItem.stock * activeItem.unitQuantity).toLocaleString()} pcs available
+                            1 Box = {activeItem.unitQuantity} pcs · {displayPooledPieces.toLocaleString()} pcs available
                         </p>
                     )}
                     {hasRollOption && <p style={{ fontSize: '0.68rem', color: '#475569', marginTop: '0.25rem' }}>Roll Length: {product.rollLength}m</p>}

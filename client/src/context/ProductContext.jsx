@@ -99,6 +99,7 @@ export const ProductProvider = ({ children }) => {
                 attributes: variantAttributes,
                 applicableAttributes,
                 hasDimensions,
+                poolIgnoredAttributes: p.pool_ignored_attributes ?? null,
             };
         });
     };
@@ -188,6 +189,7 @@ export const ProductProvider = ({ children }) => {
                 unit: productData.unit || 'ft',
                 applicable_attributes: productData.applicableAttributes || [],
                 has_dimensions: !!productData.hasDimensions,
+                pool_ignored_attributes: productData.poolIgnoredAttributes ?? null,
                 variants: productData.variants ? productData.variants.map(v => ({
                     attributes: v.attributes,
                     stock_quantity: parseInt(v.stock || 0),

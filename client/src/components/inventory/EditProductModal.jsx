@@ -45,10 +45,10 @@ export default function EditProductModal({ isOpen, onClose, product }) {
                 boxShadow: '0 32px 80px rgba(0,0,0,0.6)',
                 animation: 'fadeInScale 0.2s ease',
             }}>
-                <div style={{ padding: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+                <div className="modal-header-pad" style={{ padding: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
                     <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Edit Product</h3>
                 </div>
-                <div style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div className="modal-body-pad" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                     <div>
                         <label style={labelStyle}>Product Name</label>
                         <input type="text" autoFocus value={form.name} onChange={e => set('name', e.target.value)}
@@ -90,7 +90,7 @@ export default function EditProductModal({ isOpen, onClose, product }) {
                         </div>
                     </div>
                 </div>
-                <div style={{ padding: '0 1.5rem 1.5rem', display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <div className="modal-footer-pad" style={{ padding: '0 1.5rem 1.5rem', display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                     <button onClick={onClose} style={{
                         padding: '0.625rem 1.25rem', borderRadius: '0.75rem', cursor: 'pointer',
                         background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)',

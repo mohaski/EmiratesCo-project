@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from fastapi import Depends, HTTPException, Query
 from sqlmodel import Session, select
+from sqlalchemy import func
 
 from entities.orders import Order
 from entities.orderItems import OrderItem
@@ -1127,20 +1128,43 @@ def get_audit_history(
     db: Session,
     skip: int = 0,
     limit: int = 100,
+    user_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
 ) -> list[model.EditHistoryResponse]:
+    """Cross-module CEO activity feed — edit_history already spans every
+    module that writes to it (restocks, stock-batch sessions, offcut
+    corrections, order edits/status changes/cancellations), so omitting
+    entity_type already returns everything. since/until are inclusive
+    YYYY-MM-DD date-only bounds on edited_at."""
     from entities.editHistory import EditHistory
+    from entities.users import User
 
     stmt = select(EditHistory).order_by(EditHistory.edited_at.desc()).offset(skip).limit(limit)
     if entity_type:
         stmt = stmt.where(EditHistory.entity_type == entity_type)
+    if user_id:
+        stmt = stmt.where(EditHistory.edited_by == user_id)
+    if since:
+        stmt = stmt.where(func.date(EditHistory.edited_at) >= datetime.strptime(since, "%Y-%m-%d").date())
+    if until:
+        stmt = stmt.where(func.date(EditHistory.edited_at) <= datetime.strptime(until, "%Y-%m-%d").date())
 
     rows = db.exec(stmt).all()
+
+    usernames: dict = {}
+    def _username(uid) -> str:
+        if uid not in usernames:
+            user = db.get(User, uid)
+            usernames[uid] = user.username if user else str(uid)
+        return usernames[uid]
+
     return [
         model.EditHistoryResponse(
             id=r.id,
             entity_type=r.entity_type,
             entity_id=r.entity_id,
-            edited_by=str(r.edited_by),
+            edited_by=_username(r.edited_by),
             edited_at=r.edited_at.isoformat(),
             action=r.action,
             before_snapshot=r.before_snapshot or {},
@@ -1208,8 +1232,21 @@ def update_order_status(
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
+        old_status = order.status
         order.status = new_status
         db.add(order)
+
+        if old_status != new_status:
+            db.add(EditHistory(
+                entity_type="order_status",
+                entity_id=order_id,
+                edited_by=current_user.userId,
+                action="status_change",
+                before_snapshot={"status": old_status},
+                after_snapshot={"status": new_status},
+                notes=current_user.username,
+            ))
+
         db.commit()
         db.refresh(order)
 
@@ -1256,7 +1293,20 @@ def cancel_order_with_pin(
         if order.status != "cancelled" and datetime.utcnow() - order.created_at > timedelta(days=7):
             raise HTTPException(status_code=400, detail="This order is more than a week old and can no longer be cancelled.")
 
+        old_status = order.status
         _restore_and_cancel(db, order)
+
+        if old_status != "cancelled":
+            db.add(EditHistory(
+                entity_type="order_cancellation",
+                entity_id=order_id,
+                edited_by=current_user.userId,
+                action="cancel",
+                before_snapshot={"status": old_status},
+                after_snapshot={"status": "cancelled"},
+                notes=current_user.username,
+            ))
+
         db.commit()
         db.refresh(order)
 

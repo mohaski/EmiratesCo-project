@@ -64,7 +64,7 @@ export default function InvoiceReviewPage() {
     }
 
     return (
-        <div style={{ minHeight: '100vh', background: 'var(--color-bg)', padding: '3rem 1rem' }} className="print:bg-white print:p-0">
+        <div style={{ minHeight: '100vh', background: 'var(--color-bg)', padding: 'clamp(1.5rem, 6vw, 3rem) 1rem' }} className="print:bg-white print:p-0">
             <style type="text/css" media="print">{`
                 @page { size: auto; margin: 20mm; }
                 body { background-color: white !important; }
@@ -88,7 +88,7 @@ export default function InvoiceReviewPage() {
                     onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)'; }}>
                         {alreadySaved ? '← Back to Order History' : '← Back to Edit'}
                     </button>
-                    <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                         <button onClick={handleSave} disabled={alreadySaved || isSaving} style={{
                             padding: '0.625rem 1.5rem', borderRadius: '0.75rem', border: '1px solid rgba(255,255,255,0.12)',
                             background: 'rgba(255,255,255,0.07)', color: '#e2e8f0', fontWeight: 700, fontSize: '0.82rem',

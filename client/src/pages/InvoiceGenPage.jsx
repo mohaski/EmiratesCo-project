@@ -15,6 +15,14 @@ export default function InvoiceGenPage() {
     const navigate = useNavigate();
     const [customers, setCustomers] = useState([]);
 
+    const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+    useEffect(() => {
+        const h = () => setWindowWidth(window.innerWidth);
+        window.addEventListener('resize', h, { passive: true });
+        return () => window.removeEventListener('resize', h);
+    }, []);
+    const isMobileView = windowWidth < 900;
+
     const {
         activeCategory, setActiveCategory,
         activeSubCategory, setActiveSubCategory,
@@ -70,14 +78,14 @@ export default function InvoiceGenPage() {
 
                 {/* Header */}
                 <div style={{
-                    height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '0 1.5rem', flexShrink: 0,
+                    minHeight: '72px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '0.625rem 1.5rem', flexShrink: 0, flexWrap: 'wrap', rowGap: '0.5rem',
                     background: 'rgba(9,14,26,0.95)', borderBottom: '1px solid rgba(255,255,255,0.07)',
                     backdropFilter: 'blur(20px)',
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         <div style={{
-                            width: '32px', height: '32px', borderRadius: '8px',
+                            width: '32px', height: '32px', borderRadius: '8px', flexShrink: 0,
                             background: 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(234,88,12,0.15))',
                             border: '1px solid rgba(245,158,11,0.3)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem',
@@ -94,21 +102,23 @@ export default function InvoiceGenPage() {
                                 style={{
                                     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)',
                                     borderRadius: '0.625rem', padding: '0.5rem 1rem 0.5rem 2.25rem',
-                                    color: '#e2e8f0', fontSize: '0.82rem', outline: 'none', width: '240px',
+                                    color: '#e2e8f0', fontSize: '0.82rem', outline: 'none', width: 'clamp(140px, 32vw, 240px)',
                                 }}
                                 onFocus={e => { e.target.style.borderColor = 'rgba(245,158,11,0.4)'; }}
                                 onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.09)'; }}
                             />
                         </div>
                         {/* Mobile cart toggle */}
-                        <button onClick={() => setIsCartOpen(!isCartOpen)} style={{
-                            position: 'relative', padding: '0.5rem 0.75rem', borderRadius: '0.625rem',
-                            background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)',
-                            color: '#94a3b8', cursor: 'pointer', display: 'none',
-                        }} className="md:hidden">
-                            🛒
-                            {cart.length > 0 && <span style={{ position: 'absolute', top: '-4px', right: '-4px', width: '16px', height: '16px', borderRadius: '50%', background: '#f59e0b', color: '#000', fontSize: '0.6rem', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{cart.length}</span>}
-                        </button>
+                        {isMobileView && (
+                            <button onClick={() => setIsCartOpen(!isCartOpen)} style={{
+                                position: 'relative', padding: '0.5rem 0.75rem', borderRadius: '0.625rem',
+                                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)',
+                                color: '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>
+                                🛒
+                                {cart.length > 0 && <span style={{ position: 'absolute', top: '-4px', right: '-4px', width: '16px', height: '16px', borderRadius: '50%', background: '#f59e0b', color: '#000', fontSize: '0.6rem', fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{cart.length}</span>}
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -157,7 +167,7 @@ export default function InvoiceGenPage() {
                 </div>
 
                 {/* Products grid */}
-                <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar">
+                <div style={{ flex: 1, overflowY: 'auto', padding: 'clamp(0.875rem, 3vw, 1.25rem) clamp(1rem, 4vw, 1.5rem)' }} className="custom-scrollbar">
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '1rem' }}>
                         {filteredProducts.map(product => (
                             <ProductCard key={product.id} product={product} onClick={handleProductClick} selectedColor={profileColor} />
@@ -172,8 +182,24 @@ export default function InvoiceGenPage() {
                 </div>
             </div>
 
+            {/* Mobile cart backdrop */}
+            {isMobileView && isCartOpen && (
+                <div
+                    onClick={() => setIsCartOpen(false)}
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)', zIndex: 48 }}
+                />
+            )}
+
             {/* Cart sidebar */}
-            <div style={{ width: '360px', flexShrink: 0 }}>
+            <div style={{
+                ...(isMobileView ? {
+                    position: 'fixed', top: 0, right: 0, bottom: 0,
+                    width: 'min(380px, 100vw)', zIndex: 50,
+                    transform: isCartOpen ? 'translateX(0)' : 'translateX(100%)',
+                    transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
+                    boxShadow: isCartOpen ? '-8px 0 40px rgba(0,0,0,0.6)' : 'none',
+                } : { width: '360px', flexShrink: 0 }),
+            }}>
                 <CartSidebar cartItems={cart} onRemoveItem={handleRemoveItem} onEditItem={handleEditCartItem}
                     customer={selectedCustomer} onChangeCustomer={() => setSelectedCustomer(null)}
                     actionLabel="Review Invoice" onAction={handleReviewInvoice}

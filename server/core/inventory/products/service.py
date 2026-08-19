@@ -63,6 +63,7 @@ def create_product(
 
             applicable_attributes=product_data.applicable_attributes,
             has_dimensions=product_data.has_dimensions,
+            pool_ignored_attributes=product_data.pool_ignored_attributes,
 
             min_usable_dimension=product_data.min_usable_dimension if product_data.min_usable_dimension is not None else 150.0,
             allow_rotation=product_data.allow_rotation,
@@ -455,15 +456,24 @@ def get_offcuts_for_product(
     db: Session,
     variant_id: Optional[int] = None,
 ):
-    """Return all available (non-scrap) offcut pieces for a product, largest first."""
+    """Return all available (non-scrap) offcut pieces for a product, largest first.
+    `variant_id`, when given, scopes to that variant's whole pool (every variant
+    sharing its non-size attributes — see core/inventory/poolKey.py), not just
+    that exact variant, so e.g. picking a manual offcut for a 5.8m White bar
+    also surfaces offcuts left over from a 6m White bar."""
     from entities.offcuts import Offcut
+    from entities.variants import Variant
+    from core.inventory.poolKey import compute_pool_key
+
     stmt = (
         select(Offcut)
         .where(Offcut.product_id == product_id, Offcut.quantity > 0, Offcut.status == "available")
         .order_by(Offcut.length.desc(), (Offcut.width * Offcut.height).desc())
     )
     if variant_id is not None:
-        stmt = stmt.where(Offcut.variant_id == variant_id)
+        variant = db.get(Variant, variant_id)
+        pool_key = compute_pool_key(db, variant) if variant else ""
+        stmt = stmt.where(Offcut.pool_key == pool_key)
     return db.exec(stmt).all()
 
 
@@ -478,6 +488,7 @@ def add_offcuts_bulk(
     (_upsert_offcut / _upsert_glass_offcut). Doesn't touch product.stock_quantity,
     which tracks full-unit stock only; offcuts are a separate pool."""
     from entities.offcuts import Offcut
+    from core.inventory.poolKey import compute_pool_key
 
     require_role(["manager", "ceo", "admin"], current_user)
 
@@ -493,14 +504,16 @@ def add_offcuts_bulk(
     for row in offcuts_data:
         if row.quantity < 1:
             raise HTTPException(status_code=400, detail="quantity must be at least 1")
-        if row.variant_id is not None and db.get(Variant, row.variant_id) is None:
+        row_variant = db.get(Variant, row.variant_id) if row.variant_id is not None else None
+        if row.variant_id is not None and row_variant is None:
             raise HTTPException(status_code=404, detail=f"Variant {row.variant_id} not found")
+        pool_key = compute_pool_key(db, row_variant)
 
         if product.has_dimensions:
             if row.width is None or row.height is None or row.width <= 0 or row.height <= 0:
                 raise HTTPException(status_code=400, detail="width and height are required for this product")
             offcut = Offcut(
-                product_id=product_id, variant_id=row.variant_id,
+                product_id=product_id, variant_id=row.variant_id, pool_key=pool_key,
                 length=0.0, width=row.width, height=row.height,
                 quantity=row.quantity, status="available",
             )
@@ -508,7 +521,7 @@ def add_offcuts_bulk(
             if row.length is None or row.length <= 0:
                 raise HTTPException(status_code=400, detail="length is required for this product")
             offcut = Offcut(
-                product_id=product_id, variant_id=row.variant_id,
+                product_id=product_id, variant_id=row.variant_id, pool_key=pool_key,
                 length=row.length, width=None, height=None,
                 quantity=row.quantity, status="available",
             )
@@ -634,14 +647,15 @@ def preview_glass_cuts(
     """
     from entities.offcuts import Offcut
     from core.inventory.glassOffcutService import resolve_glass_cut_lines
+    from core.inventory.poolKey import compute_pool_key
 
     product = db.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     variant = db.get(Variant, variant_id) if variant_id else None
+    pool_key = compute_pool_key(db, variant)
 
-    pre_existing_stmt = select(Offcut.offcutId).where(Offcut.product_id == product_id)
-    pre_existing_stmt = pre_existing_stmt.where(Offcut.variant_id == variant_id) if variant_id else pre_existing_stmt.where(Offcut.variant_id == None)  # noqa: E711
+    pre_existing_stmt = select(Offcut.offcutId).where(Offcut.product_id == product_id, Offcut.pool_key == pool_key)
     pre_existing_ids = set(db.exec(pre_existing_stmt).all())
 
     lines = [
@@ -721,18 +735,31 @@ def check_cut_feasibility(
 
 
 def check_stock_availability(product_id: int, qty: int, db: Session = Depends(get_session), variant_id: Optional[int] = None):
+    from core.inventory.poolKey import pool_sibling_variants
+
     product = db.get(Product, product_id)
     if not product:
         return {"message": "Product Not Found", "available": 0}
 
-    # Case A: Specific Variant Request (for Variable Products)
+    # Case A: Specific Variant Request (for Variable Products) — availability is
+    # pooled across sibling variants sharing every attribute except the
+    # pack-size one (a Box-of-100 and a Single-pcs variant of the same item;
+    # see core/inventory/poolKey.py). Every variant's stock_quantity is already
+    # tracked in pieces (see entities/variants.py), so the pool sums directly;
+    # `v.unit_quantity` only converts the total back into `v`'s own pack unit
+    # (e.g. boxes) to compare against `qty`.
     if variant_id:
         v = db.get(Variant, variant_id)
         if not v:
              return {"message": "Variant Not Found", "available": 0}
-        if v.stock_quantity >= qty:
-             return {"message": "Available", "available": v.stock_quantity}
-        return {"message": "Insufficient Stock", "available": v.stock_quantity}
+        factor = v.unit_quantity or 1
+        pooled_pieces = v.stock_quantity + sum(
+            sib.stock_quantity for sib in pool_sibling_variants(db, v)
+        )
+        available = pooled_pieces / factor
+        if available >= qty:
+             return {"message": "Available", "available": available}
+        return {"message": "Insufficient Stock", "available": available}
 
     # Case B: Product Level Check (Simple Product or Aggregated Variable Product)
     # Since we maintain total stock in product.stock_quantity, we can check it directly.

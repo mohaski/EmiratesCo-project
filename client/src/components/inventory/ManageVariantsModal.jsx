@@ -28,6 +28,13 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
         setEditForm({ price: v.price || v.priceFull || 0, priceHalf: v.priceHalf || 0, priceUnit: v.priceUnit || 0, stockChange: 0 });
     };
 
+    // A packaged (count-tracked) variant's stock is tracked in individual pieces
+    // server-side (see server/entities/variants.py) — the "Adjust Stock" field
+    // below is entered in the variant's own pack unit (e.g. boxes), same as
+    // before, so convert to pieces before sending. Bar/sheet (trackOffcuts) and
+    // unpackaged variants are already in their own natural unit (factor 1).
+    const packFactor = v => (!product.trackOffcuts && v.unitQuantity ? v.unitQuantity : 1);
+
     const handleSaveEdit = async originalVariant => {
         setSaving(true);
         try {
@@ -35,7 +42,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                 price: parseFloat(editForm.price) || 0,
                 price_half: parseFloat(editForm.priceHalf) || 0,
                 price_unit: parseFloat(editForm.priceUnit) || 0,
-                stock_change: parseInt(editForm.stockChange) || 0,
+                stock_change: (parseInt(editForm.stockChange) || 0) * packFactor(originalVariant),
             };
             await updateProductVariant(originalVariant.id, payload);
             setEditingVariantId(null);
@@ -72,22 +79,22 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                     animation: 'fadeInScale 0.2s ease',
                 }}>
                     {/* Header */}
-                    <div style={{
+                    <div className="modal-header-pad" style={{
                         padding: '1.5rem 2rem', borderBottom: '1px solid rgba(255,255,255,0.06)',
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', gap: '0.75rem',
                         background: 'linear-gradient(180deg, rgba(255,255,255,0.02), transparent)',
                     }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem', flex: 1, minWidth: 0 }}>
                             <div style={{
-                                width: '38px', height: '38px', borderRadius: '10px',
+                                width: '38px', height: '38px', borderRadius: '10px', flexShrink: 0,
                                 background: 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(6,182,212,0.12))',
                                 border: '1px solid rgba(59,130,246,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center',
                             }}>
                                 <svg width="17" height="17" fill="none" stroke="#60a5fa" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
                             </div>
-                            <div>
-                                <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#f8fafc', margin: '0 0 2px', letterSpacing: '-0.01em' }}>Manage Variants</h3>
-                                <p style={{ fontSize: '0.76rem', color: '#64748b', margin: 0 }}>{product.name} &nbsp;·&nbsp; {variants.length} variant{variants.length !== 1 ? 's' : ''}</p>
+                            <div style={{ minWidth: 0 }}>
+                                <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#f8fafc', margin: '0 0 2px', letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Manage Variants</h3>
+                                <p style={{ fontSize: '0.76rem', color: '#64748b', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{product.name} &nbsp;·&nbsp; {variants.length} variant{variants.length !== 1 ? 's' : ''}</p>
                             </div>
                         </div>
                         <button onClick={onClose} style={{
@@ -101,7 +108,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                     </div>
 
                     {/* Variants list */}
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }} className="custom-scrollbar">
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }} className="custom-scrollbar modal-body-pad">
                         {variants.length === 0 ? (
                             <div style={{ textAlign: 'center', padding: '3.5rem 1rem', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '1.25rem', color: '#334155' }}>
                                 <div style={{ fontSize: '2.25rem', marginBottom: '0.75rem', opacity: 0.35 }}>📦</div>
@@ -150,7 +157,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                                     </span>
                                                                 )}
                                                                 <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', fontWeight: 600, background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.16)', borderRadius: '5px', padding: '2px 8px', color: '#4ade80' }}>
-                                                                    Stock: {variant.stock || 0}
+                                                                    Stock: {(variant.stock || 0) / packFactor(variant)}
                                                                 </span>
                                                                 {variant.width != null && (
                                                                     <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', fontWeight: 600, background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.18)', borderRadius: '5px', padding: '2px 8px', color: '#22d3ee' }}>
@@ -210,7 +217,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                                 onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.background = 'rgba(255,255,255,0.05)'; }} />
                                                             <button type="button" disabled={saving} onClick={() => setEditForm(p => ({ ...p, stockChange: (parseInt(p.stockChange) || 0) + 1 }))} style={{ width: '26px', height: '34px', borderRadius: '7px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: '#94a3b8', cursor: 'pointer', fontWeight: 700 }}>+</button>
                                                         </div>
-                                                        <div style={{ fontSize: '0.6rem', color: '#475569', marginTop: '0.3rem' }}>Current: {variant.stock || 0}</div>
+                                                        <div style={{ fontSize: '0.6rem', color: '#475569', marginTop: '0.3rem' }}>Current: {(variant.stock || 0) / packFactor(variant)}</div>
                                                     </div>
 
                                                     <div style={{ display: 'flex', gap: '0.5rem', marginLeft: 'auto' }}>
@@ -228,7 +235,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                         )}
                     </div>
 
-                    <div style={{ padding: '1.125rem 2rem', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+                    <div className="modal-footer-pad" style={{ padding: '1.125rem 2rem', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
                         <button onClick={onClose} style={{
                             padding: '0.7rem 2rem', borderRadius: '0.875rem', border: 'none', cursor: 'pointer',
                             background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', color: '#fff', fontWeight: 700, fontSize: '0.85rem',

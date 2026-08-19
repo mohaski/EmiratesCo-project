@@ -176,7 +176,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                                     const isSelected = selected[oc.offcutId] !== undefined;
                                     return (
                                         <div key={oc.offcutId} style={{
-                                            display: 'flex', alignItems: 'center', gap: '0.75rem',
+                                            display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem 0.75rem',
                                             padding: '0.75rem 1rem', borderRadius: '0.875rem',
                                             background: isSelected ? 'rgba(59,130,246,0.1)' : 'rgba(255,255,255,0.03)',
                                             border: `1px solid ${isSelected ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.07)'}`,
@@ -195,7 +195,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                                                 {isSelected && '✓'}
                                             </div>
 
-                                            <div style={{ flex: 1 }}>
+                                            <div style={{ flex: '1 1 100px', minWidth: 0 }}>
                                                 <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0', fontFamily: 'var(--font-mono)' }}>
                                                     {fmtLen(oc.length)}
                                                 </span>
@@ -290,7 +290,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                 {/* Footer */}
                 <div style={{
                     padding: '1rem 1.5rem', borderTop: '1px solid rgba(255,255,255,0.07)',
-                    display: 'flex', justifyContent: 'flex-end', gap: '0.75rem',
+                    display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.75rem',
                     background: 'rgba(0,0,0,0.3)', flexShrink: 0,
                 }}>
                     <button onClick={onClose} style={{

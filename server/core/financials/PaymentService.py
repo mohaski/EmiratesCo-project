@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import Session, select
 from loggiing import logger
 from sqlalchemy import func
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils import require_role, ceil_amount
 
 from . import model
@@ -23,7 +23,7 @@ def calculate_cash_payments_for_today(db: Session = Depends(get_session)) -> flo
         statement = (
             select(Payment.amount)
             .where(
-                Payment.payment_method == "Cash",
+                Payment.payment_method == "cash",
                 func.date(Payment.payed_at) == func.current_date()  # ensures date-only comparison
             )
         )
@@ -64,7 +64,7 @@ def calculate_cash_payments_for_certain_date(date: str, db: Session = Depends(ge
         statement = (
             select(func.coalesce(func.sum(Payment.amount), 0))
             .where(
-                Payment.payment_method == "Cash",
+                Payment.payment_method == "cash",
                 func.date(Payment.payed_at) == parsed_date
             )
         )
@@ -85,6 +85,94 @@ def calculate_cash_payments_for_certain_date(date: str, db: Session = Depends(ge
     except Exception as e:
         logger.error(f"Unexpected error calculating cash payments for {date}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to calculate cash payments for the specified date")
+
+
+def get_financial_summary(period: str, date_str: str | None, db: Session) -> model.FinancialSummaryResponse:
+    """
+    Money received (every Payment row regardless of reason — checkout-time
+    payments from create_order/update_order and later debt-collection
+    payments from record_payment both count) in the given period, broken down
+    into just 'cash' and 'mpesa' — the only two methods used in practice. A
+    'split' row's true breakdown lives in its payment_details JSON (e.g.
+    {"cash": 100, "mpesa": 200}) rather than the row's own amount, so those
+    are decomposed into the same two buckets; the legacy/unused 'number'
+    method and any other unrecognized method or malformed payment_details
+    fall back into 'cash' rather than being silently dropped — total always
+    equals by_method['cash'] + by_method['mpesa'].
+    """
+    if period not in {"day", "month", "year"}:
+        raise HTTPException(status_code=400, detail="period must be 'day', 'month', or 'year'")
+
+    try:
+        anchor = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else datetime.utcnow().date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use 'YYYY-MM-DD'")
+
+    if period == "day":
+        range_start = range_end = anchor
+    elif period == "month":
+        range_start = anchor.replace(day=1)
+        next_month = range_start.replace(day=28) + timedelta(days=4)
+        range_end = next_month.replace(day=1) - timedelta(days=1)
+    else:
+        range_start = anchor.replace(month=1, day=1)
+        range_end = anchor.replace(month=12, day=31)
+
+    payments = db.exec(
+        select(Payment).where(
+            func.date(Payment.payed_at) >= range_start,
+            func.date(Payment.payed_at) <= range_end,
+        )
+    ).all()
+
+    by_method = {"cash": 0.0, "mpesa": 0.0}
+    # A payment "counts" toward whichever bucket(s) it actually put money into —
+    # a split touching both cash and mpesa counts once in each, not as a third thing.
+    by_method_count = {"cash": 0, "mpesa": 0}
+    total = 0.0
+    for p in payments:
+        total += p.amount
+        if p.payment_method == "split":
+            details = p.payment_details or {}
+            matched = sum(float(v or 0) for k, v in details.items() if k in by_method)
+            leftover = p.amount - matched
+            touched = set()
+            for k, v in details.items():
+                if k in by_method and float(v or 0) != 0:
+                    by_method[k] += float(v or 0)
+                    touched.add(k)
+            if leftover:
+                by_method["cash"] += leftover
+                touched.add("cash")
+            for k in touched:
+                by_method_count[k] += 1
+        elif p.payment_method in by_method:
+            by_method[p.payment_method] += p.amount
+            by_method_count[p.payment_method] += 1
+        else:
+            by_method["cash"] += p.amount
+            by_method_count["cash"] += 1
+
+    orders = db.exec(
+        select(Order).where(
+            func.date(Order.created_at) >= range_start,
+            func.date(Order.created_at) <= range_end,
+        )
+    ).all()
+    status_counts: dict = {}
+    for o in orders:
+        status_counts[o.status] = status_counts.get(o.status, 0) + 1
+
+    return model.FinancialSummaryResponse(
+        period=period,
+        range_start=range_start.isoformat(),
+        range_end=range_end.isoformat(),
+        total=total,
+        by_method=by_method,
+        by_method_count=by_method_count,
+        order_count=len(orders),
+        status_counts=status_counts,
+    )
 
 
 def _sync_credit_for_order(db: Session, order: Order) -> None:

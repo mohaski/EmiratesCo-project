@@ -3,7 +3,6 @@ import { useProducts } from '../context/ProductContext';
 import ConfirmationModal from '../components/common/ConfirmationModal';
 import ManageVariantsModal from '../components/inventory/ManageVariantsModal';
 import EditProductModal from '../components/inventory/EditProductModal';
-import { useNavigate } from 'react-router-dom';
 
 const SUB_CATEGORIES = {
     'ke-profile': [{ id: 'window', label: 'Windows' }, { id: 'door', label: 'Doors' }, { id: 'general', label: 'General' }],
@@ -12,9 +11,12 @@ const SUB_CATEGORIES = {
     'accessories': [{ id: 'general', label: 'General' }],
 };
 
-export default function AdminProductsPage() {
+// Pure content — no page-level header, just the stats/filters/table — so it
+// can be dropped into ProductManagementPage's "Manage Products" tab. Same
+// split as CollectDebtTab/DuesTab. onAddProduct switches the parent to the
+// "Add Product" tab instead of navigating to a standalone route.
+export function ManageProductsTab({ onAddProduct }) {
     const { products, deleteProduct, categories } = useProducts();
-    const navigate = useNavigate();
 
     const [selectedCategory, setSelectedCategory] = useState(() => (categories?.length > 0 ? categories[0].id : 'ke-profile'));
     const [selectedUsage, setSelectedUsage] = useState('window');
@@ -41,28 +43,13 @@ export default function AdminProductsPage() {
     ];
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--color-bg)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
 
-            {/* Header */}
-            <header style={{
-                padding: '1.25rem 2rem', borderBottom: '1px solid rgba(255,255,255,0.07)',
-                background: 'rgba(9,14,26,0.9)', backdropFilter: 'blur(20px)',
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                position: 'sticky', top: 0, zIndex: 30,
+            {/* Add-product shortcut */}
+            <div style={{
+                padding: 'clamp(1rem, 4vw, 1.25rem) clamp(1rem, 5vw, 2rem) 0', display: 'flex', justifyContent: 'flex-end',
             }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <div style={{
-                        width: '40px', height: '40px', borderRadius: '10px',
-                        background: 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(234,88,12,0.15))',
-                        border: '1px solid rgba(245,158,11,0.3)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem',
-                    }}>👑</div>
-                    <div>
-                        <h1 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Product Management</h1>
-                        <p style={{ fontSize: '0.7rem', color: '#475569', margin: 0, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>CEO Control Center</p>
-                    </div>
-                </div>
-                <button onClick={() => navigate('/add-product')} style={{
+                <button onClick={onAddProduct} style={{
                     padding: '0.625rem 1.5rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
                     background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
                     color: '#fff', fontWeight: 800, fontSize: '0.82rem',
@@ -71,12 +58,12 @@ export default function AdminProductsPage() {
                 onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; }}
                 onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
                 >+ Add Product</button>
-            </header>
+            </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }} className="custom-scrollbar">
+            <div style={{ flex: 1, overflowY: 'auto', padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 5vw, 2rem)' }} className="custom-scrollbar">
 
                 {/* Stats */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
                     {statCards.map(s => (
                         <div key={s.label} style={{
                             background: 'linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))',

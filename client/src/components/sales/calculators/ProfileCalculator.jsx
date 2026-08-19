@@ -195,7 +195,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                 </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
                 {/* Standard Lengths */}
                 <div style={sectionStyle}>
                     <p style={{ ...labelStyle, marginBottom: '0.875rem', display: 'block' }}>📏 Standard Lengths</p>

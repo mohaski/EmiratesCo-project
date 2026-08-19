@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, memo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
@@ -7,16 +7,26 @@ import { useCartTotals } from '../hooks/useCartTotals';
 import { ceilAmount } from '../utils/money';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 
+function useWindowWidth() {
+    const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1280));
+    useEffect(() => {
+        const handler = () => setWidth(window.innerWidth);
+        window.addEventListener('resize', handler, { passive: true });
+        return () => window.removeEventListener('resize', handler);
+    }, []);
+    return width;
+}
+
 /* ── Review Item Card ── */
-const ReviewItemCard = memo(({ item, index, onRemove }) => (
+const ReviewItemCard = memo(({ item, index, onRemove, isMobile }) => (
     <div style={{
         display: 'grid',
-        gridTemplateColumns: onRemove ? '1fr auto auto auto' : '1fr auto auto',
-        gap: '1rem',
-        padding: '1.25rem 1.5rem',
+        gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : (onRemove ? '1fr auto auto auto' : '1fr auto auto'),
+        gap: isMobile ? '0.625rem' : '1rem',
+        padding: isMobile ? '1rem 1.25rem' : '1.25rem 1.5rem',
         borderBottom: '1px solid rgba(255,255,255,0.05)',
         transition: 'background 0.15s ease',
-        alignItems: 'center',
+        alignItems: isMobile ? 'stretch' : 'center',
     }}
         onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
         onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
@@ -136,6 +146,8 @@ const PaymentMethodBtn = ({ method, label, icon, selected, color, onClick }) => 
 export default function CheckoutPage() {
     const location = useLocation();
     const navigate = useNavigate();
+    const windowWidth = useWindowWidth();
+    const isMobile = windowWidth < 768;
 
     const { user } = useAuth();
     const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart } = useCart();
@@ -275,12 +287,13 @@ export default function CheckoutPage() {
             minHeight: '100vh',
             background: 'var(--color-bg)',
             display: 'flex',
+            flexDirection: isMobile ? 'column' : 'row',
             fontFamily: 'var(--font-sans)',
             color: 'var(--color-text)',
         }}>
 
             {/* ── LEFT: Order Review ── */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '2rem' }} className="scrollbar-hide">
+            <div style={{ flex: 1, minWidth: 0, overflowY: isMobile ? 'visible' : 'auto', padding: isMobile ? '1.25rem 1rem' : '2rem' }} className="scrollbar-hide">
                 <div style={{ maxWidth: '780px', margin: '0 auto' }}>
 
                     {/* Back nav */}
@@ -322,7 +335,7 @@ export default function CheckoutPage() {
                     {/* Page header */}
                     <div style={{ marginBottom: '2rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                            <h1 style={{ fontSize: '1.75rem', fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.025em' }}>
+                            <h1 style={{ fontSize: 'clamp(1.35rem, 5vw, 1.75rem)', fontWeight: 800, color: '#f1f5f9', letterSpacing: '-0.025em' }}>
                                 {mode === 'edit' ? 'Update Order' : 'Order Review'}
                             </h1>
                             {mode === 'edit' && (
@@ -349,6 +362,7 @@ export default function CheckoutPage() {
                         overflow: 'hidden',
                     }}>
                         {/* Table header */}
+                        {!isMobile && (
                         <div style={{
                             display: 'grid',
                             gridTemplateColumns: '1fr auto auto auto',
@@ -362,9 +376,10 @@ export default function CheckoutPage() {
                             <span style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em', textTransform: 'uppercase', textAlign: 'right' }}>Total</span>
                             <span />
                         </div>
+                        )}
 
                         {cartItems.map((item, idx) => (
-                            <ReviewItemCard key={`${item.id}-${idx}`} item={item} index={idx} onRemove={removeItem} />
+                            <ReviewItemCard key={`${item.id}-${idx}`} item={item} index={idx} onRemove={removeItem} isMobile={isMobile} />
                         ))}
 
                         {/* Summary row */}
@@ -389,15 +404,16 @@ export default function CheckoutPage() {
 
             {/* ── RIGHT: Payment Panel ── */}
             <div style={{
-                width: '440px',
+                width: isMobile ? '100%' : '440px',
                 flexShrink: 0,
                 background: 'rgba(9,14,26,0.97)',
-                borderLeft: '1px solid rgba(255,255,255,0.07)',
+                borderLeft: isMobile ? 'none' : '1px solid rgba(255,255,255,0.07)',
+                borderTop: isMobile ? '1px solid rgba(255,255,255,0.07)' : 'none',
                 display: 'flex',
                 flexDirection: 'column',
-                position: 'sticky',
+                position: isMobile ? 'static' : 'sticky',
                 top: 0,
-                height: '100vh',
+                height: isMobile ? 'auto' : '100vh',
                 backdropFilter: 'blur(20px)',
             }}>
                 {/* Panel header */}
@@ -417,7 +433,7 @@ export default function CheckoutPage() {
                 </div>
 
                 {/* Panel body */}
-                <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }} className="scrollbar-hide">
+                <div style={{ flex: 1, overflowY: isMobile ? 'visible' : 'auto', padding: isMobile ? '1.25rem' : '1.5rem 1.75rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }} className="scrollbar-hide">
 
                     {/* Customer badge */}
                     <div style={{
@@ -452,7 +468,7 @@ export default function CheckoutPage() {
                         <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
                             Receipt Departments
                         </label>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                             {BUCKET_ORDER.map(bucket => (
                                 <CategoryToggle
                                     key={bucket}
@@ -569,7 +585,7 @@ export default function CheckoutPage() {
                                     <div style={{ fontSize: '0.78rem', color: '#92400e' }}>This update results in a credit balance. Select refund method.</div>
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '0.75rem' }}>
+                            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                                 <PaymentMethodBtn method="cash-refund" label="Cash Refund" icon="💸" selected={paymentMethod === 'cash-refund'} color="#3b82f6" onClick={setPaymentMethod} />
                                 {isRegistered && <PaymentMethodBtn method="store-credit" label="Store Credit" icon="💳" selected={paymentMethod === 'store-credit'} color="#a855f7" onClick={setPaymentMethod} />}
                             </div>
@@ -579,7 +595,7 @@ export default function CheckoutPage() {
                             <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.625rem' }}>
                                 Payment Method
                             </label>
-                            <div style={{ display: 'flex', gap: '0.75rem' }}>
+                            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                                 <PaymentMethodBtn method="cash" label="Cash" icon="💵" selected={paymentMethod === 'cash'} color="#22c55e" onClick={setPaymentMethod} />
                                 <PaymentMethodBtn method="mpesa" label="M-Pesa" icon="📱" selected={paymentMethod === 'mpesa'} color="#22c55e" onClick={setPaymentMethod} />
                                 <PaymentMethodBtn method="split" label="Split" icon="⚖️" selected={paymentMethod === 'split'} color="#a855f7" onClick={setPaymentMethod} />

@@ -75,7 +75,7 @@ export default function CorrectProfileOffcutModal({ event, productId, variantId,
                 animation: 'fadeInScale 0.2s ease',
             }}>
                 {/* Header */}
-                <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'linear-gradient(135deg, rgba(245,158,11,0.1), transparent)', flexShrink: 0 }}>
+                <div className="modal-header-pad" style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'linear-gradient(135deg, rgba(245,158,11,0.1), transparent)', flexShrink: 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <div>
                             <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: '0 0 3px' }}>Correct Cutting Outcome</h3>
@@ -92,7 +92,7 @@ export default function CorrectProfileOffcutModal({ event, productId, variantId,
                 </div>
 
                 <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar">
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar modal-body-pad">
                         <span style={{ fontSize: '0.7rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: '0.625rem' }}>
                             Corrected Remainder
                         </span>
@@ -107,7 +107,7 @@ export default function CorrectProfileOffcutModal({ event, productId, variantId,
                                 style={{ width: '100px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: '#e2e8f0', fontSize: '0.82rem', padding: '5px 8px', outline: 'none' }} />
                             <span style={{ color: '#64748b', fontSize: '0.78rem' }}>ft left over</span>
                         </div>
-                        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+                        <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
                             <button type="button" onClick={() => setRemainder('0')} style={{
                                 background: 'none', border: 'none', color: '#f87171', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', padding: 0,
                             }}>Nothing usable (damaged)</button>
@@ -172,7 +172,7 @@ export default function CorrectProfileOffcutModal({ event, productId, variantId,
                     </div>
 
                     {/* Footer */}
-                    <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', background: 'rgba(0,0,0,0.3)', flexShrink: 0 }}>
+                    <div className="modal-footer-pad" style={{ padding: '1rem 1.5rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', background: 'rgba(0,0,0,0.3)', flexShrink: 0, flexWrap: 'wrap' }}>
                         <button type="button" onClick={onClose} style={{
                             padding: '0.625rem 1.25rem', borderRadius: '0.75rem', border: '1px solid rgba(255,255,255,0.1)',
                             background: 'rgba(255,255,255,0.05)', color: '#64748b', fontSize: '0.82rem', cursor: 'pointer',

@@ -82,9 +82,15 @@ export const OrderService = {
         const response = await api.put(`/orders/${id}/edit`, orderData);
         return response.data;
     },
-    getAuditHistory: async (entityType = null, skip = 0, limit = 100) => {
+    /** CEO/admin-only activity feed spanning every module that writes to edit_history
+     * (restocks, stock-batch sessions, offcut corrections, order edits/status/cancellations).
+     * since/until are inclusive YYYY-MM-DD bounds. */
+    getAuditHistory: async (entityType = null, skip = 0, limit = 100, userId = null, since = null, until = null) => {
         const params = new URLSearchParams({ skip, limit });
         if (entityType) params.append('entity_type', entityType);
+        if (userId) params.append('user_id', userId);
+        if (since) params.append('since', since);
+        if (until) params.append('until', until);
         const response = await api.get(`/orders/audit/history?${params}`);
         return response.data;
     },
@@ -290,6 +296,14 @@ export const FinancialService = {
         const response = await api.get(`/financials/payments/cash/${date}`);
         return response.data;
     },
+    /** CEO oversight: money received in a day/month/year, by payment method, plus order
+     * volume/status counts for the same window. date (YYYY-MM-DD) defaults to today. */
+    getSummary: async (period = 'day', date = null) => {
+        const params = new URLSearchParams({ period });
+        if (date) params.append('date', date);
+        const response = await api.get(`/financials/summary?${params}`);
+        return response.data;
+    },
     createCredit: async (creditData) => {
         const response = await api.post('/financials/credits', creditData);
         return response.data;
@@ -461,6 +475,31 @@ export const SettingsService = {
     },
 };
 
+export const StockSessionService = {
+    /** Finalize a batch of Stock Control cart lines (restocks and/or manually-entered
+     * offcuts) in one transaction. payload: { notes?,
+     * stock_lines: [{ product_id, variant_id?, entered_quantity, entered_unit?, conversion_factor }],
+     * offcut_lines: [{ product_id, variant_id?, length?, width?, height?, quantity }] } */
+    finalize: async (payload) => {
+        const response = await api.post('/stock-sessions/', payload);
+        return response.data;
+    },
+    /** Session list — ceo/manager only. */
+    list: async (skip = 0, limit = 100) => {
+        const response = await api.get(`/stock-sessions/?skip=${skip}&limit=${limit}`);
+        return response.data;
+    },
+    getById: async (sessionId) => {
+        const response = await api.get(`/stock-sessions/${sessionId}`);
+        return response.data;
+    },
+    /** CEO-only correction of a single finalized line's quantity. */
+    correctItem: async (sessionId, itemId, payload) => {
+        const response = await api.patch(`/stock-sessions/${sessionId}/items/${itemId}`, payload);
+        return response.data;
+    },
+};
+
 // Attach services to api instance for convenience
 api.orderService = OrderService;
 api.invoiceService = InvoiceService;
@@ -471,5 +510,6 @@ api.userService = UserService;
 api.messagingService = MessagingService;
 api.settingsService = SettingsService;
 api.toolService = ToolService;
+api.stockSessionService = StockSessionService;
 
 export default api;

@@ -98,7 +98,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                     padding: '1rem 1.5rem',
                     borderTop: '1px solid rgba(255,255,255,0.08)',
                     background: 'rgba(0,0,0,0.3)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem',
                     flexShrink: 0,
                 }}>
                     <div>

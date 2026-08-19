@@ -21,7 +21,7 @@ export default function DebtManagementPage() {
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--color-bg)' }}>
             {/* Header */}
             <div style={{
-                padding: '1.5rem 2rem',
+                padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 4vw, 2rem)',
                 borderBottom: '1px solid rgba(255,255,255,0.07)',
                 background: 'rgba(9,14,26,0.8)',
                 backdropFilter: 'blur(20px)',
@@ -31,12 +31,12 @@ export default function DebtManagementPage() {
                 <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.25rem' }}>
                         <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 8px rgba(34,197,94,0.8)' }} />
-                        <h1 style={{ fontSize: '1.375rem', fontWeight: 800, color: '#f1f5f9', margin: 0, letterSpacing: '-0.025em' }}>Debt Management</h1>
+                        <h1 style={{ fontSize: 'clamp(1.15rem, 4vw, 1.375rem)', fontWeight: 800, color: '#f1f5f9', margin: 0, letterSpacing: '-0.025em' }}>Debt Management</h1>
                     </div>
                     <p style={{ fontSize: '0.78rem', color: '#475569', margin: 0, marginLeft: '1.25rem', fontWeight: 500 }}>Collect outstanding balances & follow up overdue accounts</p>
                 </div>
 
-                <div style={{ position: 'relative', minWidth: '280px' }}>
+                <div style={{ position: 'relative', width: 'min(280px, 100%)' }}>
                     <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: '#475569', fontSize: '0.875rem' }}>🔍</span>
                     <input
                         type="text"
@@ -55,13 +55,13 @@ export default function DebtManagementPage() {
             </div>
 
             {/* Tabs */}
-            <div style={{ padding: '0 2rem', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: '0.25rem' }}>
+            <div style={{ padding: '0 clamp(1rem, 4vw, 2rem)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: '0.25rem', overflowX: 'auto' }}>
                 {tabs.map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         style={{
-                            padding: '1rem 0.25rem', marginRight: '1.5rem',
+                            padding: '1rem 0.25rem', marginRight: '1.5rem', whiteSpace: 'nowrap',
                             background: 'none', border: 'none', cursor: 'pointer',
                             fontSize: '0.875rem', fontWeight: 700,
                             color: activeTab === tab.id ? '#f1f5f9' : '#475569',

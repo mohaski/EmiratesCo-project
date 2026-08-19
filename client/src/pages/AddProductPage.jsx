@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useProducts } from '../context/ProductContext';
 import { useAttributes } from '../context/AttributeContext';
 import ConfigModal from '../components/inventory/ConfigModal';
+import { computePoolKey } from '../utils/poolKey';
 
 const buildSubCategoriesMap = cats => {
     const subs = {};
@@ -9,7 +10,10 @@ const buildSubCategoriesMap = cats => {
     return subs;
 };
 
-export default function AddProductPage() {
+// Pure content — no page-level title/subtitle, just the mode-toggle/options
+// controls bar and the form itself — so it can be dropped into
+// ProductManagementPage's "Add Product" tab. Same split as CollectDebtTab/DuesTab.
+export function AddProductTab() {
     const { products, categories, addProduct, addCategory, addProductVariants } = useProducts();
     const {
         attributeClasses,
@@ -73,6 +77,18 @@ export default function AddProductPage() {
     const [matrixSelections, setMatrixSelections] = useState({});
     const [matrixValues, setMatrixValues] = useState({});
 
+    // Which of this product's own generating attributes (see generationKeys below)
+    // pool offcuts/stock together across their different values — e.g. two glass
+    // variants differing only by Dimensions, or two profile variants differing
+    // only by Length, normally SHOULD pool (see core/inventory/poolKey.py); two
+    // variants differing by Color normally should NOT. Keyed by attribute name;
+    // populated with that default the first time each key is seen (below), then
+    // left alone so toggling one doesn't get reset by later attribute changes —
+    // same pattern as matrixSelections/matrixValues. 'new' mode only — pooling is
+    // a product-level setting, fixed at creation (see backend
+    // Product.pool_ignored_attributes).
+    const [poolTogetherMap, setPoolTogetherMap] = useState({});
+
     const [filterCategory, setFilterCategory] = useState(() => (categories && categories.length > 0) ? categories[0].id : 'ke-profile');
     const [filterSubCategory, setFilterSubCategory] = useState(() => {
         const validSubs = buildSubCategoriesMap(categories)[filterCategory] || [];
@@ -127,6 +143,24 @@ export default function AddProductPage() {
         if (currentHasDimensions) keys.push('Dimensions');
         return keys;
     }, [generationAttributes, currentHasDimensions]);
+
+    // Seed poolTogetherMap's default for any newly-seen key — mirrors the automatic
+    // backend rule (Dimensions + custom-typed attributes pool together by default)
+    // so the toggles below start matching today's behavior, adjustable from there.
+    const [prevGenerationKeys, setPrevGenerationKeys] = useState(generationKeys);
+    if (generationKeys !== prevGenerationKeys) {
+        setPrevGenerationKeys(generationKeys);
+        setPoolTogetherMap(prev => {
+            const next = { ...prev };
+            let changed = false;
+            generationKeys.forEach(key => {
+                if (key in next) return;
+                next[key] = key === 'Dimensions' || attributeTypesMap[key] === 'custom';
+                changed = true;
+            });
+            return changed ? next : prev;
+        });
+    }
 
     const matrixPreview = useMemo(() => {
         if (mode === 'variant' && !selectedExistingProduct) return [];
@@ -193,6 +227,41 @@ export default function AddProductPage() {
         [mode, existingVariantSignatures, attrsForVariantName]
     );
 
+    // Which of this product's own attributes offcuts/stock pool across — the CEO's
+    // live choices in 'new' mode (poolTogetherMap), or the already-fixed setting on
+    // an existing product in 'variant' mode (null falls back to the automatic rule,
+    // same as the backend — see core/inventory/poolKey.py).
+    const currentPoolIgnoredAttributes = useMemo(() => (
+        mode === 'new'
+            ? generationKeys.filter(key => poolTogetherMap[key])
+            : (selectedExistingProduct?.poolIgnoredAttributes ?? null)
+    ), [mode, generationKeys, poolTogetherMap, selectedExistingProduct]);
+
+    // Groups matrixPreview names that share an offcut/stock pool (see
+    // currentPoolIgnoredAttributes above) so the matrix below can bundle them into
+    // one card with a single shared Price/Unit field — preventing the same pooled
+    // material from ending up priced differently depending on which variant a cut
+    // happens to be fulfilled from.
+    const matrixGroups = useMemo(() => {
+        const order = [];
+        const groups = new Map();
+        matrixPreview.forEach(name => {
+            const key = computePoolKey(attrsForVariantName(name), attributeTypesMap, currentPoolIgnoredAttributes);
+            if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+            groups.get(key).push(name);
+        });
+        return order.map(key => groups.get(key));
+    }, [matrixPreview, attrsForVariantName, attributeTypesMap, currentPoolIgnoredAttributes]);
+
+    // Applies one value to a whole group's shared field (currently just Price/Unit) at once.
+    const handleGroupFieldChange = (names, field, value) => {
+        setMatrixValues(prev => {
+            const next = { ...prev };
+            names.forEach(name => { next[name] = { ...(next[name] || {}), [field]: value }; });
+            return next;
+        });
+    };
+
     // Builds the frontend-shape variant list from the current matrix selections — shared by
     // both "Create Product" (new mode) and "Add Variant(s)" (variant mode). Combinations that
     // already exist on the selected product are skipped rather than submitted as duplicates.
@@ -200,19 +269,32 @@ export default function AddProductPage() {
         const vals = matrixValues[name] || {};
         const attrs = attrsForVariantName(name);
         const dimPair = attrs['Dimensions'] ? dimensionValues.find(p => dimensionLabel(p) === attrs['Dimensions']) : null;
-        // Numeric quantity carried by whichever "custom" attribute value this variant used (e.g. 1000 for "1000pcs")
+        // Numeric quantity carried by whichever "custom" attribute value this variant used
+        // (e.g. 1000 for "1000pcs") — server-side, this is read as "pieces per pack" for a
+        // count-tracked accessory (see inventoryService.py's _deduct_packaged_stock_pooled).
+        // "Length" is excluded even though it's also a custom attribute with a stored
+        // quantity (e.g. 21 for "21ft") — that number is already captured by `length`
+        // below; setting it here too would make a plain bar/sheet variant indistinguishable
+        // from an actually-packaged one to any code that only checks unit_quantity > 1.
         let unitQuantity = null;
         for (const key of generationKeys) {
-            if (attributeTypesMap[key] !== 'custom') continue;
+            if (attributeTypesMap[key] !== 'custom' || key === 'Length') continue;
             const match = (customAttributeValues[key] || []).find(v => v.display === attrs[key]);
             if (match?.quantity != null) { unitQuantity = match.quantity; break; }
         }
+        // The Stock field is entered in the variant's own pack unit (e.g. "5" boxes
+        // of 1000pcs) — server-side stock_quantity tracks individual pieces
+        // directly (see server/entities/variants.py), so convert here. Bar/sheet
+        // (trackOffcuts) variants and unpackaged ones are already in their own
+        // natural unit (factor 1) — see the same rule applied to restock in
+        // InventoryPage.jsx / ManageVariantsModal.jsx.
+        const packFactor = !currentTrackOffcuts && unitQuantity ? unitQuantity : 1;
         return {
             id: `v-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             name: generationKeys.length > 0 ? name : '',
             attributes: attrs,
             price: parseFloat(vals.priceFull || 0),
-            stock: parseInt(vals.stock || 0),
+            stock: parseInt(vals.stock || 0) * packFactor,
             details: { priceFull: parseFloat(vals.priceFull || 0), priceHalf: parseFloat(vals.priceHalf || 0), priceUnit: parseFloat(vals.priceUnit || 0) },
             length: attrs['Length'] ? parseFloat(attrs['Length']) : (dimPair ? parseFloat(dimPair.length) : (vals.length ? parseFloat(vals.length) : null)),
             width: dimPair ? parseFloat(dimPair.width) : null,
@@ -482,14 +564,19 @@ export default function AddProductPage() {
         setSubmitting(true);
         setTimeout(async () => {
             if (mode === 'new') {
-                const finalProduct = { id: `p-${Date.now()}`, ...newProductData, hasDimensions, attributes: matrixSelections, variants, image: 'https://placehold.co/300x200/555555/FFFFFF?text=New+Product' };
+                // Which of this product's own generating attributes offcuts/stock pool
+                // across — see poolTogetherMap's own comment. Only keys the CEO actually
+                // saw a toggle for (generationKeys) count; a stale entry left over from
+                // an attribute since deselected is dropped rather than sent.
+                const poolIgnoredAttributes = generationKeys.filter(key => poolTogetherMap[key]);
+                const finalProduct = { id: `p-${Date.now()}`, ...newProductData, hasDimensions, poolIgnoredAttributes, attributes: matrixSelections, variants, image: 'https://placehold.co/300x200/555555/FFFFFF?text=New+Product' };
                 try {
                     await addProduct(finalProduct);
                     alert(`Product Created: ${newProductData.name}\n${variants.length} Variant(s) Generated.`);
                     setNewProductData({ name: '', itemCode: '', category: '', subCategory: '', image: null, defaultAttributes: {}, applicableAttributes: ['Color'], trackOffcuts: false, unit: 'ft' });
                     setHasDimensions(false);
                     setMatrixSelections({}); setMatrixValues({}); setDimensionValues([]); setDimensionInput({ length: '', width: '', unit: '' });
-                    setCustomAttributeValues({}); setCustomAttributeInputs({});
+                    setCustomAttributeValues({}); setCustomAttributeInputs({}); setPoolTogetherMap({});
                 } catch { /* error toast already shown by api interceptor */ }
             } else {
                 try {
@@ -536,18 +623,9 @@ export default function AddProductPage() {
     return (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--color-bg)', overflowY: 'auto', position: 'relative' }} className="custom-scrollbar">
 
-            {/* Header */}
-            <div style={{ height: '72px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 1.5rem', flexShrink: 0, background: 'rgba(9,14,26,0.95)', borderBottom: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(20px)', position: 'sticky', top: 0, zIndex: 20 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <svg width="16" height="16" fill="none" stroke="#60a5fa" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
-                    </div>
-                    <div>
-                        <h1 style={{ fontSize: '0.9rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Product Management</h1>
-                        <p style={{ fontSize: '0.62rem', color: '#475569', margin: 0 }}>Create products or expand existing lines</p>
-                    </div>
-                </div>
-                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            {/* Controls bar */}
+            <div style={{ minHeight: '64px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0.5rem 1.5rem', flexShrink: 0, background: 'rgba(9,14,26,0.95)', borderBottom: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(20px)', position: 'sticky', top: 0, zIndex: 20, flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
                     <button onClick={() => setConfigModalOpen(true)} style={{ padding: '0.5rem 1rem', borderRadius: '0.625rem', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: '#94a3b8', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
                         ⚙️ Manage Options
                     </button>
@@ -562,13 +640,23 @@ export default function AddProductPage() {
             </div>
 
             {/* Content */}
-            <div style={{ padding: '1.5rem', maxWidth: '900px', margin: '0 auto', width: '100%', paddingBottom: '100px' }}>
+            <style>{`
+                @media (max-width: 640px) {
+                    .apn-content { padding: 1rem !important; padding-bottom: 100px !important; }
+                }
+            `}</style>
+            <div className="apn-content" style={{ padding: '1.5rem', maxWidth: '900px', margin: '0 auto', width: '100%', paddingBottom: '100px' }}>
                 <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
                     {/* === NEW PRODUCT === */}
                     {mode === 'new' && (
                         <>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '1.25rem', alignItems: 'start' }}>
+                            <style>{`
+                                @media (max-width: 767px) {
+                                    .apn-new-grid { grid-template-columns: minmax(0, 1fr) !important; }
+                                }
+                            `}</style>
+                            <div className="apn-new-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '1.25rem', alignItems: 'start' }}>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                                     {/* Core Details */}
                                     <div style={cardStyle}>
@@ -672,25 +760,47 @@ export default function AddProductPage() {
                                                     ))}
                                                 </div>
 
-                                                {/* Matrix table */}
+                                                {/* Matrix table — variants sharing an offcut/stock pool are bundled into
+                                                    one card with a single shared Price/Unit field (see matrixGroups) so
+                                                    the same pooled material can't end up priced differently depending on
+                                                    which variant a cut happens to be fulfilled from. */}
                                                 {matrixPreview.length > 0 ? (
-                                                    <div style={{ maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
-                                                        {matrixPreview.map(name => (
-                                                            <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '0.875rem', padding: '0.75rem 1rem', flexWrap: 'wrap' }}>
-                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '120px' }}>
-                                                                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4ade80', flexShrink: 0 }} />
-                                                                    <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>{name}</span>
-                                                                </div>
-                                                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', flex: 1 }}>
-                                                                    {matrixRowFields.map(field => (
-                                                                        <div key={field} style={{ minWidth: '70px', flex: 1 }}>
-                                                                            <label style={{ ...labelStyle, marginBottom: '2px' }}>{field}</label>
-                                                                            <input type="number" value={matrixValues[name]?.[field] || ''} onChange={e => handleMatrixValueChange(name, field, e.target.value)} style={{ ...inputStyle, padding: '0.375rem 0.5rem', fontSize: '0.78rem' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                    <div style={{ maxHeight: '360px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.625rem' }} className="custom-scrollbar">
+                                                        {matrixGroups.map(group => {
+                                                            const pooled = group.length > 1 && matrixRowFields.includes('priceUnit');
+                                                            const rowFields = pooled ? matrixRowFields.filter(f => f !== 'priceUnit') : matrixRowFields;
+                                                            return (
+                                                                <div key={group[0]} style={pooled ? { border: '1px solid rgba(34,197,94,0.3)', borderRadius: '0.875rem', padding: '0.625rem', background: 'rgba(34,197,94,0.03)', display: 'flex', flexDirection: 'column', gap: '0.5rem' } : { display: 'contents' }}>
+                                                                    {pooled && (
+                                                                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.75rem', padding: '0 0.25rem', flexWrap: 'wrap' }}>
+                                                                            <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#4ade80', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                                                                                🔗 Shared pool · {group.length} variants
+                                                                            </span>
+                                                                            <div style={{ minWidth: '90px' }}>
+                                                                                <label style={{ ...labelStyle, marginBottom: '2px' }}>priceUnit (all)</label>
+                                                                                <input type="number" value={matrixValues[group[0]]?.priceUnit || ''} onChange={e => handleGroupFieldChange(group, 'priceUnit', e.target.value)} style={{ ...inputStyle, padding: '0.375rem 0.5rem', fontSize: '0.78rem', maxWidth: '140px' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                    {group.map(name => (
+                                                                        <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: '0.875rem', padding: '0.75rem 1rem', flexWrap: 'wrap' }}>
+                                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '120px' }}>
+                                                                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#4ade80', flexShrink: 0 }} />
+                                                                                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>{name}</span>
+                                                                            </div>
+                                                                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', flex: 1 }}>
+                                                                                {rowFields.map(field => (
+                                                                                    <div key={field} style={{ minWidth: '70px', flex: 1 }}>
+                                                                                        <label style={{ ...labelStyle, marginBottom: '2px' }}>{field}</label>
+                                                                                        <input type="number" value={matrixValues[name]?.[field] || ''} onChange={e => handleMatrixValueChange(name, field, e.target.value)} style={{ ...inputStyle, padding: '0.375rem 0.5rem', fontSize: '0.78rem' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
                                                                         </div>
                                                                     ))}
                                                                 </div>
-                                                            </div>
-                                                        ))}
+                                                            );
+                                                        })}
                                                     </div>
                                                 ) : (
                                                     <div style={{ textAlign: 'center', padding: '1.5rem', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '0.875rem', color: '#334155', fontSize: '0.78rem', fontStyle: 'italic' }}>
@@ -741,6 +851,19 @@ export default function AddProductPage() {
                                                                 {isSelected && <svg width="10" height="10" fill="none" stroke="#fff" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
                                                             </div>
                                                         </div>
+                                                        {isSelected && (
+                                                            <label onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.625rem', cursor: 'pointer' }}>
+                                                                <button type="button" onClick={() => setPoolTogetherMap(prev => ({ ...prev, [attrKey]: !prev[attrKey] }))} style={{
+                                                                    width: '30px', height: '17px', borderRadius: '100px', border: 'none', cursor: 'pointer', position: 'relative', flexShrink: 0,
+                                                                    background: poolTogetherMap[attrKey] ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'rgba(255,255,255,0.1)', transition: 'background 0.2s',
+                                                                }}>
+                                                                    <span style={{ position: 'absolute', top: '2px', left: poolTogetherMap[attrKey] ? '15px' : '2px', width: '13px', height: '13px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block' }} />
+                                                                </button>
+                                                                <span style={{ fontSize: '0.65rem', color: poolTogetherMap[attrKey] ? '#4ade80' : '#64748b', fontWeight: 600 }}>
+                                                                    Pool offcuts/stock across {attrKey} {poolTogetherMap[attrKey] ? '(ignored for pooling)' : '(keeps pools separate)'}
+                                                                </span>
+                                                            </label>
+                                                        )}
                                                         {isSelected && attributeTypesMap[attrKey] === 'custom' && (
                                                             <div style={{ marginTop: '0.625rem' }}>
                                                                 <label style={{ ...labelStyle, marginBottom: '0.25rem' }}>Add {attrKey} value</label>
@@ -797,6 +920,19 @@ export default function AddProductPage() {
                                                         {hasDimensions && <svg width="10" height="10" fill="none" stroke="#fff" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
                                                     </div>
                                                 </div>
+                                                {hasDimensions && (
+                                                    <label onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.625rem', cursor: 'pointer' }}>
+                                                        <button type="button" onClick={() => setPoolTogetherMap(prev => ({ ...prev, Dimensions: !prev.Dimensions }))} style={{
+                                                            width: '30px', height: '17px', borderRadius: '100px', border: 'none', cursor: 'pointer', position: 'relative', flexShrink: 0,
+                                                            background: poolTogetherMap.Dimensions ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'rgba(255,255,255,0.1)', transition: 'background 0.2s',
+                                                        }}>
+                                                            <span style={{ position: 'absolute', top: '2px', left: poolTogetherMap.Dimensions ? '15px' : '2px', width: '13px', height: '13px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block' }} />
+                                                        </button>
+                                                        <span style={{ fontSize: '0.65rem', color: poolTogetherMap.Dimensions ? '#4ade80' : '#64748b', fontWeight: 600 }}>
+                                                            Pool offcuts/stock across Dimensions {poolTogetherMap.Dimensions ? '(ignored for pooling)' : '(keeps pools separate)'}
+                                                        </span>
+                                                    </label>
+                                                )}
                                                 {hasDimensions && (
                                                     <div style={{ marginTop: '0.625rem' }}>
                                                         <label style={{ ...labelStyle, marginBottom: '0.25rem' }}>Add Length × Width</label>
@@ -951,26 +1087,48 @@ export default function AddProductPage() {
                                         </div>
                                     )}
 
-                                    {/* Generated variants matrix — one row per attribute-value combination */}
+                                    {/* Generated variants matrix — variants sharing an offcut/stock pool
+                                        (with THIS product's existing pool setting — see
+                                        currentPoolIgnoredAttributes) are bundled into one card with a
+                                        single shared Price/Unit field, same as the "new product" matrix. */}
                                     {matrixPreview.length > 0 ? (
-                                        <div style={{ maxHeight: '320px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
-                                            {matrixPreview.map(name => {
-                                                const duplicate = isDuplicateVariant(name);
+                                        <div style={{ maxHeight: '360px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.625rem' }} className="custom-scrollbar">
+                                            {matrixGroups.map(group => {
+                                                const pooled = group.length > 1 && matrixRowFields.includes('priceUnit');
+                                                const rowFields = pooled ? matrixRowFields.filter(f => f !== 'priceUnit') : matrixRowFields;
                                                 return (
-                                                    <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: duplicate ? 'rgba(239,68,68,0.06)' : 'rgba(255,255,255,0.04)', border: `1px solid ${duplicate ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.15)'}`, borderRadius: '0.875rem', padding: '0.75rem 1rem', flexWrap: 'wrap' }}>
-                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '120px' }}>
-                                                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: duplicate ? '#f87171' : '#4ade80', flexShrink: 0 }} />
-                                                            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>{name}</span>
-                                                            {duplicate && <span style={{ fontSize: '0.58rem', fontWeight: 800, color: '#f87171', background: 'rgba(239,68,68,0.12)', padding: '2px 6px', borderRadius: '100px', whiteSpace: 'nowrap' }}>Already exists</span>}
-                                                        </div>
-                                                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', flex: 1 }}>
-                                                            {matrixRowFields.map(field => (
-                                                                <div key={field} style={{ minWidth: '70px', flex: 1 }}>
-                                                                    <label style={{ ...labelStyle, marginBottom: '2px' }}>{field}</label>
-                                                                    <input type="number" disabled={duplicate} value={matrixValues[name]?.[field] || ''} onChange={e => handleMatrixValueChange(name, field, e.target.value)} style={{ ...inputStyle, padding: '0.375rem 0.5rem', fontSize: '0.78rem', opacity: duplicate ? 0.5 : 1, cursor: duplicate ? 'not-allowed' : 'text' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                    <div key={group[0]} style={pooled ? { border: '1px solid rgba(34,197,94,0.3)', borderRadius: '0.875rem', padding: '0.625rem', background: 'rgba(34,197,94,0.03)', display: 'flex', flexDirection: 'column', gap: '0.5rem' } : { display: 'contents' }}>
+                                                        {pooled && (
+                                                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.75rem', padding: '0 0.25rem', flexWrap: 'wrap' }}>
+                                                                <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#4ade80', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                                                                    🔗 Shared pool · {group.length} variants
+                                                                </span>
+                                                                <div style={{ minWidth: '90px' }}>
+                                                                    <label style={{ ...labelStyle, marginBottom: '2px' }}>priceUnit (all)</label>
+                                                                    <input type="number" value={matrixValues[group[0]]?.priceUnit || ''} onChange={e => handleGroupFieldChange(group, 'priceUnit', e.target.value)} style={{ ...inputStyle, padding: '0.375rem 0.5rem', fontSize: '0.78rem', maxWidth: '140px' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
                                                                 </div>
-                                                            ))}
-                                                        </div>
+                                                            </div>
+                                                        )}
+                                                        {group.map(name => {
+                                                            const duplicate = isDuplicateVariant(name);
+                                                            return (
+                                                                <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: duplicate ? 'rgba(239,68,68,0.06)' : 'rgba(255,255,255,0.04)', border: `1px solid ${duplicate ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.15)'}`, borderRadius: '0.875rem', padding: '0.75rem 1rem', flexWrap: 'wrap' }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: '120px' }}>
+                                                                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: duplicate ? '#f87171' : '#4ade80', flexShrink: 0 }} />
+                                                                        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={name}>{name}</span>
+                                                                        {duplicate && <span style={{ fontSize: '0.58rem', fontWeight: 800, color: '#f87171', background: 'rgba(239,68,68,0.12)', padding: '2px 6px', borderRadius: '100px', whiteSpace: 'nowrap' }}>Already exists</span>}
+                                                                    </div>
+                                                                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', flex: 1 }}>
+                                                                        {rowFields.map(field => (
+                                                                            <div key={field} style={{ minWidth: '70px', flex: 1 }}>
+                                                                                <label style={{ ...labelStyle, marginBottom: '2px' }}>{field}</label>
+                                                                                <input type="number" disabled={duplicate} value={matrixValues[name]?.[field] || ''} onChange={e => handleMatrixValueChange(name, field, e.target.value)} style={{ ...inputStyle, padding: '0.375rem 0.5rem', fontSize: '0.78rem', opacity: duplicate ? 0.5 : 1, cursor: duplicate ? 'not-allowed' : 'text' }} onFocus={onFocusBorder} onBlur={onBlurBorder} />
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
                                                     </div>
                                                 );
                                             })}
@@ -986,8 +1144,14 @@ export default function AddProductPage() {
                     )}
 
                     {/* Sticky action bar */}
-                    <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '1rem 1.5rem', background: 'rgba(9,14,26,0.97)', borderTop: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(20px)', display: 'flex', justifyContent: 'flex-end', zIndex: 30 }}>
-                        <button type="submit" disabled={submitting || (mode === 'variant' && !isVariantComplete)} style={{
+                    <style>{`
+                        @media (max-width: 640px) {
+                            .apn-action-bar { padding: 0.75rem 1rem !important; }
+                            .apn-submit-btn { width: 100% !important; min-width: 0 !important; }
+                        }
+                    `}</style>
+                    <div className="apn-action-bar" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '1rem 1.5rem', background: 'rgba(9,14,26,0.97)', borderTop: '1px solid rgba(255,255,255,0.07)', backdropFilter: 'blur(20px)', display: 'flex', justifyContent: 'flex-end', zIndex: 30 }}>
+                        <button type="submit" className="apn-submit-btn" disabled={submitting || (mode === 'variant' && !isVariantComplete)} style={{
                             padding: '0.75rem 2.5rem', borderRadius: '0.875rem', border: 'none', cursor: submitting || (mode === 'variant' && !isVariantComplete) ? 'not-allowed' : 'pointer',
                             background: submitting || (mode === 'variant' && !isVariantComplete) ? 'rgba(59,130,246,0.2)' : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
                             color: '#fff', fontWeight: 700, fontSize: '0.875rem',

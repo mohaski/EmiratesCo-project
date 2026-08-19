@@ -93,7 +93,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, h
         </div>
 
         {/* Actions */}
-        <div style={{ display: 'flex', gap: '0.5rem' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
             {!isCancelled && orderIsToday && onAddTo && (
                 <button onClick={() => onAddTo(order)} style={{
                     padding: '0.5rem 1rem', borderRadius: '0.625rem',

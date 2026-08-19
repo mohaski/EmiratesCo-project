@@ -52,11 +52,13 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
             <div
                 onClick={e => e.stopPropagation()}
                 style={{
-                    width: '100%', maxWidth: '420px',
+                    width: '100%', maxWidth: '420px', maxHeight: 'min(720px, 90vh)', overflowY: 'auto',
                     background: 'linear-gradient(135deg, #0f172a, #0b1220)',
                     border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1.25rem',
-                    padding: '1.75rem', boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+                    padding: 'clamp(1rem, 5vw, 1.75rem)', boxShadow: '0 24px 64px rgba(0,0,0,0.5)',
+                    boxSizing: 'border-box',
                 }}
+                className="custom-scrollbar"
             >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
                     <div>
@@ -72,7 +74,7 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
 
                 {/* Order summary */}
                 <div style={{
-                    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem',
+                    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(110px, 100%), 1fr))', gap: '0.75rem',
                     background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
                     borderRadius: '0.875rem', padding: '0.875rem 1rem', marginBottom: '1.25rem',
                 }}>
@@ -118,7 +120,7 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                 <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
                     Payment Method
                 </label>
-                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
                     {METHODS.map(m => (
                         <button key={m.id} onClick={() => setPaymentMethod(m.id)} style={{
                             flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.375rem',

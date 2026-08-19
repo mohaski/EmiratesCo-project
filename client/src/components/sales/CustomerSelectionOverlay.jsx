@@ -53,18 +53,19 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
         }}>
             <div style={{
-                width: '100%', maxWidth: '680px',
+                width: '100%', maxWidth: '680px', maxHeight: 'min(700px, 92vh)',
                 background: 'linear-gradient(145deg, rgba(13,20,38,0.98), rgba(9,14,26,0.98))',
                 border: '1px solid rgba(255,255,255,0.1)',
                 borderRadius: '1.5rem',
                 boxShadow: '0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(59,130,246,0.1)',
-                overflow: 'hidden',
+                overflow: 'hidden', display: 'flex', flexDirection: 'column',
             }}>
                 {/* Header */}
                 <div style={{
                     padding: '1.75rem 2rem 1.25rem',
                     borderBottom: '1px solid rgba(255,255,255,0.07)',
                     background: 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(6,182,212,0.04))',
+                    flexShrink: 0,
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
                         <div style={{
@@ -80,7 +81,7 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
                     </div>
                 </div>
 
-                <div style={{ padding: '1.5rem 2rem' }}>
+                <div style={{ padding: '1.5rem 2rem', overflowY: 'auto' }} className="custom-scrollbar">
                     {/* Search Existing */}
                     <div style={{ marginBottom: '1.5rem' }}>
                         <label style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' }}>
@@ -132,7 +133,7 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
                     </div>
 
                     {/* New Customer + Walk-in */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.5rem' }}>
                         <div>
                             <label style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.625rem' }}>
                                 New Registration

@@ -1,4 +1,7 @@
-const AddStockModal = ({ isOpen, onClose, product, selectedVariant, onVariantSelect, stockToAdd, onStockChange, onConfirm }) => {
+const AddStockModal = ({
+    isOpen, onClose, product, selectedVariant, onVariantSelect, stockToAdd, onStockChange, onConfirm,
+    canAddPcs, restockUnit = 'box', onUnitChange, packagedFactor = 1,
+}) => {
     if (!isOpen || !product) return null;
 
     const darkInput = {
@@ -7,22 +10,31 @@ const AddStockModal = ({ isOpen, onClose, product, selectedVariant, onVariantSel
         fontFamily: 'var(--font-mono)',
     };
 
+    const chipBtn = (active) => ({
+        padding: '0.375rem 1rem', borderRadius: '100px', fontSize: '0.75rem', fontWeight: 700,
+        cursor: 'pointer', border: '1px solid', transition: 'all 0.15s',
+        background: active ? 'rgba(59,130,246,0.15)' : 'transparent',
+        borderColor: active ? 'rgba(59,130,246,0.4)' : 'rgba(255,255,255,0.1)',
+        color: active ? '#60a5fa' : '#64748b',
+    });
+
     return (
         <div style={{
             position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
             background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(10px)',
         }}>
             <div style={{
-                width: '100%', maxWidth: '480px',
+                width: '100%', maxWidth: '480px', maxHeight: 'min(680px, 90vh)',
                 background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
                 border: '1px solid rgba(255,255,255,0.1)',
                 borderRadius: '1.5rem', overflow: 'hidden',
                 boxShadow: '0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(59,130,246,0.1)',
                 animation: 'fadeInScale 0.2s ease',
+                display: 'flex', flexDirection: 'column',
             }}>
                 {/* Header */}
-                <div style={{
-                    padding: '1.5rem 2rem', textAlign: 'center',
+                <div className="modal-header-pad" style={{
+                    padding: '1.5rem 2rem', textAlign: 'center', flexShrink: 0,
                     borderBottom: '1px solid rgba(255,255,255,0.07)',
                     background: 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(6,182,212,0.04))',
                 }}>
@@ -36,13 +48,13 @@ const AddStockModal = ({ isOpen, onClose, product, selectedVariant, onVariantSel
                     <p style={{ fontSize: '0.78rem', color: '#64748b', margin: 0 }}>{product.name}</p>
                 </div>
 
-                <div style={{ padding: '1.5rem 2rem' }}>
+                <div className="modal-body-pad" style={{ padding: '1.5rem 2rem', flex: 1, overflowY: 'auto', minHeight: 0 }}>
                     {/* Variant selector */}
                     <div style={{ marginBottom: '1.5rem' }}>
                         <label style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.625rem' }}>
                             Select Variant
                         </label>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: '0.5rem' }}>
                             {Object.keys(product.stockVariants).map(variant => (
                                 <button key={variant} onClick={() => onVariantSelect(variant)} style={{
                                     padding: '0.625rem', borderRadius: '0.625rem', cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center',
@@ -63,9 +75,17 @@ const AddStockModal = ({ isOpen, onClose, product, selectedVariant, onVariantSel
 
                     {/* Qty input */}
                     <div style={{ marginBottom: '1.5rem' }}>
-                        <label style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', display: 'block', marginBottom: '0.625rem' }}>
-                            Quantity to Add
-                        </label>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.625rem' }}>
+                            <label style={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                                {restockUnit === 'pcs' ? 'Pieces to Add' : 'Quantity to Add'}
+                            </label>
+                            {canAddPcs && (
+                                <div style={{ display: 'flex', gap: '0.375rem' }}>
+                                    <button onClick={() => onUnitChange('box')} style={chipBtn(restockUnit === 'box')}>Box</button>
+                                    <button onClick={() => onUnitChange('pcs')} style={chipBtn(restockUnit === 'pcs')}>Pcs</button>
+                                </div>
+                            )}
+                        </div>
                         <div style={{ position: 'relative' }}>
                             <button onClick={() => onStockChange(Math.max(0, (parseInt(stockToAdd) || 0) - 1).toString())} style={{
                                 position: 'absolute', left: '0.5rem', top: '50%', transform: 'translateY(-50%)',
@@ -88,15 +108,19 @@ const AddStockModal = ({ isOpen, onClose, product, selectedVariant, onVariantSel
                         {selectedVariant && (
                             <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#475569', marginTop: '0.5rem', fontFamily: 'var(--font-mono)' }}>
                                 New total: <span style={{ color: '#60a5fa', fontWeight: 700 }}>
-                                    {(product.stockVariants[selectedVariant] || 0) + (parseInt(stockToAdd) || 0)}
-                                </span>
+                                    {restockUnit === 'pcs'
+                                        // Current stock is displayed in the variant's own pack unit (boxes) —
+                                        // convert to pieces to add the entered piece-count on the same footing.
+                                        ? Math.round((product.stockVariants[selectedVariant] || 0) * packagedFactor) + (parseInt(stockToAdd) || 0)
+                                        : (product.stockVariants[selectedVariant] || 0) + (parseInt(stockToAdd) || 0)}
+                                </span> {restockUnit === 'pcs' ? 'pcs' : ''}
                             </p>
                         )}
                     </div>
                 </div>
 
                 {/* Footer */}
-                <div style={{ padding: '0 2rem 1.5rem', display: 'flex', gap: '0.75rem' }}>
+                <div className="modal-footer-pad" style={{ padding: '0 2rem 1.5rem', display: 'flex', gap: '0.75rem', flexShrink: 0 }}>
                     <button onClick={onClose} style={{
                         flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.08)',
                         background: 'transparent', color: '#64748b', fontWeight: 700, cursor: 'pointer', transition: 'all 0.15s', fontSize: '0.875rem',

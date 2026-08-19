@@ -131,7 +131,7 @@ export default function OrdersPage() {
 
             {/* Header */}
             <div style={{
-                padding: '1.5rem 2rem',
+                padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 5vw, 2rem)',
                 borderBottom: '1px solid rgba(255,255,255,0.07)',
                 background: 'rgba(9,14,26,0.8)',
                 backdropFilter: 'blur(20px)',
@@ -176,15 +176,15 @@ export default function OrdersPage() {
             </div>
 
             {/* Tabs */}
-            <div style={{ padding: '0 2rem', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: '0.25rem' }}>
+            <div style={{ padding: '0 clamp(1rem, 5vw, 2rem)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: '0.25rem', overflowX: 'auto', flexWrap: 'nowrap' }} className="scrollbar-hide">
                 {tabs.map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
                         style={{
-                            padding: '1rem 0.25rem', marginRight: '1.5rem',
+                            padding: '1rem 0.25rem', marginRight: '1.5rem', flexShrink: 0,
                             background: 'none', border: 'none', cursor: 'pointer',
-                            fontSize: '0.875rem', fontWeight: 700,
+                            fontSize: '0.875rem', fontWeight: 700, whiteSpace: 'nowrap',
                             color: activeTab === tab.id ? '#f1f5f9' : '#475569',
                             borderBottom: activeTab === tab.id ? `2px solid ${tab.color}` : '2px solid transparent',
                             transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -203,7 +203,7 @@ export default function OrdersPage() {
             </div>
 
             {/* Content */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }} className="custom-scrollbar">
+            <div style={{ flex: 1, overflowY: 'auto', padding: 'clamp(1rem, 4vw, 1.5rem) clamp(1rem, 5vw, 2rem)' }} className="custom-scrollbar">
                 {activeTab === 'orders' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
                         {groupedOrders.map(group => (

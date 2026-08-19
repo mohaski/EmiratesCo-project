@@ -125,7 +125,7 @@ export default function CorrectOffcutModal({ event, productId, variantId, onConf
                 animation: 'fadeInScale 0.2s ease',
             }}>
                 {/* Header */}
-                <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'linear-gradient(135deg, rgba(245,158,11,0.1), transparent)', flexShrink: 0 }}>
+                <div className="modal-header-pad" style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.07)', background: 'linear-gradient(135deg, rgba(245,158,11,0.1), transparent)', flexShrink: 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <div>
                             <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: '0 0 3px' }}>Correct Cutting Outcome</h3>
@@ -143,7 +143,7 @@ export default function CorrectOffcutModal({ event, productId, variantId, onConf
                 </div>
 
                 <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar">
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar modal-body-pad">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.625rem' }}>
                             <span style={{ fontSize: '0.7rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                                 Corrected Remainder(s)
@@ -158,7 +158,7 @@ export default function CorrectOffcutModal({ event, productId, variantId, onConf
                                 const invalid = !(parseFloat(row.width) > 0 && parseFloat(row.height) > 0);
                                 return (
                                     <div key={idx} style={{
-                                        display: 'flex', alignItems: 'center', gap: '0.625rem',
+                                        display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap',
                                         padding: '0.75rem 1rem', borderRadius: '0.875rem',
                                         background: 'rgba(255,255,255,0.03)', border: `1px solid ${invalid ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)'}`,
                                     }}>
@@ -280,7 +280,7 @@ export default function CorrectOffcutModal({ event, productId, variantId, onConf
                     </div>
 
                     {/* Footer */}
-                    <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', background: 'rgba(0,0,0,0.3)', flexShrink: 0 }}>
+                    <div className="modal-footer-pad" style={{ padding: '1rem 1.5rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', background: 'rgba(0,0,0,0.3)', flexShrink: 0, flexWrap: 'wrap' }}>
                         <button type="button" onClick={onClose} style={{
                             padding: '0.625rem 1.25rem', borderRadius: '0.75rem', border: '1px solid rgba(255,255,255,0.1)',
                             background: 'rgba(255,255,255,0.05)', color: '#64748b', fontSize: '0.82rem', cursor: 'pointer',

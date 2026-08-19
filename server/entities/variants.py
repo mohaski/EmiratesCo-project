@@ -15,8 +15,16 @@ class Variant(SQLModel, table=True):
     # Specific Attributes (Color, Size, Finish)
     attributes: Dict[str, Any] = Field(default={}, sa_column=Column(JSON))
     
-    # Inventory
-    stock_quantity: float = Field(default=0.0)
+    # Inventory. Always a whole-piece count — for a "packaged" variant (one with
+    # unit_quantity set, e.g. "Wood Screw / Box of 1000pcs"), this counts
+    # individual pieces held in SEALED boxes only (always an exact multiple of
+    # unit_quantity — a box is atomic, never partially consumed in place); any
+    # loose/opened-box leftover lives in a separate shared pool instead (see
+    # inventoryService.py's _deduct_packaged_stock_pooled). A bar/sheet
+    # product's variant counts whole bars/sheets, unaffected by unit_quantity
+    # (see its own docstring below for why some of those have a spurious
+    # unit_quantity that's never read).
+    stock_quantity: int = Field(default=0)
     low_stock_threshold: float = Field(default=10.0)
     
     # Price modifiers (added to base product price)
@@ -32,7 +40,13 @@ class Variant(SQLModel, table=True):
     width: Optional[float] = Field(default=None)
     height: Optional[float] = Field(default=None)
 
-    # Numeric quantity carried by a "custom" attribute value (e.g. 1000 for "1000pcs")
+    # Numeric quantity carried by a "custom" attribute value (e.g. 1000 for "1000pcs").
+    # Meaningful as "pieces per stock unit" ONLY for track_offcuts=False (count-tracked)
+    # accessory variants — see stock_quantity above. A track_offcuts=True bar/sheet
+    # variant with a numeric custom "Length" (e.g. "21ft") also gets this populated
+    # (AddProductPage's buildGeneratedVariants sets it for ANY custom attribute value
+    # that carries a stored quantity, regardless of what the attribute represents) but
+    # no deduction code path for those products ever reads it — dead data for them.
     unit_quantity: Optional[float] = Field(default=None)
 
     # Relationships

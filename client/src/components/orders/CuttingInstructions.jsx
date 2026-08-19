@@ -26,7 +26,7 @@ const PendingSourceNotice = ({ notice, theme }) => (
 // kept in place as a historical record rather than deleted.
 const CuttingInstructionLine1D = ({ src, theme, renderActions }) => (
     <div style={{ fontSize: '10.5px', lineHeight: 1.4, opacity: src.superseded ? 0.5 : 1 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
             <div>
                 {src.source === 'offcut'
                     ? <span>Cut <strong>{fmtLen(src.length_used)}</strong> from <strong>Offcut #{src.offcut_id}</strong> ({fmtLen(src.offcut_length)} available)</span>
@@ -137,7 +137,7 @@ const CuttingInstructionLine2D = ({ src, theme, renderActions }) => {
         <div style={{ fontSize: '10.5px', lineHeight: 1.4, display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
             <CutSketch src={src} theme={theme} />
             <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', justifyContent: 'space-between', flexWrap: 'wrap' }}>
                     <strong>{fmtMm(wide)} x {fmtMm(narrow)}</strong>
                     {renderActions && renderActions(src)}
                 </div>

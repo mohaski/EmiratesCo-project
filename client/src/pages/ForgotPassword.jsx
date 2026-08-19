@@ -83,11 +83,11 @@ export default function ForgotPassword() {
                         </div>
 
                         {/* Flex Container for Button and Link */}
-                        <div className="flex items-center justify-between gap-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
                             <button
                                 type="submit"
                                 disabled={isLoading}
-                                className={`btn-primary px-6 py-3 rounded-xl font-semibold text-white shadow-lg transform transition-all 
+                                className={`btn-primary w-full sm:w-auto px-6 py-3 rounded-xl font-semibold text-white shadow-lg transform transition-all
                                     ${isLoading ? 'opacity-70 cursor-wait' : 'active:scale-[0.98] hover:scale-[1.02]'}`}
                             >
                                 {isLoading ? 'Sending...' : 'Send Reset Link'}
@@ -95,7 +95,7 @@ export default function ForgotPassword() {
 
                             <Link
                                 to="/login"
-                                className="text-sm text-gray-400 hover:text-white transition-colors whitespace-nowrap"
+                                className="text-sm text-gray-400 hover:text-white transition-colors whitespace-nowrap text-center sm:text-left"
                             >
                                 Back to Login
                             </Link>

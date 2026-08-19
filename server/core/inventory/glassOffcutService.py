@@ -78,6 +78,7 @@ from entities.products import Product
 from entities.variants import Variant
 from entities.orderItems import OrderItem
 from entities.orders import Order
+from core.inventory.poolKey import compute_pool_key
 from loggiing import logger
 
 
@@ -345,7 +346,7 @@ def _pack_rect_multi(w: float, h: float, needs: list, allow_rotation: bool, stra
 
 # ── Candidate generation ────────────────────────────────────────────────────────
 
-def _generate_candidates(db: Session, product: Product, variant: Optional[Variant], needs: list, full_w: float, full_h: float, strategy: dict = DEFAULT_STRATEGY) -> list:
+def _generate_candidates(db: Session, product: Product, variant: Optional[Variant], needs: list, full_w: float, full_h: float, strategy: dict = DEFAULT_STRATEGY, pool_key: Optional[str] = None) -> list:
     """
     One candidate = one source (an existing offcut or the fresh sheet), each
     already recursively packed (see _pack_rect_multi) with as many pieces from the
@@ -353,9 +354,16 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
     different order lines when they nest together. Orientation, splits, which
     need gets placed where, and any nested recursion into leftover space are all
     decided internally by _pack_rect_multi, using the given `strategy`.
+
+    Offcuts are looked up by `pool_key` (every variant sharing the same
+    non-size attributes as `variant` — see core/inventory/poolKey.py), not by
+    this exact variant, so a leftover cut from a differently-dimensioned sheet
+    of the same thickness/type is still eligible here.
     """
     candidates = []
     allow_rotation = product.allow_rotation
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
 
     stmt = select(Offcut).where(
         Offcut.product_id == product.productId,
@@ -363,8 +371,8 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
         Offcut.quantity > 0,
         Offcut.width.isnot(None),
         Offcut.height.isnot(None),
+        Offcut.pool_key == pool_key,
     )
-    stmt = stmt.where(Offcut.variant_id == variant.variantId) if variant else stmt.where(Offcut.variant_id == None)  # noqa: E711
     offcuts = db.exec(stmt).all()
 
     for oc in offcuts:
@@ -680,16 +688,23 @@ def _restore_sheet_stock(db: Session, product: Product, variant: Optional[Varian
         db.add(product)
 
 
-def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available", source_item_id: Optional[int] = None) -> int:
+def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available", source_item_id: Optional[int] = None, pool_key: Optional[str] = None) -> int:
     """Creates or increments a matching offcut row and returns its id — callers
     attach this to the remainder's audit record so later code (e.g. the cut
     preview's consolidation of same-session offcut chains) can tell whether a
     later event consumed a genuinely pre-existing offcut or one just created.
 
+    Matches (and, when creating, tags) by `pool_key` rather than this exact
+    variant — see core/inventory/poolKey.py — so a remainder from a 2440x1830mm
+    sheet merges with one from a 2140x3660mm sheet of the same thickness/type.
+
     `source_item_id` tags which OrderItem's cutting job produced this remainder.
     On a merge into an existing row, it's overwritten to the newest contributor —
     biased toward surfacing a pending-source notice later rather than missing one
     (this is an advisory feature, not a strict guarantee; see _apply_candidate)."""
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
     stmt = select(Offcut).where(
         Offcut.product_id == product.productId,
         Offcut.status == status,
@@ -697,8 +712,8 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
         Offcut.height.isnot(None),
         Offcut.width >= width - OFFCUT_MATCH_TOLERANCE_MM, Offcut.width <= width + OFFCUT_MATCH_TOLERANCE_MM,
         Offcut.height >= height - OFFCUT_MATCH_TOLERANCE_MM, Offcut.height <= height + OFFCUT_MATCH_TOLERANCE_MM,
+        Offcut.pool_key == pool_key,
     ).with_for_update()
-    stmt = stmt.where(Offcut.variant_id == variant.variantId) if variant else stmt.where(Offcut.variant_id == None)  # noqa: E711
     existing = db.exec(stmt).first()
     if existing:
         existing.quantity += 1
@@ -710,6 +725,7 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
         new_offcut = Offcut(
             product_id=product.productId,
             variant_id=variant.variantId if variant else None,
+            pool_key=pool_key,
             width=width, height=height, length=0.0,
             quantity=1, status=status, source_item_id=source_item_id,
         )
@@ -718,14 +734,16 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
         return new_offcut.offcutId
 
 
-def _remove_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available") -> None:
+def _remove_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available", pool_key: Optional[str] = None) -> None:
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
     stmt = select(Offcut).where(
         Offcut.product_id == product.productId,
         Offcut.status == status,
         Offcut.width >= width - OFFCUT_MATCH_TOLERANCE_MM, Offcut.width <= width + OFFCUT_MATCH_TOLERANCE_MM,
         Offcut.height >= height - OFFCUT_MATCH_TOLERANCE_MM, Offcut.height <= height + OFFCUT_MATCH_TOLERANCE_MM,
+        Offcut.pool_key == pool_key,
     ).with_for_update()
-    stmt = stmt.where(Offcut.variant_id == variant.variantId) if variant else stmt.where(Offcut.variant_id == None)  # noqa: E711
     existing = db.exec(stmt).first()
     if existing:
         if existing.quantity <= 1:
@@ -749,7 +767,7 @@ def _layout_remainder_rects(src_w: float, src_h: float, grid_w: float, grid_h: f
     return rect_a, rect_b
 
 
-def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], candidate: dict, item_id: Optional[int] = None) -> dict:
+def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], candidate: dict, item_id: Optional[int] = None, pool_key: Optional[str] = None) -> dict:
     """
     Consumes ONE source unit (an offcut row or one sheet) and returns
     {line_idx: event, ...} — one event per order line that got a piece from this
@@ -771,6 +789,9 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
     to an item that hasn't been marked cut yet, every event produced here gets a
     `pending_source_notice` — advisory only, never blocks the resolution.
     """
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
     pending_source_notice = None
     if candidate["source_kind"] == "offcut":
         locked = db.exec(select(Offcut).where(Offcut.offcutId == candidate["source_id"]).with_for_update()).first()
@@ -797,7 +818,7 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
     for r in candidate["remainders"]:
         dims = (r["width"], r["height"])
         status = "scrap" if _is_scrap(dims, product) else "available"
-        offcut_id = _upsert_glass_offcut(db, product, variant, r["width"], r["height"], status, source_item_id=item_id)
+        offcut_id = _upsert_glass_offcut(db, product, variant, r["width"], r["height"], status, source_item_id=item_id, pool_key=pool_key)
         remainders_created.append({
             "width": r["width"], "height": r["height"], "status": status, "x": r["x"], "y": r["y"], "offcut_id": offcut_id,
             # CEO-configured popular_size_ranges, not sales history — see
@@ -865,7 +886,7 @@ def _pick_with_redirect(pool: list, product: Product, now: datetime, remainder_w
     return consolidated
 
 
-def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], needs: list, full_w: float, full_h: float, strategy: dict = DEFAULT_STRATEGY, item_id: Optional[int] = None) -> dict:
+def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], needs: list, full_w: float, full_h: float, strategy: dict = DEFAULT_STRATEGY, item_id: Optional[int] = None, pool_key: Optional[str] = None) -> dict:
     """Fulfils as much of the whole `needs` pool as possible from a single
     source, packing pieces from potentially several different order lines into
     it at once when they nest together (see _pack_rect_multi / _generate_candidates).
@@ -931,7 +952,10 @@ def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], nee
     (_candidate_sort_key) — waste, sellability, aging, fresh-sheet avoidance,
     and size-fit all still apply.
     """
-    candidates = _generate_candidates(db, product, variant, needs, full_w, full_h, strategy)
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
+
+    candidates = _generate_candidates(db, product, variant, needs, full_w, full_h, strategy, pool_key)
     if not candidates:
         largest = max((n for n in needs if n["remaining"] > 0), key=lambda n: n["piece_w"] * n["piece_h"])
         raise ValueError(
@@ -972,7 +996,7 @@ def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], nee
         sheet_candidates = [c for c in candidates if c["source_kind"] == "sheet"]
         best = min(sheet_candidates, key=lambda c: _candidate_sort_key(c, product, now))
 
-    return _apply_candidate(db, product, variant, best, item_id)
+    return _apply_candidate(db, product, variant, best, item_id, pool_key)
 
 
 # ── Public entry points ─────────────────────────────────────────────────────────
@@ -989,7 +1013,7 @@ def _line_piece_dims_mm(line: dict) -> Optional[tuple]:
     return cut_w, cut_h, qty
 
 
-def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list, strategy: dict, item_id: Optional[int] = None) -> dict:
+def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list, strategy: dict, item_id: Optional[int] = None, pool_key: Optional[str] = None) -> dict:
     """
     Runs one full resolution pass of `glass_cut_lines` using a single fixed
     tie-break strategy — the actual packing engine. resolve_glass_cut_lines
@@ -1013,6 +1037,8 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
     ones the CEO has said sell well, not just "small in total area."
     """
     full_w, full_h = _get_full_dims(variant)
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
 
     needs = []  # [{"line_idx", "piece_w", "piece_h", "remaining"}, ...]
     for idx, line in enumerate(glass_cut_lines):
@@ -1025,7 +1051,7 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
 
     sources_by_line = {idx: [] for idx in range(len(glass_cut_lines))}
     while any(n["remaining"] > 0 for n in needs):
-        events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h, strategy, item_id)
+        events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h, strategy, item_id, pool_key)
         for line_idx, event in events_by_line.items():
             sources_by_line[line_idx].append(event)
         for n in needs:
@@ -1087,12 +1113,14 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
     callers that ignore the return value (e.g. inventoryService.py, which only
     needs the offcut_sources mutated onto glass_cut_lines) are unaffected.
     """
+    pool_key = compute_pool_key(db, variant)
+
     trials = []
     for strategy in STRATEGIES:
         trial_lines = [{**line} for line in glass_cut_lines]
         savepoint = db.begin_nested()
         try:
-            metrics = _resolve_with_strategy(db, product, variant, trial_lines, strategy, item_id)
+            metrics = _resolve_with_strategy(db, product, variant, trial_lines, strategy, item_id, pool_key)
             trials.append((metrics, strategy))
         except ValueError:
             pass  # this strategy couldn't fulfil the pool at all — skip it
@@ -1102,7 +1130,7 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
     if not trials:
         # No strategy could resolve the pool — re-run the baseline for real so it
         # raises its own informative ValueError instead of failing silently here.
-        _resolve_with_strategy(db, product, variant, glass_cut_lines, DEFAULT_STRATEGY, item_id)
+        _resolve_with_strategy(db, product, variant, glass_cut_lines, DEFAULT_STRATEGY, item_id, pool_key)
         return {"winning_strategy": DEFAULT_STRATEGY["name"], "strategies_tried": 0, "trials": []}
 
     # Priority: fewest sheets (the dominant raw-material cost) > least true scrap
@@ -1117,7 +1145,7 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
             t[0]["sheets_consumed"], t[0]["total_scrap_area"], -t[0]["total_sellability_score"], t[0]["total_remainder_pieces"],
         )
     )
-    _resolve_with_strategy(db, product, variant, glass_cut_lines, best_strategy, item_id)
+    _resolve_with_strategy(db, product, variant, glass_cut_lines, best_strategy, item_id, pool_key)
 
     return {
         "winning_strategy": best_strategy["name"],
@@ -1138,12 +1166,13 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
 
 def restore_glass_cut_lines(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list) -> None:
     """Reverses resolve_glass_cut_lines — restores stock/offcuts for an edited or cancelled order."""
+    pool_key = compute_pool_key(db, variant)
     for line in glass_cut_lines:
         for src in (line.get("offcut_sources") or []):
-            _restore_one_source(db, product, variant, src)
+            _restore_one_source(db, product, variant, src, pool_key)
 
 
-def _restore_one_source(db: Session, product: Product, variant: Optional[Variant], src: dict) -> None:
+def _restore_one_source(db: Session, product: Product, variant: Optional[Variant], src: dict, pool_key: Optional[str] = None) -> None:
     if not src.get("owns_consumption", True):
         # A "shared" event — this line's pieces came from a sheet/offcut another
         # line in this same OrderItem owns the consumption for. That owning event
@@ -1152,6 +1181,9 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
         # so undoing it already reverses this line's share of the material. Nothing
         # to do here; defaults to True for older event shapes that predate this field.
         return
+
+    if pool_key is None:
+        pool_key = compute_pool_key(db, variant)
 
     if src.get("source") == "offcut":
         oc_id = src.get("offcut_id")
@@ -1163,6 +1195,7 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
             db.add(Offcut(
                 product_id=product.productId,
                 variant_id=variant.variantId if variant else None,
+                pool_key=pool_key,
                 width=src.get("offcut_width"), height=src.get("offcut_height"),
                 length=0.0, quantity=1, status="available",
             ))
@@ -1170,7 +1203,7 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
         _restore_sheet_stock(db, product, variant, 1)
 
     for r in src.get("remainders_created", []):
-        _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"))
+        _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"), pool_key)
 
 
 def apply_manual_glass_selection(db: Session, product: Product, variant: Optional[Variant], cut_l: float, cut_w: float, unit: str, forced_offcut_id: Optional[int] = None) -> dict:
@@ -1186,8 +1219,9 @@ def apply_manual_glass_selection(db: Session, product: Product, variant: Optiona
     """
     cut_w_mm, cut_h_mm = _cut_dims_to_mm(cut_l, cut_w, unit)
     full_w, full_h = _get_full_dims(variant)
+    pool_key = compute_pool_key(db, variant)
     needs = [{"line_idx": 0, "piece_w": cut_w_mm, "piece_h": cut_h_mm, "remaining": 1}]
-    candidates = _generate_candidates(db, product, variant, needs, full_w, full_h)
+    candidates = _generate_candidates(db, product, variant, needs, full_w, full_h, pool_key=pool_key)
 
     if forced_offcut_id is not None:
         candidates = [c for c in candidates if c["source_kind"] == "offcut" and c["source_id"] == forced_offcut_id]
@@ -1202,7 +1236,7 @@ def apply_manual_glass_selection(db: Session, product: Product, variant: Optiona
 
     now = datetime.utcnow()
     best = min(candidates, key=lambda c: _candidate_sort_key(c, product, now))
-    return _apply_candidate(db, product, variant, best)[0]
+    return _apply_candidate(db, product, variant, best, pool_key=pool_key)[0]
 
 
 def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[Variant], pieces: list, forced_offcut_id: Optional[int] = None) -> list:
@@ -1231,6 +1265,7 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
     outer transaction (confirm) or gets rolled back (preview).
     """
     full_w, full_h = _get_full_dims(variant)
+    pool_key = compute_pool_key(db, variant)
 
     groups: dict = {}
     for width, height in pieces:
@@ -1245,16 +1280,16 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
     forced_pending = forced_offcut_id is not None
     while any(n["remaining"] > 0 for n in needs):
         if forced_pending:
-            candidates = _generate_candidates(db, product, variant, needs, full_w, full_h)
+            candidates = _generate_candidates(db, product, variant, needs, full_w, full_h, pool_key=pool_key)
             candidates = [c for c in candidates if c["source_kind"] == "offcut" and c["source_id"] == forced_offcut_id]
             if not candidates:
                 raise ValueError(f"Offcut #{forced_offcut_id} doesn't fit any of the corrected pieces")
             now = datetime.utcnow()
             best = min(candidates, key=lambda c: _candidate_sort_key(c, product, now))
-            events_by_line = _apply_candidate(db, product, variant, best)
+            events_by_line = _apply_candidate(db, product, variant, best, pool_key=pool_key)
             forced_pending = False
         else:
-            events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h)
+            events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h, pool_key=pool_key)
 
         for event in events_by_line.values():
             events.append(event)
@@ -1294,6 +1329,7 @@ def correct_glass_offcut_event(
     if not event.get("owns_consumption", True):
         raise ValueError("This event doesn't own the consumption for its source — correct the owning event instead")
 
+    pool_key = compute_pool_key(db, variant)
     before = list(event["remainders_created"])
 
     for size in new_remainders:
@@ -1303,14 +1339,14 @@ def correct_glass_offcut_event(
             raise ValueError(f"Corrected remainder dimensions must be positive (got {width}x{height})")
 
     for r in before:
-        _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"))
+        _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"), pool_key)
 
     after = []
     for size in new_remainders:
         width = float(size["width"])
         height = float(size["height"])
         status = size.get("status") or ("scrap" if _is_scrap((width, height), product) else "available")
-        offcut_id = _upsert_glass_offcut(db, product, variant, width, height, status)
+        offcut_id = _upsert_glass_offcut(db, product, variant, width, height, status, pool_key=pool_key)
         after.append({"width": width, "height": height, "status": status, "offcut_id": offcut_id})
 
     event["remainders_created"] = after

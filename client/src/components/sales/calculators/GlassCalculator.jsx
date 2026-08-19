@@ -65,16 +65,43 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [showCutPreview, setShowCutPreview] = useState(false);
     const [feasibility, setFeasibility] = useState({ checking: false, ok: true, message: null });
 
+    // Cascading options: each attribute's shown chips are narrowed to values that
+    // actually co-occur, on some real variant, with whatever's currently selected
+    // for every OTHER attribute — e.g. picking Thickness=4mm hides a Dimensions
+    // value that only exists on a 6mm variant. Without this, a combination with no
+    // matching variant could be selected, resolving to no variant at all (not just
+    // "no offcut of that size" — the whole product/variant lookup fails, which is
+    // a different, more confusing failure than a genuine stock-fit problem).
+    const optionsForKey = useMemo(() => {
+        const result = {};
+        Object.keys(extraAttributes).forEach(key => {
+            const otherEntries = Object.entries(extraSelections).filter(([k]) => k !== key && extraAttributes[k]);
+            const matching = (product.variants || []).filter(v =>
+                otherEntries.every(([k, val]) => v.attributes?.[k] === val)
+            );
+            const opts = new Set();
+            matching.forEach(v => {
+                const val = v.attributes?.[key];
+                if (val !== undefined && val !== null && val !== '') opts.add(val);
+            });
+            // Nothing matches yet (e.g. other keys still unset on first render) —
+            // fall back to the full list rather than showing empty chips.
+            result[key] = opts.size > 0 ? extraAttributes[key].filter(o => opts.has(o)) : extraAttributes[key];
+        });
+        return result;
+    }, [extraAttributes, extraSelections, product.variants]);
+
     useEffect(() => {
         setExtraSelections(prev => {
             const next = { ...prev };
             let changed = false;
             Object.keys(extraAttributes).forEach(key => {
-                if (!next[key] || !extraAttributes[key].includes(next[key])) { next[key] = extraAttributes[key][0]; changed = true; }
+                const validOptions = optionsForKey[key] || [];
+                if (!next[key] || !validOptions.includes(next[key])) { next[key] = validOptions[0]; changed = true; }
             });
             return changed ? next : prev;
         });
-    }, [extraAttributes]);
+    }, [optionsForKey, extraAttributes]);
 
     const pricing = useMemo(() => {
         let match = product.variants?.find(v => Object.entries(extraSelections).every(([key, val]) => v.attributes?.[key] === val));
@@ -236,14 +263,14 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             {/* Attribute selectors */}
             {Object.entries(extraAttributes).length > 0 && (
                 <div style={sectionStyle}>
-                    {Object.entries(extraAttributes).map(([key, options]) => (
+                    {Object.entries(extraAttributes).map(([key]) => (
                         <div key={key} style={{ marginBottom: '0.625rem' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
                                 <span style={labelStyle}>{key}</span>
                                 {key === 'Thickness' && <span style={{ fontSize: '0.65rem', color: '#475569', fontFamily: 'var(--font-mono)' }}>KSH{pricing.priceSqFt}/sqft</span>}
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
-                                {options.map(opt => (
+                                {(optionsForKey[key] || []).map(opt => (
                                     <button key={opt} onClick={() => setExtraSelections(prev => ({ ...prev, [key]: opt }))} style={chipBtn(extraSelections[key] === opt, '#06b6d4')}>{opt}</button>
                                 ))}
                             </div>
@@ -253,7 +280,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             )}
 
             {/* Full / Half sheets */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '0.75rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginBottom: '0.75rem' }}>
                 <div style={sectionStyle}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.625rem' }}>
                         <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0' }}>Full Sheet</span>
@@ -306,15 +333,16 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                     </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 60px auto', gap: '0.375rem', marginBottom: '0.625rem' }}>
-                    <input type="number" placeholder={`L (${unit})`} value={cutL} onChange={e => setCutL(e.target.value)} style={inputStyle} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
-                    <input type="number" placeholder={`W (${unit})`} value={cutW} onChange={e => setCutW(e.target.value)} style={inputStyle} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
-                    <input type="number" placeholder="Qty" value={cutQty} onChange={e => setCutQty(e.target.value)} style={{ ...inputStyle, textAlign: 'center' }} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem', marginBottom: '0.625rem' }}>
+                    <input type="number" placeholder={`L (${unit})`} value={cutL} onChange={e => setCutL(e.target.value)} style={{ ...inputStyle, flex: '1 1 90px', minWidth: 0 }} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
+                    <input type="number" placeholder={`W (${unit})`} value={cutW} onChange={e => setCutW(e.target.value)} style={{ ...inputStyle, flex: '1 1 90px', minWidth: 0 }} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
+                    <input type="number" placeholder="Qty" value={cutQty} onChange={e => setCutQty(e.target.value)} style={{ ...inputStyle, textAlign: 'center', flex: '0 1 70px', minWidth: 0 }} onFocus={e => { e.target.style.borderColor = 'rgba(6,182,212,0.5)'; }} onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }} />
                     <button onClick={addCut} disabled={!!cutSizeError} style={{
-                        padding: '0.5rem', borderRadius: '0.5rem', border: 'none',
+                        padding: '0.5rem 0.875rem', borderRadius: '0.5rem', border: 'none',
                         cursor: cutSizeError ? 'not-allowed' : 'pointer',
                         background: cutSizeError ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
                         color: cutSizeError ? '#334155' : '#fff', fontWeight: 800, fontSize: '0.82rem',
+                        flex: '0 0 auto',
                     }}>Add</button>
                 </div>
                 {cutSizeError && <p style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700, margin: '0 0 0.5rem', animation: 'pulse 1.5s ease-in-out infinite' }}>{cutSizeError}</p>}

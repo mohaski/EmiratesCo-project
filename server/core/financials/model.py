@@ -49,6 +49,19 @@ class CreditUpdateResponse(BaseModel):
     creditId: Optional[int]
 
 
+class FinancialSummaryResponse(BaseModel):
+    """CEO oversight: money received in a day/month/year, by payment method,
+    plus order volume/status counts for the same window."""
+    period: str
+    range_start: str
+    range_end: str
+    total: float
+    by_method: Dict[str, float]
+    by_method_count: Dict[str, int]
+    order_count: int
+    status_counts: Dict[str, int]
+
+
 class OutstandingCreditItem(BaseModel):
     creditId: int
     orderId: int

@@ -33,11 +33,6 @@ const NAV_ICONS = {
       <polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" />
     </svg>
   ),
-  addProduct: (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" />
-    </svg>
-  ),
   manageProducts: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
@@ -70,6 +65,11 @@ const NAV_ICONS = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" /><circle cx="9" cy="7" r="4" />
       <path d="M23 21v-2a4 4 0 00-3-3.87" /><path d="M16 3.13a4 4 0 010 7.75" />
+    </svg>
+  ),
+  activity: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
     </svg>
   ),
   logout: (
@@ -153,14 +153,21 @@ export default function Layout() {
     { path: '/collect-payments', label: 'Collect Debt', iconKey: 'collectPayments' },
     { path: '/debt-management', label: 'Debt Management', iconKey: 'dues' },
     { path: '/inventory', label: 'Stock Control', iconKey: 'inventory' },
-    { path: '/add-product', label: 'Add Product', iconKey: 'addProduct' },
-    { path: '/manage-products', label: 'Manage Products', iconKey: 'manageProducts' },
+    { path: '/product-management', label: 'Product Management', iconKey: 'manageProducts' },
     { path: '/tools', label: 'Tool Checkout', iconKey: 'tools' },
     { path: '/tools/manage', label: 'Tool Tracking', iconKey: 'tools' },
     { path: '/users', label: 'User Management', iconKey: 'users' },
+    { path: '/activity', label: 'Activity Log', iconKey: 'activity' },
   ];
 
-  const filteredItems = menuItems.filter(item => (ROUTE_ROLES[item.path] || []).includes(user?.role));
+  // Manager/cashier have no dashboard (DashboardPage redirects them to /sales),
+  // so the "Overview" link would just bounce them straight back out — hide it
+  // even though ROUTE_ROLES['/'] still allows the route itself (needed so the
+  // '/' landing path and unauthorized-route fallback don't redirect-loop).
+  const filteredItems = menuItems.filter(item => {
+    if (item.path === '/' && (user?.role === 'manager' || user?.role === 'cashier')) return false;
+    return (ROUTE_ROLES[item.path] || []).includes(user?.role);
+  });
   const roleLabel = ROLE_LABELS[user?.role] || user?.role || 'User';
   const initials = (user?.firstName || user?.name || 'U').slice(0, 2).toUpperCase();
 
