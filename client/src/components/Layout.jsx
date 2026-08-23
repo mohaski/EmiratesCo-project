@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, Outlet, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { ROUTE_ROLES } from '../config/routePermissions';
+import PullToRefresh from './PullToRefresh';
 
 const NAV_ICONS = {
   overview: (
@@ -464,13 +465,13 @@ export default function Layout() {
         )}
 
         {/* ── MAIN CONTENT ── */}
-        <main style={{
+        <PullToRefresh style={{
           flex: 1, overflowY: 'auto', overflowX: 'hidden',
-          position: 'relative', display: 'flex', flexDirection: 'column',
+          display: 'flex', flexDirection: 'column',
           minWidth: 0,
         }}>
           {isAuthorized ? <Outlet /> : <Navigate to="/" replace />}
-        </main>
+        </PullToRefresh>
       </div>
     </div>
   );

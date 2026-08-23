@@ -129,7 +129,7 @@ export default function SalesDashboard() {
                     id: productId,
                     productId: productId,
                     name: product?.name ?? details.name ?? `Product #${productId}`,
-                    image: product?.image ?? null,
+                    category: product?.category ?? null,
                     totalPrice: backendItem.totalPrice ?? 0,
                     unit: backendItem.unitType ?? details.unitType ?? 'pcs',
                     qty: backendItem.quantity ?? details.quantity ?? 1,

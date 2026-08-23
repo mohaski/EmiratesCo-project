@@ -20,7 +20,7 @@ const PendingSourceNotice = ({ notice, theme }) => (
     </div>
 );
 
-// One 1D (bar/profile) offcut_sources entry — {source, offcut_id, length_used, offcut_length, remainder_created}.
+// One 1D (bar/profile) offcut_sources entry — {source, offcut_id, length_used, offcut_length, remainder_created, remainder_status}.
 // `superseded` marks an event a manager correction has fully reversed and
 // replaced with a separate new entry (see inventoryService.correct_profile_offcut_event) —
 // kept in place as a historical record rather than deleted.
@@ -39,7 +39,10 @@ const CuttingInstructionLine1D = ({ src, theme, renderActions }) => (
         {src.pending_source_notice && <PendingSourceNotice notice={src.pending_source_notice} theme={theme} />}
         {src.remainder_created > 0 && (
             <div style={{ fontSize: '9.5px', color: theme.dim, fontWeight: theme.dimWeight, marginTop: '2px' }}>
-                &gt;&gt; {fmtLen(src.remainder_created)} to stock
+                {src.remainder_status === 'scrap'
+                    ? <>&gt;&gt; {fmtLen(src.remainder_created)} waste</>
+                    : <>&gt;&gt; {fmtLen(src.remainder_created)} to stock</>
+                }
             </div>
         )}
     </div>

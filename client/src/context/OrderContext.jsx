@@ -196,7 +196,10 @@ export const OrderProvider = ({ children }) => {
             VAT_status: Boolean(totals.tax > 0),
             discount: parseFloat(totals.discount || 0),
             paymentStatus,
-            paymentMethod: amountPaidNow > 0 ? (payment?.method || 'cash') : null,
+            // Negative here is a refund, not "no payment" — the method (and, for a
+            // split refund, the details) still has to reach the backend so the
+            // Payment row it records is tagged with what the money actually moved through.
+            paymentMethod: amountPaidNow !== 0 ? (payment?.method || 'cash') : null,
             paymentDetails: payment?.details || null,
             items,
             notes: `Edited order #${orderId}`,

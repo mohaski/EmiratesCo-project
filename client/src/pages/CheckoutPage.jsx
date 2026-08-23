@@ -6,6 +6,7 @@ import { useOrders } from '../context/OrderContext';
 import { useCartTotals } from '../hooks/useCartTotals';
 import { ceilAmount } from '../utils/money';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
+import { getProfileColorHex, getContrastText, getCategoryAccent, tileGradient, hexToRgba } from '../utils/colors';
 
 function useWindowWidth() {
     const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1280));
@@ -18,7 +19,13 @@ function useWindowWidth() {
 }
 
 /* ── Review Item Card ── */
-const ReviewItemCard = memo(({ item, index, onRemove, isMobile }) => (
+const ReviewItemCard = memo(({ item, index, onRemove, isMobile }) => {
+    const colorHex = getProfileColorHex(item.details?.color);
+    const accent = getCategoryAccent(item.category);
+    const tileText = colorHex ? getContrastText(colorHex) : accent;
+    const initial = item.name?.trim()?.[0]?.toUpperCase() || '?';
+
+    return (
     <div style={{
         display: 'grid',
         gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : (onRemove ? '1fr auto auto auto' : '1fr auto auto'),
@@ -33,16 +40,14 @@ const ReviewItemCard = memo(({ item, index, onRemove, isMobile }) => (
     >
         {/* Item Info */}
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', minWidth: 0 }}>
-            <div style={{
+            <div className="product-tile" style={{
                 width: '48px', height: '48px', borderRadius: '10px', flexShrink: 0,
-                background: 'rgba(59,130,246,0.1)',
-                border: '1px solid rgba(59,130,246,0.2)',
-                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: colorHex ? tileGradient(colorHex) : hexToRgba(accent, 0.1),
+                border: `1px solid ${colorHex ? 'rgba(255,255,255,0.15)' : hexToRgba(accent, 0.25)}`,
+                boxShadow: colorHex ? 'inset 0 1px 0 rgba(255,255,255,0.15), inset 0 -4px 8px rgba(0,0,0,0.16)' : 'none',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-                {item.image
-                    ? <img src={item.image} style={{ width: '100%', height: '100%', objectFit: 'cover', mixBlendMode: 'luminosity', opacity: 0.8 }} alt={item.name} loading="lazy" />
-                    : <span style={{ fontSize: '1.25rem' }}>📦</span>
-                }
+                <span style={{ position: 'relative', zIndex: 1, fontSize: '1.05rem', fontWeight: 800, color: tileText }}>{initial}</span>
             </div>
             <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '4px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -94,7 +99,8 @@ const ReviewItemCard = memo(({ item, index, onRemove, isMobile }) => (
             onMouseLeave={e => { e.currentTarget.style.color = '#475569'; }}>×</button>
         )}
     </div>
-));
+    );
+});
 
 /* ── Department Category Toggle ── */
 const CategoryToggle = ({ bucket, label, icon, color, checked, disabled, onToggle }) => (
@@ -204,13 +210,20 @@ export default function CheckoutPage() {
         const effectiveTax = enableTax ? ceilAmount(netTaxable * 0.16) : 0;
         const total = netTaxable + effectiveTax;
         const effectiveTotal = mode === 'edit' ? (total - originalTotal) : total;
-        const currentPayable = isPartial ? ceilAmount(parseFloat(amountPaid) || 0) : Math.max(0, effectiveTotal);
+        const isRefund = effectiveTotal < 0;
+        const refundAmount = isRefund ? ceilAmount(-effectiveTotal) : 0;
+        const currentPayable = isRefund ? 0 : (isPartial ? ceilAmount(parseFloat(amountPaid) || 0) : Math.max(0, effectiveTotal));
         const balance = Math.max(0, ceilAmount(total - ((mode === 'edit' ? originalTotal : 0) + currentPayable)));
-        const mpesaAutoAmount = Math.max(0, ceilAmount(currentPayable - (parseFloat(cashAmount) || 0)));
-        return { subtotal: rawSubtotal, tax: effectiveTax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, originalTotal };
+        // Amount the cash/mpesa split inputs divide up — the payable when charging,
+        // the payout when refunding. Both directions share the same split UI.
+        const payableAmount = isRefund ? refundAmount : currentPayable;
+        const mpesaAutoAmount = Math.max(0, ceilAmount(payableAmount - (parseFloat(cashAmount) || 0)));
+        // Signed amount to send the backend: positive = collected now, negative = refunded now.
+        const netPayment = isRefund ? -refundAmount : currentPayable;
+        return { subtotal: rawSubtotal, tax: effectiveTax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, originalTotal, isRefund, refundAmount, payableAmount, netPayment };
     }, [rawSubtotal, enableTax, discount, isPartial, amountPaid, cashAmount, mode, originalTotal]);
 
-    const { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal } = financials;
+    const { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, isRefund, refundAmount, payableAmount, netPayment } = financials;
 
     // In edit mode: detect whether anything actually changed vs the original order
     const hasOrderChanged = useMemo(() => {
@@ -233,10 +246,12 @@ export default function CheckoutPage() {
                 customer, items: cartItems, servedBy: user?.userId, VAT_status: enableTax,
                 parentOrderId,
                 sourceInvoiceId,
-                totals: { subtotal, tax, total, discount: discountValue, paid: currentPayable, balance },
+                totals: { subtotal, tax, total, discount: discountValue, paid: netPayment, balance },
                 payment: {
                     method: paymentMethod, isPartial,
-                    details: paymentMethod === 'split' ? { cash: parseFloat(cashAmount), mpesa: mpesaAutoAmount } : null
+                    details: paymentMethod === 'split'
+                        ? { cash: (isRefund ? -1 : 1) * (parseFloat(cashAmount) || 0), mpesa: (isRefund ? -1 : 1) * mpesaAutoAmount }
+                        : null
                 },
                 mode: mode || 'new'
             };
@@ -263,7 +278,7 @@ export default function CheckoutPage() {
         } finally {
             setLoading(false);
         }
-    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, currentPayable, balance, paymentMethod, isPartial, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories]);
+    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories]);
 
     if (cartItems.length === 0) {
         return (
@@ -279,8 +294,8 @@ export default function CheckoutPage() {
 
     const canConfirm = !loading
         && hasOrderChanged
-        && (currentPayable === 0 || !!paymentMethod)
-        && !(paymentMethod === 'split' && (parseFloat(cashAmount) || 0) > currentPayable);
+        && (isRefund ? !!paymentMethod : (currentPayable === 0 || !!paymentMethod))
+        && !(paymentMethod === 'split' && (parseFloat(cashAmount) || 0) > payableAmount);
 
     return (
         <div style={{
@@ -569,7 +584,7 @@ export default function CheckoutPage() {
                     )}
 
                     {/* Refund mode */}
-                    {effectiveTotal < 0 ? (
+                    {isRefund ? (
                         <div>
                             <div style={{
                                 padding: '0.875rem 1rem',
@@ -582,12 +597,16 @@ export default function CheckoutPage() {
                                 <span style={{ fontSize: '1.25rem' }}>⚠️</span>
                                 <div>
                                     <div style={{ fontSize: '0.825rem', fontWeight: 700, color: '#fbbf24', marginBottom: '2px' }}>Refund Required</div>
-                                    <div style={{ fontSize: '0.78rem', color: '#92400e' }}>This update results in a credit balance. Select refund method.</div>
+                                    <div style={{ fontSize: '0.78rem', color: '#92400e' }}>This update results in a credit balance. Select how the customer was refunded.</div>
                                 </div>
                             </div>
+                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.625rem' }}>
+                                Refund Method
+                            </label>
                             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                <PaymentMethodBtn method="cash-refund" label="Cash Refund" icon="💸" selected={paymentMethod === 'cash-refund'} color="#3b82f6" onClick={setPaymentMethod} />
-                                {isRegistered && <PaymentMethodBtn method="store-credit" label="Store Credit" icon="💳" selected={paymentMethod === 'store-credit'} color="#a855f7" onClick={setPaymentMethod} />}
+                                <PaymentMethodBtn method="cash" label="Cash" icon="💵" selected={paymentMethod === 'cash'} color="#3b82f6" onClick={setPaymentMethod} />
+                                <PaymentMethodBtn method="mpesa" label="M-Pesa" icon="📱" selected={paymentMethod === 'mpesa'} color="#3b82f6" onClick={setPaymentMethod} />
+                                <PaymentMethodBtn method="split" label="Split" icon="⚖️" selected={paymentMethod === 'split'} color="#a855f7" onClick={setPaymentMethod} />
                             </div>
                         </div>
                     ) : currentPayable > 0 && (
@@ -604,7 +623,7 @@ export default function CheckoutPage() {
                     )}
 
                     {/* Split payment inputs */}
-                    {currentPayable > 0 && paymentMethod === 'split' && (
+                    {(isRefund || currentPayable > 0) && paymentMethod === 'split' && (
                         <div style={{
                             padding: '1rem',
                             background: 'rgba(168,85,247,0.06)',
@@ -613,7 +632,7 @@ export default function CheckoutPage() {
                             display: 'flex', flexDirection: 'column', gap: '0.75rem',
                         }}>
                             <div>
-                                <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#a855f7', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Cash Amount</label>
+                                <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#a855f7', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>{isRefund ? 'Cash Refunded' : 'Cash Amount'}</label>
                                 <input
                                     type="number"
                                     value={cashAmount}
@@ -630,7 +649,7 @@ export default function CheckoutPage() {
                                 />
                             </div>
                             <div>
-                                <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>M-Pesa (auto)</label>
+                                <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>{isRefund ? 'M-Pesa Refunded (auto)' : 'M-Pesa (auto)'}</label>
                                 <input
                                     type="number"
                                     value={mpesaAutoAmount.toFixed(0)}
@@ -644,9 +663,9 @@ export default function CheckoutPage() {
                                     }}
                                 />
                             </div>
-                            {(parseFloat(cashAmount) || 0) > currentPayable && (
+                            {(parseFloat(cashAmount) || 0) > payableAmount && (
                                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f87171' }}>
-                                    ⚠ Cash exceeds total (max KSH {currentPayable.toFixed(0)})
+                                    ⚠ Cash exceeds total (max KSH {payableAmount.toFixed(0)})
                                 </div>
                             )}
                         </div>
@@ -769,11 +788,13 @@ export default function CheckoutPage() {
                                 </svg>
                                 Processing…
                             </>
-                        ) : currentPayable === 0
-                            ? 'Confirm Credit →'
-                            : balance > 0
-                                ? `Confirm & Record Credit · KSH ${currentPayable.toFixed(0)} →`
-                                : editOrderId ? `Update Order · KSH ${total.toFixed(0)} →` : `Confirm Payment · KSH ${total.toFixed(0)} →`
+                        ) : isRefund
+                            ? `Confirm Refund · KSH ${refundAmount.toFixed(0)} →`
+                            : currentPayable === 0
+                                ? 'Confirm Credit →'
+                                : balance > 0
+                                    ? `Confirm & Record Credit · KSH ${currentPayable.toFixed(0)} →`
+                                    : editOrderId ? `Update Order · KSH ${total.toFixed(0)} →` : `Confirm Payment · KSH ${total.toFixed(0)} →`
                         }
                     </button>
                 </div>

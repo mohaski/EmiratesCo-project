@@ -6,6 +6,7 @@ import api from '../services/api';
 import AddStockModal from '../components/inventory/AddStockModal';
 import AddOffcutsModal from '../components/inventory/AddOffcutsModal';
 import StockSessionDetailModal from '../components/inventory/StockSessionDetailModal';
+import { getCategoryAccent, hexToRgba } from '../utils/colors';
 
 const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Brown', 'Grey', 'Matt Black'];
 const GLASS_THICKNESSES = ['4mm', '6mm', '8mm', '10mm', '12mm'];
@@ -92,6 +93,11 @@ export default function InventoryPage() {
         setInventory(products.map(p => {
             if (p.variants?.length > 0) {
                 const stockMap = {};
+                // Per-variant low-stock alarm state (see Variant.low_stock_threshold) — kept
+                // as a side map, not merged into stockMap's values, so every existing
+                // consumer of stockVariants (AddStockModal, getTotalStock) keeps working
+                // against plain numbers unchanged.
+                const alarmMap = {};
                 p.variants.forEach(v => {
                     // A packaged (count-tracked) variant's `stock` is tracked in individual
                     // pieces server-side (see server/entities/variants.py) — display/restock
@@ -99,9 +105,13 @@ export default function InventoryPage() {
                     // a manager actually thinks in. Bar/sheet (trackOffcuts) variants and
                     // unpackaged ones are already in their own natural unit (factor 1).
                     const factor = !p.trackOffcuts && v.unitQuantity ? v.unitQuantity : 1;
-                    stockMap[v.name || Object.values(v.attributes).join(' - ')] = (v.stock || 0) / factor;
+                    const label = v.name || Object.values(v.attributes).join(' - ');
+                    stockMap[label] = (v.stock || 0) / factor;
+                    // Out-of-stock always alerts, even with no CEO-configured threshold (0 = unset);
+                    // a configured threshold (>0) additionally alerts earlier, before hitting zero.
+                    alarmMap[label] = (v.stock || 0) <= 0 || ((v.lowStockThreshold || 0) > 0 && (v.stock || 0) < v.lowStockThreshold);
                 });
-                return { ...p, stockVariants: stockMap, minStock: 10 };
+                return { ...p, stockVariants: stockMap, stockVariantAlarms: alarmMap };
             }
             const variants = {};
             if (p.category === 'glass') {
@@ -109,7 +119,7 @@ export default function InventoryPage() {
             } else if (p.category?.includes('profile')) {
                 PROFILE_COLORS.forEach(c => { variants[c] = 50; });
             } else { variants['Standard'] = 50; }
-            return { ...p, stockVariants: variants, minStock: 10 };
+            return { ...p, stockVariants: variants, stockVariantAlarms: {} };
         }));
     }, [products]);
 
@@ -330,8 +340,9 @@ export default function InventoryPage() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                             {filteredInventory.map(item => {
                                 const total = getTotalStock(item);
-                                const isLow = total < item.minStock * 2;
-                                const showBreakdown = canViewVariantBreakdown && item.stockVariants && Object.keys(item.stockVariants).length > 1;
+                                const showBreakdown = canViewVariantBreakdown && item.stockVariants && Object.keys(item.stockVariants).length > 0;
+                                const accent = getCategoryAccent(item.category);
+                                const initial = item.name?.trim()?.[0]?.toUpperCase() || '?';
                                 return (
                                     <div key={item.id} style={{
                                         display: 'flex', flexDirection: 'column', gap: '0.75rem',
@@ -345,8 +356,8 @@ export default function InventoryPage() {
                                     >
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: '1 1 200px', minWidth: 0 }}>
-                                            <div style={{ width: '52px', height: '52px', flexShrink: 0, borderRadius: '10px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                <img src={item.image} style={{ width: '80%', height: '80%', objectFit: 'contain', mixBlendMode: 'luminosity', opacity: 0.8 }} alt="" />
+                                            <div className="product-tile" style={{ width: '52px', height: '52px', flexShrink: 0, borderRadius: '10px', background: hexToRgba(accent, 0.1), border: `1px solid ${hexToRgba(accent, 0.25)}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                <span style={{ position: 'relative', zIndex: 1, fontSize: '1.1rem', fontWeight: 800, color: accent }}>{initial}</span>
                                             </div>
                                             <div style={{ minWidth: 0 }}>
                                                 <h3 style={{ fontSize: '0.9rem', fontWeight: 800, color: '#e2e8f0', margin: '0 0 0.25rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</h3>
@@ -359,11 +370,6 @@ export default function InventoryPage() {
                                                             {item.itemCode}
                                                         </span>
                                                     )}
-                                                    {isLow && (
-                                                        <span style={{ fontSize: '0.65rem', fontWeight: 700, background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#f87171', borderRadius: '100px', padding: '1px 8px', animation: 'pulse 1.5s ease-in-out infinite' }}>
-                                                            ⚠ Low Stock
-                                                        </span>
-                                                    )}
                                                 </div>
                                             </div>
                                         </div>
@@ -371,7 +377,7 @@ export default function InventoryPage() {
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
                                             <div style={{ textAlign: 'right' }}>
                                                 <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '2px' }}>Total Stock</div>
-                                                <div style={{ fontSize: '1.5rem', fontWeight: 900, color: isLow ? '#f87171' : '#f1f5f9', fontFamily: 'var(--font-mono)', letterSpacing: '-0.02em' }}>{total}</div>
+                                                <div style={{ fontSize: '1.5rem', fontWeight: 900, color: '#f1f5f9', fontFamily: 'var(--font-mono)', letterSpacing: '-0.02em' }}>{total}</div>
                                             </div>
                                             {canAddOffcuts && item.trackOffcuts && item.variants?.length > 0 && (
                                                 <button onClick={() => setOffcutsProduct(item)} style={{
@@ -398,15 +404,20 @@ export default function InventoryPage() {
                                     </div>
                                     {showBreakdown && (
                                         <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', paddingLeft: '0.125rem' }}>
-                                            {Object.entries(item.stockVariants).map(([variantLabel, qty]) => (
-                                                <span key={variantLabel} style={{
-                                                    fontSize: '0.68rem', fontWeight: 600, color: '#94a3b8',
-                                                    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-                                                    borderRadius: '100px', padding: '2px 9px',
-                                                }}>
-                                                    {variantLabel}: <span style={{ color: '#e2e8f0', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{qty}</span>
-                                                </span>
-                                            ))}
+                                            {Object.entries(item.stockVariants).map(([variantLabel, qty]) => {
+                                                const isLow = !!item.stockVariantAlarms?.[variantLabel];
+                                                return (
+                                                    <span key={variantLabel} style={{
+                                                        fontSize: '0.68rem', fontWeight: 600, color: isLow ? '#f87171' : '#94a3b8',
+                                                        background: isLow ? 'rgba(239,68,68,0.1)' : 'rgba(255,255,255,0.04)',
+                                                        border: `1px solid ${isLow ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.08)'}`,
+                                                        borderRadius: '100px', padding: '2px 9px',
+                                                        animation: isLow ? 'pulse 1.5s ease-in-out infinite' : 'none',
+                                                    }}>
+                                                        {isLow && '⚠ '}{variantLabel}: <span style={{ color: isLow ? '#fca5a5' : '#e2e8f0', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{qty}</span>
+                                                    </span>
+                                                );
+                                            })}
                                         </div>
                                     )}
                                     </div>

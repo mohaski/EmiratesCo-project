@@ -3,12 +3,20 @@ import { useProducts } from '../context/ProductContext';
 import ConfirmationModal from '../components/common/ConfirmationModal';
 import ManageVariantsModal from '../components/inventory/ManageVariantsModal';
 import EditProductModal from '../components/inventory/EditProductModal';
+import { getCategoryAccent, hexToRgba, isProfileCategory, isGlassCategory, isAccessoryCategory } from '../utils/colors';
 
-const SUB_CATEGORIES = {
-    'ke-profile': [{ id: 'window', label: 'Windows' }, { id: 'door', label: 'Doors' }, { id: 'general', label: 'General' }],
-    'tz-profile': [{ id: 'window', label: 'Windows' }, { id: 'door', label: 'Doors' }, { id: 'general', label: 'General' }],
-    'glass': [{ id: 'clear', label: 'Clear' }, { id: 'oneway', label: 'One/Way' }, { id: 'tint', label: 'Tinted' }, { id: 'mirror', label: 'Mirror' }, { id: 'frost', label: 'Frost' }, { id: 'obscure', label: 'Obscure' }, { id: 'alucoboard', label: 'Alucoboard' }],
-    'accessories': [{ id: 'general', label: 'General' }],
+const PROFILE_SUB_CATEGORIES = [{ id: 'window', label: 'Windows' }, { id: 'door', label: 'Doors' }, { id: 'general', label: 'General' }];
+const GLASS_SUB_CATEGORIES = [{ id: 'clear', label: 'Clear' }, { id: 'oneway', label: 'One/Way' }, { id: 'tint', label: 'Tinted' }, { id: 'mirror', label: 'Mirror' }, { id: 'frost', label: 'Frost' }, { id: 'obscure', label: 'Obscure' }, { id: 'alucoboard', label: 'Alucoboard' }];
+const ACCESSORY_SUB_CATEGORIES = [{ id: 'general', label: 'General' }];
+
+// Sub-categories are keyed off the category "family" (profile/glass/accessory),
+// not a fixed list of known categories, so any newly-added "<X> Profile" category
+// automatically gets the same Windows/Doors/General usages as the existing ones.
+const subCategoriesFor = (category) => {
+    if (isProfileCategory(category)) return PROFILE_SUB_CATEGORIES;
+    if (isGlassCategory(category)) return GLASS_SUB_CATEGORIES;
+    if (isAccessoryCategory(category)) return ACCESSORY_SUB_CATEGORIES;
+    return [];
 };
 
 // Pure content — no page-level header, just the stats/filters/table — so it
@@ -21,7 +29,7 @@ export function ManageProductsTab({ onAddProduct }) {
     const [selectedCategory, setSelectedCategory] = useState(() => (categories?.length > 0 ? categories[0].id : 'ke-profile'));
     const [selectedUsage, setSelectedUsage] = useState('window');
 
-    const usages = useMemo(() => SUB_CATEGORIES[selectedCategory] || [], [selectedCategory]);
+    const usages = useMemo(() => subCategoriesFor(selectedCategory), [selectedCategory]);
 
     const [deleteModal, setDeleteModal] = useState({ open: false, product: null });
     const [variantsModal, setVariantsModal] = useState({ open: false, product: null });
@@ -123,15 +131,18 @@ export function ManageProductsTab({ onAddProduct }) {
                             <tbody>
                                 {filteredProducts.length === 0 ? (
                                     <tr><td colSpan={5} style={{ padding: '3rem', textAlign: 'center', color: '#334155', fontSize: '0.875rem' }}>No products found</td></tr>
-                                ) : filteredProducts.map(p => (
+                                ) : filteredProducts.map(p => {
+                                    const accent = getCategoryAccent(p.category);
+                                    const initial = p.name?.trim()?.[0]?.toUpperCase() || '?';
+                                    return (
                                     <tr key={p.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.15s' }}
                                     onMouseEnter={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.04)'; }}
                                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                                     >
                                         <td style={{ padding: '0.875rem 1.25rem' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
-                                                <div style={{ width: '44px', height: '44px', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                                                    <img src={p.image} alt={p.name} style={{ width: '80%', height: '80%', objectFit: 'contain', mixBlendMode: 'luminosity', opacity: 0.85 }} />
+                                                <div className="product-tile" style={{ width: '44px', height: '44px', borderRadius: '10px', background: hexToRgba(accent, 0.1), border: `1px solid ${hexToRgba(accent, 0.25)}`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                                    <span style={{ position: 'relative', zIndex: 1, fontSize: '1rem', fontWeight: 800, color: accent }}>{initial}</span>
                                                 </div>
                                                 <div>
                                                     <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#e2e8f0' }}>{p.name}</div>
@@ -185,7 +196,8 @@ export function ManageProductsTab({ onAddProduct }) {
                                             </div>
                                         </td>
                                     </tr>
-                                ))}
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>

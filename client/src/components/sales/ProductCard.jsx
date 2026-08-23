@@ -1,26 +1,5 @@
 import { memo } from 'react';
-import { PROFILE_COLORS } from '../../hooks/useProductFiltering';
-
-function getContrastText(hex) {
-    if (!hex) return '#e2e8f0';
-    const c = hex.replace('#', '');
-    const r = parseInt(c.substring(0, 2), 16);
-    const g = parseInt(c.substring(2, 4), 16);
-    const b = parseInt(c.substring(4, 6), 16);
-    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    return luminance > 0.6 ? '#0f172a' : '#f1f5f9';
-}
-
-// Lightens (positive) or darkens (negative) a hex color by a percentage
-function shade(hex, percent) {
-    const c = hex.replace('#', '');
-    const r = parseInt(c.substring(0, 2), 16);
-    const g = parseInt(c.substring(2, 4), 16);
-    const b = parseInt(c.substring(4, 6), 16);
-    const amt = Math.round(2.55 * percent);
-    const clamp = v => Math.min(255, Math.max(0, v + amt));
-    return `rgb(${clamp(r)}, ${clamp(g)}, ${clamp(b)})`;
-}
+import { getProfileColorHex, getContrastText, tileGradient } from '../../utils/colors';
 
 function ProductCard({ product, onClick, selectedColor }) {
     const isProfile = product.category?.toLowerCase().includes('profile');
@@ -29,12 +8,8 @@ function ProductCard({ product, onClick, selectedColor }) {
     const variantKey  = isProfile ? 'Length' : 'Thickness';
 
     // Rectangle color reflects the selected color, but only in profile sections
-    const matchedColorHex = isProfile && selectedColor
-        ? PROFILE_COLORS.find(c => c.name.toLowerCase() === selectedColor.toLowerCase())?.hex
-        : null;
-    const rectBackground = matchedColorHex
-        ? `linear-gradient(155deg, ${shade(matchedColorHex, 16)} 0%, ${matchedColorHex} 48%, ${shade(matchedColorHex, -16)} 100%)`
-        : 'linear-gradient(155deg, rgba(255,255,255,0.075) 0%, rgba(255,255,255,0.025) 55%, rgba(255,255,255,0.01) 100%)';
+    const matchedColorHex = isProfile ? getProfileColorHex(selectedColor) : null;
+    const rectBackground = tileGradient(matchedColorHex);
     const rectTextColor = matchedColorHex ? getContrastText(matchedColorHex) : '#e2e8f0';
     const isDarkText = rectTextColor === '#0f172a';
 

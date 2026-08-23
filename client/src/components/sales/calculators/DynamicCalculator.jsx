@@ -6,10 +6,7 @@ const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [selections, setSelections] = useState(() => {
         const initial = initialDetails?.selections ? { ...initialDetails.selections } : {};
         attributeKeys.forEach(key => {
-            if (!initial[key]) {
-                if (product.defaultAttributes?.[key]) initial[key] = product.defaultAttributes[key];
-                else if (product.attributes[key]?.length > 0) initial[key] = product.attributes[key][0];
-            }
+            if (!initial[key] && product.attributes[key]?.length > 0) initial[key] = product.attributes[key][0];
         });
         return initial;
     });

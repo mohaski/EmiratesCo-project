@@ -547,6 +547,17 @@ def _restore_packaged_stock_pooled(
 
 # ── Offcut best-fit algorithm ─────────────────────────────────────────────────
 
+def _is_scrap_1d(length: float, variant: Optional[Variant]) -> bool:
+    """1D (bar/profile) analogue of glassOffcutService._is_scrap — classifies a
+    remainder as unsellable scrap if it falls below this variant's configured
+    minimum usable length (Variant.min_usable, e.g. 2ft for a typical profile
+    bar). Recorded as a scrap-status Offcut (kept for waste reporting only,
+    never offered as a pickable offcut — see _upsert_offcut/the Offcut.status
+    docstring) rather than silently discarded, mirroring the 2D behavior."""
+    m = (variant.min_usable if variant else None) or 0.0
+    return length < m
+
+
 def _fulfill_one_cut_via_best_fit(
     db: Session,
     product: Product,
@@ -606,8 +617,9 @@ def _fulfill_one_cut_via_best_fit(
         else:
             db.add(best_offcut)
 
+        remainder_status = "scrap" if remainder > 0.01 and _is_scrap_1d(remainder, variant) else "available"
         if remainder > 0.01:
-            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key)
+            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key, status=remainder_status)
 
         result = {
             "source": "offcut",
@@ -615,6 +627,7 @@ def _fulfill_one_cut_via_best_fit(
             "offcut_length": oc_len,
             "length_used": required_length,
             "remainder_created": remainder if remainder > 0.01 else 0,
+            "remainder_status": remainder_status if remainder > 0.01 else None,
         }
         if notice is not None:
             result["pending_source_notice"] = notice
@@ -633,6 +646,7 @@ def _fulfill_one_cut_via_best_fit(
             "offcut_length": 0,
             "length_used": required_length,
             "remainder_created": 0,
+            "remainder_status": None,
         }
 
     if required_length > full_length:
@@ -643,8 +657,9 @@ def _fulfill_one_cut_via_best_fit(
 
     _deduct_full_stock(db, product, variant, 1)
     remainder = round(full_length - required_length, 4)
+    remainder_status = "scrap" if remainder > 0.01 and _is_scrap_1d(remainder, variant) else "available"
     if remainder > 0.01:
-        _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key)
+        _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key, status=remainder_status)
 
     return {
         "source": "full_bar",
@@ -652,6 +667,7 @@ def _fulfill_one_cut_via_best_fit(
         "offcut_length": full_length,
         "length_used": required_length,
         "remainder_created": remainder if remainder > 0.01 else 0,
+        "remainder_status": remainder_status if remainder > 0.01 else None,
     }
 
 
@@ -920,8 +936,9 @@ def _consume_offcut_sources(
         else:
             db.add(locked)
 
+        remainder_status = "scrap" if remainder > 0.01 and _is_scrap_1d(remainder, variant) else "available"
         if remainder > 0.01:
-            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key)
+            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key, status=remainder_status)
 
         entry = {
             "source": "offcut",
@@ -929,6 +946,7 @@ def _consume_offcut_sources(
             "offcut_length": locked.length,
             "length_used": length_used,
             "remainder_created": remainder if remainder > 0.01 else 0,
+            "remainder_status": remainder_status if remainder > 0.01 else None,
         }
         if notice is not None:
             entry["pending_source_notice"] = notice
@@ -985,6 +1003,7 @@ def _upsert_offcut(
     length: float,
     source_item_id: Optional[int] = None,
     pool_key: Optional[str] = None,
+    status: str = "available",
 ) -> None:
     """
     Create a new offcut record or increment the quantity if one of the
@@ -995,6 +1014,12 @@ def _upsert_offcut(
     `source_item_id` tags which OrderItem's cutting job produced this remainder
     (see the 2D equivalent, glassOffcutService._upsert_glass_offcut, for the full
     merge-policy rationale — overwritten on merge only when a real id is given).
+
+    `status` — callers pass "scrap" (via _is_scrap_1d) for a remainder below the
+    variant's min_usable threshold so it's tracked for waste reporting but never
+    offered as a pickable offcut; a merge onto an existing row never changes its
+    status since same length + same variant's threshold always classifies the
+    same way.
     """
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
@@ -1019,6 +1044,7 @@ def _upsert_offcut(
             pool_key=pool_key,
             length=length,
             quantity=1,
+            status=status,
             source_item_id=source_item_id,
         ))
 
@@ -1085,6 +1111,7 @@ def correct_profile_offcut_event(
         "source": event.get("source"), "offcut_id": event.get("offcut_id"),
         "offcut_length": event.get("offcut_length"), "length_used": event.get("length_used"),
         "remainder_created": event.get("remainder_created", 0),
+        "remainder_status": event.get("remainder_status"),
     }
 
     # ── Remainder correction — always applied ───────────────────────────────
@@ -1092,9 +1119,11 @@ def correct_profile_offcut_event(
     if old_remainder > 0.01:
         _remove_offcut(db, product, variant, old_remainder)
     new_remainder = round(float(new_remainder_length), 4)
+    new_remainder_status = "scrap" if new_remainder > 0.01 and _is_scrap_1d(new_remainder, variant) else "available"
     if new_remainder > 0.01:
-        _upsert_offcut(db, product, variant, new_remainder)
+        _upsert_offcut(db, product, variant, new_remainder, status=new_remainder_status)
     event["remainder_created"] = new_remainder if new_remainder > 0.01 else 0
+    event["remainder_status"] = new_remainder_status if new_remainder > 0.01 else None
 
     if not replace_source:
         return {"before": before, "after": dict(event), "replacement_event": None}

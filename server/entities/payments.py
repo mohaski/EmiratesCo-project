@@ -17,9 +17,11 @@ class Payment(SQLModel, table= True):
     # Why this payment was recorded: 'order' = collected as part of creating/
     # editing an order (or converting an invoice to one) at checkout time;
     # 'debt' = collected later against an already-standing balance (Collect
-    # Payments / Dues page). Set by the code path that creates the row, not
-    # by the caller — see PaymentService.record_payment / orderService.
-    reason: str = Field(sa_column=Column(Enum("order", "debt", name="payment_reason_enum")))
+    # Payments / Dues page); 'refund' = paid out to the customer because an
+    # order edit dropped the total below what was already collected. Set by
+    # the code path that creates the row, not by the caller — see
+    # PaymentService.record_payment / orderService.
+    reason: str = Field(sa_column=Column(Enum("order", "debt", "refund", name="payment_reason_enum")))
     # Split breakdown for THIS payment event, e.g. {"cash": 100, "mpesa": 200}
     # — only meaningful when payment_method == "split".
     payment_details: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))

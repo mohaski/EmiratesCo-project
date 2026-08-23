@@ -1,19 +1,15 @@
 /**
  * Rounds a value to the nearest 0.5 according to specific rules:
- * - If decimal part >= 0.1, round UP to nearest X.5 or X.0
- * - If decimal part < 0.1, round DOWN to nearest X.5 or X.0
- * 
- * Logic implemented as:
- * - decimal >= 0.1 -> Math.ceil(value * 2) / 2
- * - decimal < 0.1 -> Math.floor(value * 2) / 2
+ * - If decimal part < 0.05, round DOWN to X.0 (treat tiny overage as noise)
+ * - If decimal part is barely over a half-step (0.5 < decimal < 0.6), round DOWN to X.5
+ * - Otherwise, round UP to nearest X.5 or X.0
  */
 export function roundToHalfWithRule(value) {
     const decimalPart = +(value - Math.floor(value)).toFixed(2);
 
-    // Round DOWN to nearest 0.5 when decimal is barely above a half-step
-    // if (decimalPart < 0.1 || (decimalPart > 0.5 && decimalPart < 0.6)) {
-    //     return Math.floor(value * 2) / 2;
-    // }
+    if (decimalPart < 0.05 || (decimalPart > 0.5 && decimalPart < 0.55)) {
+        return Math.floor(value * 2) / 2;
+    }
 
     return Math.ceil(value * 2) / 2;
 }

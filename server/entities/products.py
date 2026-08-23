@@ -51,27 +51,14 @@ class Product(SQLModel, table=True):
     # share a pool) — a deliberate choice, not "not configured".
     pool_ignored_attributes: Optional[List[str]] = Field(default=None, sa_column=Column(JSON, nullable=True))
 
-    # ── 2D (glass) offcut tuning — only meaningful when track_offcuts is True and
-    # has_dimensions is True (2D length x width cuts, as opposed to 1D length-only) ──
-    # Below this size in mm on either side, a remainder is scrap, not a usable offcut.
-    # Sheet/offcut dimensions are always tracked in mm regardless of `unit` (a display/
-    # pricing label only — see glassOffcutService.py module docstring for why).
-    min_usable_dimension: float = Field(default=150.0)
-    # Whether a cut piece may be rotated 90° to fit a source sheet/offcut (false for
-    # directional/patterned/coated glass where orientation matters).
-    allow_rotation: bool = Field(default=True)
-    # CEO-configured "this size sells well" bands, e.g. [{"min_w":500,"max_w":650,
-    # "min_h":1020,"max_h":1150}, ...] (mm, canonical wide/narrow — see
-    # glassOffcutService.py's _meets_popular_threshold). Drives the offcut-tiering
-    # decision: an offcut whose OWN size is below every range's min_w/min_h is
-    # "small/unpopular" and gets used up before an offcut in-or-above a range is
-    # touched at all. Empty means no CEO ranges configured yet for this product —
-    # tiering falls back to treating every offcut as a single pool (today's
-    # sales-history-only ProtectPopularStockAgent behavior still applies either way).
-    popular_size_ranges: List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSON))
-
     # Relationships
     category: Optional["Category"] = Relationship(back_populates="products")
     orderItems: List["OrderItem"] = Relationship(back_populates="product")
-    offcuts: List["Offcut"] = Relationship(back_populates="product")
-    variants: List["Variant"] = Relationship(back_populates="product")
+    offcuts: List["Offcut"] = Relationship(
+        back_populates="product",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    variants: List["Variant"] = Relationship(
+        back_populates="product",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )

@@ -1,12 +1,7 @@
 import { useState, useMemo, useEffect, useDeferredValue } from 'react';
 import { useProducts } from '../context/ProductContext';
-
-export const PROFILE_COLORS = [
-    { name: 'White', hex: '#FFFFFF' },
-    { name: 'Brown', hex: '#8B4513' },
-    { name: 'Silver', hex: '#DCE1E6' },
-    { name: 'Grey', hex: '#5B6370' }
-];
+import { isProfileCategory, isGlassCategory, isAccessoryCategory } from '../utils/colors';
+export { PROFILE_COLORS } from '../utils/colors';
 
 export function useProductFiltering() {
     const { products: PRODUCTS, categories: CATEGORIES } = useProducts();
@@ -21,16 +16,16 @@ export function useProductFiltering() {
     const deferredQuery = useDeferredValue(searchQuery);
 
     // --- MEMOIZED HELPERS ---
-    const isProfileCategory = useMemo(() =>
-        activeCategory === 'ke-profile' || activeCategory === 'tz-profile',
+    const isProfileCategoryActive = useMemo(() =>
+        isProfileCategory(activeCategory),
         [activeCategory]);
 
-    const isGlassCategory = useMemo(() =>
-        activeCategory === 'glass',
+    const isGlassCategoryActive = useMemo(() =>
+        isGlassCategory(activeCategory),
         [activeCategory]);
 
-    const isAccessoriesCategory = useMemo(() =>
-        activeCategory === 'accessories',
+    const isAccessoriesCategoryActive = useMemo(() =>
+        isAccessoryCategory(activeCategory),
         [activeCategory]);
 
     const currentSubCategories = useMemo(() => {
@@ -59,7 +54,7 @@ export function useProductFiltering() {
             const matchesSearch = !lowerQuery || p.name.toLowerCase().includes(lowerQuery);
 
             let matchesColor = true;
-            if (isProfileCategory && profileColor) {
+            if (isProfileCategoryActive && profileColor) {
                 // Strict Color Filtering:
                 // Product must either have 'Color' in its attributes array matching the selection
                 // OR have a variant with that Color.
@@ -71,12 +66,12 @@ export function useProductFiltering() {
                 }
             }
 
-            if (isProfileCategory || isGlassCategory || isAccessoriesCategory) {
+            if (isProfileCategoryActive || isGlassCategoryActive || isAccessoriesCategoryActive) {
                 return matchesSubCategory && matchesSearch && matchesColor;
             }
             return matchesSearch;
         });
-    }, [activeCategory, activeSubCategory, deferredQuery, isProfileCategory, isGlassCategory, isAccessoriesCategory, PRODUCTS, profileColor]);
+    }, [activeCategory, activeSubCategory, deferredQuery, isProfileCategoryActive, isGlassCategoryActive, isAccessoriesCategoryActive, PRODUCTS, profileColor]);
 
     return {
         // State
@@ -91,8 +86,8 @@ export function useProductFiltering() {
         CATEGORIES, // pass through from context
 
         // Helpers
-        isProfileCategory,
-        isGlassCategory,
-        isAccessoriesCategory
+        isProfileCategory: isProfileCategoryActive,
+        isGlassCategory: isGlassCategoryActive,
+        isAccessoriesCategory: isAccessoriesCategoryActive
     };
 }

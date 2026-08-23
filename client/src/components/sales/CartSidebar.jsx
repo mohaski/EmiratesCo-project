@@ -1,6 +1,7 @@
 import { useCallback, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCartTotals } from '../../hooks/useCartTotals';
+import { getProfileColorHex, getContrastText, getCategoryAccent, tileGradient, hexToRgba } from '../../utils/colors';
 
 const S = {
     surface: { background: 'linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem' },
@@ -10,15 +11,23 @@ const S = {
     brand: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
 };
 
-const CartItem = memo(({ item, index, onEdit, onRemove }) => (
+const CartItem = memo(({ item, index, onEdit, onRemove }) => {
+    const colorHex = getProfileColorHex(item.details?.color);
+    const accent = getCategoryAccent(item.category);
+    const tileText = colorHex ? getContrastText(colorHex) : accent;
+    const initial = item.name?.trim()?.[0]?.toUpperCase() || '?';
+
+    return (
     <div className="group relative" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', paddingBottom: '1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.5rem' }}>
-            <div style={{
+            <div className="product-tile" style={{
                 width: '44px', height: '44px', flexShrink: 0, borderRadius: '10px',
-                background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
-                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: colorHex ? tileGradient(colorHex) : hexToRgba(accent, 0.1),
+                border: `1px solid ${colorHex ? 'rgba(255,255,255,0.15)' : hexToRgba(accent, 0.25)}`,
+                boxShadow: colorHex ? 'inset 0 1px 0 rgba(255,255,255,0.15), inset 0 -4px 8px rgba(0,0,0,0.16)' : 'none',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-                <img src={item.image} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', mixBlendMode: 'luminosity', opacity: 0.75 }} alt={item.name} onError={e => { e.currentTarget.style.display = 'none'; }} />
+                <span style={{ position: 'relative', zIndex: 1, fontSize: '1rem', fontWeight: 800, color: tileText }}>{initial}</span>
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
@@ -80,7 +89,8 @@ const CartItem = memo(({ item, index, onEdit, onRemove }) => (
             ) : null}
         </div>
     </div>
-));
+    );
+});
 
 export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, customer, onChangeCustomer, actionLabel, onAction, mode, originalTotal = 0, enableTax, onToggleTax }) {
     const navigate = useNavigate();

@@ -50,6 +50,18 @@ async def create_category(
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result
 
+@router.post("/categories/{category_id}/subcategories", response_model=model.CategoryResponse)
+async def add_subcategory(
+    category_id: int,
+    payload: model.SubCategoryCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    result = service.add_subcategory(category_id, payload.name, db)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
 @router.put("/{product_id}", response_model=model.ProductUpdateResponse)
 async def update_product(
     product_id: int,
@@ -110,6 +122,17 @@ async def update_variant(
     current_user = Depends(get_current_user)
 ):
     result = service.update_variant(variant_id, update_data, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
+@router.delete("/variants/{variant_id}")
+async def delete_variant(
+    variant_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    result = service.remove_variant(variant_id, db)
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result
 

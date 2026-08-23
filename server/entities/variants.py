@@ -25,7 +25,9 @@ class Variant(SQLModel, table=True):
     # (see its own docstring below for why some of those have a spurious
     # unit_quantity that's never read).
     stock_quantity: int = Field(default=0)
-    low_stock_threshold: float = Field(default=10.0)
+    # CEO-configured per-variant low-stock alarm — 0 means no alarm, defaulted at
+    # variant creation and edited afterward via Manage Variants (ManageVariantsModal).
+    low_stock_threshold: float = Field(default=0.0)
     
     # Price modifiers (added to base product price)
     price: float = Field(default=0.0) # Full Price
@@ -48,6 +50,22 @@ class Variant(SQLModel, table=True):
     # that carries a stored quantity, regardless of what the attribute represents) but
     # no deduction code path for those products ever reads it — dead data for them.
     unit_quantity: Optional[float] = Field(default=None)
+
+    # ── Offcut tuning — per-VARIANT so different sizes/thicknesses of the same
+    # product can each be tuned independently (e.g. a 4mm sheet's popular sizes
+    # differ from a 12mm sheet's). Below this size, a remainder is scrap, not a
+    # usable offcut — the mm side of a 2D (glass) cut for a has_dimensions=True
+    # product (see glassOffcutService._is_scrap), or the ft/unit length of a 1D
+    # (bar/profile) cut otherwise (see inventoryService._is_scrap_1d). Defaults
+    # to 150 (mm) for 2D products and 2 (ft) for 1D ones — see
+    # products/service.py's variant-creation default.
+    min_usable: float = Field(default=150.0)
+    # 2D (glass) offcut tuning only — whether a cut piece may be rotated 90° to fit
+    # a source sheet/offcut (false for directional/patterned/coated glass where
+    # orientation matters). Ignored for 1D (bar/profile) products.
+    allow_rotation: bool = Field(default=True)
+    # 2D (glass) offcut tuning only — ignored for 1D (bar/profile) products.
+    popular_size_ranges: List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSON))
 
     # Relationships
     product: "Product" = Relationship(back_populates="variants")

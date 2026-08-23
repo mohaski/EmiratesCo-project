@@ -31,7 +31,6 @@ def _reset_product(db: Session):
         p = Product(
             name="Test Glass Sheet", category_id=1, stock_quantity=10,
             track_offcuts=True, has_variants=True, has_dimensions=True, unit="mm",
-            min_usable_dimension=150.0, allow_rotation=True, popular_size_ranges=[],
         )
         db.add(p)
         db.commit()
@@ -40,16 +39,19 @@ def _reset_product(db: Session):
         p.stock_quantity = 10
         p.track_offcuts = True
         p.has_dimensions = True
-        p.min_usable_dimension = 150.0
-        p.allow_rotation = True
-        p.popular_size_ranges = []  # reset in case a prior interrupted run left this set
         db.add(p)
         db.commit()
 
     v = db.exec(select(Variant).where(Variant.product_id == p.productId)).first()
     if not v:
-        # A realistic 2440x1830mm sheet (~8x6ft), matching real has_dimensions products
-        v = Variant(product_id=p.productId, name='', attributes={}, stock_quantity=10, price=100.0, length=2440.0, width=1830.0)
+        # A realistic 2440x1830mm sheet (~8x6ft), matching real has_dimensions products.
+        # min_usable/allow_rotation/popular_size_ranges are per-VARIANT (see
+        # glassOffcutService.py) — this fixture's single variant carries all the
+        # offcut-tuning knobs individual tests below configure.
+        v = Variant(
+            product_id=p.productId, name='', attributes={}, stock_quantity=10, price=100.0, length=2440.0, width=1830.0,
+            min_usable=150.0, allow_rotation=True, popular_size_ranges=[],
+        )
         db.add(v)
         db.commit()
         db.refresh(v)
@@ -57,6 +59,9 @@ def _reset_product(db: Session):
         v.stock_quantity = 10
         v.length = 2440.0
         v.width = 1830.0
+        v.min_usable = 150.0
+        v.allow_rotation = True
+        v.popular_size_ranges = []  # reset in case a prior interrupted run left this set
         db.add(v)
         db.commit()
 
@@ -127,7 +132,7 @@ def test_2_falls_back_to_fresh_sheet(db, p, v):
 
 
 def test_3_scrap_classification(db, p, v):
-    print("\n--- Test 3: Sliver below min_usable_dimension is recorded as scrap ---")
+    print("\n--- Test 3: Sliver below min_usable is recorded as scrap ---")
     _clear_offcuts(db, p)
     db.refresh(v)
 
@@ -719,7 +724,7 @@ def test_18_sellability_score_reflects_ceo_popular_ranges(db, p, v):
     v.length = 2440.0
     v.width = 1830.0
     v.stock_quantity = 10
-    p.popular_size_ranges = []
+    v.popular_size_ranges = []
     db.add(v)
     db.add(p)
     db.commit()
@@ -738,10 +743,10 @@ def test_18_sellability_score_reflects_ceo_popular_ranges(db, p, v):
     # Configure a CEO range low enough that the 1240x800 remainder clears it
     # (_meets_popular_threshold only checks the lower bound -- "popular-sized
     # or larger", not a ceiling -- so this is a deliberately permissive range).
-    p.popular_size_ranges = [{"min_w": 1200, "max_w": 1300, "min_h": 750, "max_h": 850}]
-    db.add(p)
+    v.popular_size_ranges = [{"min_w": 1200, "max_w": 1300, "min_h": 750, "max_h": 850}]
+    db.add(v)
     db.commit()
-    db.refresh(p)
+    db.refresh(v)
 
     line2 = _mk_line(1200, 800, qty=1)
     metrics_after = gos._resolve_with_strategy(db, p, v, [dict(line2)], gos.DEFAULT_STRATEGY)
@@ -765,8 +770,8 @@ def test_18_sellability_score_reflects_ceo_popular_ranges(db, p, v):
 
     gos.restore_glass_cut_lines(db, p, v, lines)
     db.commit()
-    p.popular_size_ranges = []
-    db.add(p)
+    v.popular_size_ranges = []
+    db.add(v)
     db.commit()
     _clear_offcuts(db, p)
     print("PASS")
@@ -1154,10 +1159,10 @@ def test_30_ceo_popular_range_drives_tiering_without_sales_history(db, p, v):
     # seeded at all — the only thing making the 1650x1020 offcut "protected"
     # is the CEO-configured range below. Proves the new range-based tier is
     # actually driving the split, not the pre-existing sales-history signal.
-    p.popular_size_ranges = [{"min_w": 900, "max_w": 1700, "min_h": 900, "max_h": 1200}]
-    db.add(p)
+    v.popular_size_ranges = [{"min_w": 900, "max_w": 1700, "min_h": 900, "max_h": 1200}]
+    db.add(v)
     db.commit()
-    db.refresh(p)
+    db.refresh(v)
 
     small = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=1120.0, length=0.0, quantity=1, status="available")
     large = Offcut(product_id=p.productId, variant_id=v.variantId, width=1650.0, height=1020.0, length=0.0, quantity=1, status="available")
@@ -1180,8 +1185,8 @@ def test_30_ceo_popular_range_drives_tiering_without_sales_history(db, p, v):
     large_event = next(e for e in events if e["offcut_id"] == large.offcutId)
     assert len(large_event["cuts"]) == 1, f"Expected exactly 1 cut from the popular-range large offcut, got {len(large_event['cuts'])}"
 
-    p.popular_size_ranges = []
-    db.add(p)
+    v.popular_size_ranges = []
+    db.add(v)
     db.commit()
     print("PASS")
 
@@ -1196,10 +1201,10 @@ def test_31_small_tier_consolidates_before_splitting(db, p, v):
     # offcut B fits both side by side. Desired: both cuts come from B in one
     # event (maximize consolidation within the tier), A stays untouched —
     # NOT one cut from each, even though A also technically fits one.
-    p.popular_size_ranges = [{"min_w": 2000, "max_w": 3000, "min_h": 2000, "max_h": 3000}]
-    db.add(p)
+    v.popular_size_ranges = [{"min_w": 2000, "max_w": 3000, "min_h": 2000, "max_h": 3000}]
+    db.add(v)
     db.commit()
-    db.refresh(p)
+    db.refresh(v)
 
     a = Offcut(product_id=p.productId, variant_id=v.variantId, width=300.0, height=400.0, length=0.0, quantity=1, status="available")
     b = Offcut(product_id=p.productId, variant_id=v.variantId, width=620.0, height=400.0, length=0.0, quantity=1, status="available")
@@ -1222,8 +1227,8 @@ def test_31_small_tier_consolidates_before_splitting(db, p, v):
     remaining_a = db.exec(select(Offcut).where(Offcut.offcutId == a.offcutId)).first()
     assert remaining_a is not None and remaining_a.quantity == 1, "Offcut A should be untouched"
 
-    p.popular_size_ranges = []
-    db.add(p)
+    v.popular_size_ranges = []
+    db.add(v)
     db.commit()
     print("PASS")
 

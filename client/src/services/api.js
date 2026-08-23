@@ -172,6 +172,10 @@ export const ProductService = {
         const response = await api.post('/products/categories', categoryData);
         return response.data;
     },
+    addSubCategory: async (categoryDbId, name) => {
+        const response = await api.post(`/products/categories/${categoryDbId}/subcategories`, { name });
+        return response.data;
+    },
     addVariant: async (productId, variantData) => {
         const response = await api.post(`/products/${productId}/variants`, variantData);
         return response.data;
@@ -182,6 +186,10 @@ export const ProductService = {
     },
     updateVariant: async (variantId, updateData) => {
         const response = await api.put(`/products/variants/${variantId}`, updateData);
+        return response.data;
+    },
+    deleteVariant: async (variantId) => {
+        const response = await api.delete(`/products/variants/${variantId}`);
         return response.data;
     },
     /** Get available offcut pieces for a product. Pass variantId to filter. */

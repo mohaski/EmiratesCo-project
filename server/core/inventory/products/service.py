@@ -1,5 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from sqlmodel import Session, select, col, or_
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional, Dict, Any
 from entities.products import Product, Category
 from entities.variants import Variant
@@ -25,28 +26,24 @@ def create_product(
         
         # require_role(["admin", "CEO", "manager"], current_user) # Uncomment when roles active
         
-        # 1. Check Duplicates (Name or ItemCode)
+        # 1. Check Duplicates — name only needs to be unique within the same category
+        # (e.g. "Jam" can exist under both Tanzanian Profile and Euro Profile).
         query = select(Product).where(
-            or_(
-                Product.name == product_data.name
-            )
+            Product.name == product_data.name,
+            Product.category_id == product_data.category_id,
         )
         if db.exec(query).first():
-            raise HTTPException(status_code=400, detail="Product with this name or code already exists")
+            raise HTTPException(status_code=400, detail="Product with this name already exists in this category")
 
         # 2. Every product must have at least one variant — price/stock/dimensions live there.
         if not product_data.variants:
             raise HTTPException(status_code=400, detail="Product must have at least one variant")
         initial_stock = sum(v.stock_quantity for v in product_data.variants)
 
-        # 2b. Glass (2D) products must have their offcut-tuning CEO inputs set at
-        # creation time — glassOffcutService's tiering can't make sensible
-        # decisions with an unset scrap threshold or no popular-size guidance.
-        if product_data.has_dimensions:
-            if product_data.min_usable_dimension is None:
-                raise HTTPException(status_code=400, detail="min_usable_dimension is required for a glass (has_dimensions) product")
-            if not product_data.popular_size_ranges:
-                raise HTTPException(status_code=400, detail="At least one popular_size_ranges entry is required for a glass (has_dimensions) product")
+        # Offcut tuning (min_usable/allow_rotation/popular_size_ranges) is per-VARIANT
+        # now (see VariantCreate) — each variant gets a context-aware default (see the
+        # min_usable default below) and the CEO refines it afterward via Manage
+        # Variants, so nothing is required up front here regardless of has_dimensions.
 
         # 3. Create Product Entity
         new_product = Product(
@@ -64,10 +61,6 @@ def create_product(
             applicable_attributes=product_data.applicable_attributes,
             has_dimensions=product_data.has_dimensions,
             pool_ignored_attributes=product_data.pool_ignored_attributes,
-
-            min_usable_dimension=product_data.min_usable_dimension if product_data.min_usable_dimension is not None else 150.0,
-            allow_rotation=product_data.allow_rotation,
-            popular_size_ranges=[r.dict() for r in product_data.popular_size_ranges],
 
             has_variants=True,
             stock_quantity=initial_stock
@@ -93,6 +86,10 @@ def create_product(
                 width=v_data.width,
                 height=v_data.height,
                 unit_quantity=v_data.unit_quantity,
+                low_stock_threshold=v_data.low_stock_threshold,
+                min_usable=v_data.min_usable if v_data.min_usable is not None else (150.0 if product_data.has_dimensions else 2.0),
+                allow_rotation=v_data.allow_rotation,
+                popular_size_ranges=[r.dict() for r in v_data.popular_size_ranges],
             )
             db.add(new_variant)
 
@@ -173,6 +170,16 @@ def remove_product(product_id: int, db: Session = Depends(get_session), current_
         db.delete(product)
         db.commit()
         return {"message": "Product deleted", "id": product_id}
+    except HTTPException:
+        raise
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"Remove Product Error (IntegrityError): {e}", exc_info=True)
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete this product because it has related order or stock history. "
+                   "Remove those records first, or keep the product instead of deleting it.",
+        )
     except Exception as e:
         db.rollback()
         logger.error(f"Remove Product Error: {e}", exc_info=True)
@@ -182,6 +189,8 @@ def remove_product(product_id: int, db: Session = Depends(get_session), current_
 
 def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session = Depends(get_session)):
     try:
+        product = db.get(Product, product_id)
+
         # 1. Generate Name (Strict)
         final_name = " - ".join(str(v) for v in variant_data.attributes.values())
 
@@ -198,17 +207,20 @@ def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session 
             width=variant_data.width,
             height=variant_data.height,
             unit_quantity=variant_data.unit_quantity,
+            low_stock_threshold=variant_data.low_stock_threshold,
+            min_usable=variant_data.min_usable if variant_data.min_usable is not None else (150.0 if product and product.has_dimensions else 2.0),
+            allow_rotation=variant_data.allow_rotation,
+            popular_size_ranges=[r.dict() for r in variant_data.popular_size_ranges],
         )
         db.add(variant)
-        
+
         # 2. Update Parent Product Stock
         # We must keep the cache in sync
-        product = db.get(Product, product_id)
         if product:
-            product.has_variants = True 
+            product.has_variants = True
             product.stock_quantity = (product.stock_quantity or 0) + variant.stock_quantity
             db.add(product)
-            
+
         db.commit()
         db.refresh(variant)
         return variant
@@ -243,6 +255,10 @@ def add_variants_bulk(product_id: int, variants_data: List[model.VariantCreate],
                 width=variant_data.width,
                 height=variant_data.height,
                 unit_quantity=variant_data.unit_quantity,
+                low_stock_threshold=variant_data.low_stock_threshold,
+                min_usable=variant_data.min_usable if variant_data.min_usable is not None else (150.0 if product.has_dimensions else 2.0),
+                allow_rotation=variant_data.allow_rotation,
+                popular_size_ranges=[r.dict() for r in variant_data.popular_size_ranges],
             )
             db.add(variant)
             created.append(variant)
@@ -292,6 +308,23 @@ def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Sessio
         if update_data.unit_quantity is not None:
              variant.unit_quantity = update_data.unit_quantity
 
+        if update_data.low_stock_threshold is not None:
+             variant.low_stock_threshold = update_data.low_stock_threshold
+
+        if update_data.min_usable is not None:
+             variant.min_usable = update_data.min_usable
+
+        if update_data.allow_rotation is not None:
+             variant.allow_rotation = update_data.allow_rotation
+
+        if update_data.popular_size_ranges is not None:
+             variant.popular_size_ranges = [r.dict() for r in update_data.popular_size_ranges]
+
+        if update_data.attributes is not None:
+             merged_attrs = {**(variant.attributes or {}), **update_data.attributes}
+             variant.attributes = merged_attrs
+             variant.name = " - ".join(str(v) for v in merged_attrs.values())
+
         # 2. Update Stock (Delta)
         if update_data.stock_change is not None:
              logger.info(f"Adjusting Variant {variant_id} Stock: {variant.stock_quantity} + {update_data.stock_change}")
@@ -338,6 +371,37 @@ def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Sessio
         logger.error(f"Update Variant Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+def remove_variant(variant_id: int, db: Session = Depends(get_session)) -> dict:
+    try:
+        variant = db.get(Variant, variant_id)
+        if not variant:
+            raise HTTPException(status_code=404, detail="Variant not found")
+
+        product = db.get(Product, variant.product_id)
+        removed_stock = variant.stock_quantity or 0
+
+        db.delete(variant)
+        db.flush()
+
+        if product:
+            product.stock_quantity = max(0, (product.stock_quantity or 0) - removed_stock)
+            db.add(product)
+
+        db.commit()
+        return {"message": "Variant deleted", "id": variant_id}
+    except HTTPException:
+        raise
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete this variant — it has order or offcut history linked to it. Set its stock to 0 instead.",
+        )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Remove Variant Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- CATEGORIES ---
 
 def create_category(category_data: model.CategoryCreate, db: Session = Depends(get_session)) -> Category:
@@ -362,7 +426,35 @@ def create_category(category_data: model.CategoryCreate, db: Session = Depends(g
         raise HTTPException(status_code=500, detail=str(e))
 
 def getAllCategories(db: Session = Depends(get_session)):
-    return db.exec(select(Category)).all()
+    # Ordered by categoryId (creation order) — an unordered SELECT returns rows in
+    # physical storage order, which drifts after any UPDATE to a row (e.g. adding a
+    # sub-category) and reshuffles the category tabs/cards in the UI unpredictably.
+    return db.exec(select(Category).order_by(Category.categoryId)).all()
+
+def add_subcategory(category_id: int, name: str, db: Session = Depends(get_session)) -> Category:
+    try:
+        import re
+        category = db.get(Category, category_id)
+        if not category:
+            raise HTTPException(status_code=404, detail="Category not found")
+
+        slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+        subs = list(category.sub_categories or [])
+        if any(s.get('id') == slug for s in subs):
+            raise HTTPException(status_code=400, detail=f"Sub-category '{name}' already exists.")
+
+        subs.append({'id': slug, 'label': name})
+        category.sub_categories = subs
+        db.add(category)
+        db.commit()
+        db.refresh(category)
+        return category
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Add Sub-Category Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- STOCK ---
 

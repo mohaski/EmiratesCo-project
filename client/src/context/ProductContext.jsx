@@ -49,6 +49,10 @@ export const ProductProvider = ({ children }) => {
                 width: v.width ?? null,
                 height: v.height ?? null,
                 unitQuantity: v.unit_quantity ?? null,
+                lowStockThreshold: v.low_stock_threshold ?? 0,
+                minUsable: v.min_usable ?? 150,
+                allowRotation: v.allow_rotation ?? true,
+                popularSizeRanges: v.popular_size_ranges ?? [],
                 unit,
             })) : [];
 
@@ -200,6 +204,12 @@ export const ProductProvider = ({ children }) => {
                     width: v.width ? parseFloat(v.width) : null,
                     height: v.height ? parseFloat(v.height) : null,
                     unit_quantity: v.unitQuantity != null ? parseFloat(v.unitQuantity) : null,
+                    // Offcut tuning — per-variant (see VariantCreate); different sizes/
+                    // thicknesses of the same product can differ. null lets the backend
+                    // pick a context-aware default (150mm for 2D, 2ft for 1D).
+                    min_usable: v.minUsable ?? null,
+                    allow_rotation: v.allowRotation ?? true,
+                    popular_size_ranges: v.popularSizeRanges || [],
                 })) : []
             };
 
@@ -230,6 +240,7 @@ export const ProductProvider = ({ children }) => {
                 trackOffcuts: updatedProduct.trackOffcuts,
                 unit: updatedProduct.unit,
             };
+            if (updatedProduct.applicableAttributes) payload.applicable_attributes = updatedProduct.applicableAttributes;
             await api.productService.update(updatedProduct.id, payload);
             await refreshProducts();
         } catch (err) {
@@ -248,6 +259,19 @@ export const ProductProvider = ({ children }) => {
             console.error("Failed to add category", err);
         }
     }, [refreshCategories]);
+
+    const addSubCategory = useCallback(async (categoryId, label) => {
+        try {
+            const cat = categories.find(c => c.id === categoryId);
+            if (!cat) throw new Error("Category not found");
+            await api.productService.addSubCategory(cat.dbId, label);
+            await refreshCategories();
+            return true;
+        } catch (err) {
+            console.error("Failed to add sub-category", err);
+            throw err;
+        }
+    }, [categories, refreshCategories]);
 
     const addProductVariant = useCallback(async (productId, variantData) => {
         try {
@@ -274,6 +298,9 @@ export const ProductProvider = ({ children }) => {
                 length: v.length ? parseFloat(v.length) : null,
                 width: v.width ? parseFloat(v.width) : null,
                 unit_quantity: v.unitQuantity != null ? parseFloat(v.unitQuantity) : null,
+                min_usable: v.minUsable ?? null,
+                allow_rotation: v.allowRotation ?? true,
+                popular_size_ranges: v.popularSizeRanges || [],
             }));
             await api.productService.addVariantsBulk(productId, payload);
             await refreshProducts();
@@ -314,6 +341,17 @@ export const ProductProvider = ({ children }) => {
         }
     }, [refreshProducts]);
 
+    const deleteProductVariant = useCallback(async (variantId) => {
+        try {
+            await api.productService.deleteVariant(variantId);
+            await refreshProducts();
+            return true;
+        } catch (err) {
+            console.error("Failed to delete variant", err);
+            throw err;
+        }
+    }, [refreshProducts]);
+
     const value = useMemo(() => ({
         products,
         categories,
@@ -323,12 +361,14 @@ export const ProductProvider = ({ children }) => {
         deleteProduct,
         updateProduct,
         addCategory,
+        addSubCategory,
         addProductVariant,
         addProductVariants,
         addProductOffcuts,
         updateProductVariant,
+        deleteProductVariant,
         refreshProducts: initializeData
-    }), [products, categories, loading, error, addProduct, deleteProduct, updateProduct, addCategory, addProductVariant, addProductVariants, addProductOffcuts, updateProductVariant, initializeData]);
+    }), [products, categories, loading, error, addProduct, deleteProduct, updateProduct, addCategory, addSubCategory, addProductVariant, addProductVariants, addProductOffcuts, updateProductVariant, deleteProductVariant, initializeData]);
 
     return (
         <ProductContext.Provider value={value}>

@@ -4,6 +4,7 @@ import GlassCalculator from './calculators/GlassCalculator';
 import AccessoryCalculator from './calculators/AccessoryCalculator';
 import DynamicCalculator from './calculators/DynamicCalculator';
 import StandardCalculator from './calculators/StandardCalculator';
+import { getProfileColorHex, tileGradient, isProfileCategory, isGlassCategory, isAccessoryCategory } from '../../utils/colors';
 
 export default function ProductModal({ product, isOpen, onClose, onAddToOrder, color, initialDetails, source = 'sales', cart = [], cartIndex = null }) {
     const [total, setTotal] = useState(0);
@@ -18,19 +19,20 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
         const isStockValid = details?.isValid !== false;
         if (source === 'sales' && !isStockValid) return;
         if (total <= 0) return;
-        onAddToOrder({ image: product.image, id: product.id, name: product.name, category: product.category, totalPrice: total, details });
+        onAddToOrder({ id: product.id, name: product.name, category: product.category, totalPrice: total, details });
         onClose();
     };
 
     if (!isOpen || !product) return null;
 
-    const isProfile = product.category === 'ke-profile' || product.category === 'tz-profile';
-    const isGlass = product.category === 'glass';
-    const isAccessory = product.category === 'accessories';
+    const isProfile = isProfileCategory(product.category);
+    const isGlass = isGlassCategory(product.category);
+    const isAccessory = isAccessoryCategory(product.category);
     const isDynamic = !!product.variants;
     const canProceed = total > 0 && (source !== 'sales' || details?.isValid !== false);
 
     const categoryColor = isProfile ? '#a855f7' : isGlass ? '#06b6d4' : isAccessory ? '#22c55e' : '#3b82f6';
+    const matchedColorHex = isProfile ? getProfileColorHex(color) : null;
 
     return (
         <div style={{ position: 'absolute', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
@@ -45,11 +47,12 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                 maxHeight: '90vh', display: 'flex', flexDirection: 'column',
                 animation: 'fadeInScale 0.2s ease',
             }}>
-                {/* Header image strip */}
-                <div style={{ position: 'relative', height: '140px', flexShrink: 0, overflow: 'hidden' }}>
-                    <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg, ${categoryColor}20, rgba(9,14,26,0.8))` }} />
-                    <img src={product.image} alt={product.name} style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.3, mixBlendMode: 'luminosity' }} />
-                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(9,14,26,0.9) 0%, transparent 50%)' }} />
+                {/* Header tile — reflects the selected color in profile sections, category tint elsewhere */}
+                <div className="product-tile" style={{
+                    position: 'relative', height: '140px', flexShrink: 0, overflow: 'hidden',
+                    background: matchedColorHex ? tileGradient(matchedColorHex) : `linear-gradient(135deg, ${categoryColor}30 0%, rgba(9,14,26,0.85) 60%, rgba(9,14,26,0.98) 100%)`,
+                }}>
+                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(9,14,26,0.92) 0%, transparent 55%)' }} />
 
                     {/* Close button */}
                     <button onClick={onClose} style={{
@@ -75,7 +78,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                             </span>
                             {isProfile && color && (
                                 <span style={{ fontSize: '0.62rem', fontWeight: 700, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '4px', padding: '2px 8px', color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: color === 'White' ? '#e2e8f0' : color === 'Silver' ? '#DCE1E6' : color === 'Gold' ? '#FFD700' : color === 'Grey' ? '#5B6370' : '#8B4513', display: 'inline-block' }} />
+                                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: matchedColorHex || '#FFD700', display: 'inline-block' }} />
                                     {color}
                                 </span>
                             )}

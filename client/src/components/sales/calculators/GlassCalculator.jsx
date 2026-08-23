@@ -52,7 +52,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         if (initialDetails?.extras) return initialDetails.extras;
         const defaults = {};
         Object.keys(extraAttributes).forEach(key => {
-            defaults[key] = product.defaultAttributes?.[key] || (extraAttributes[key]?.[0]);
+            defaults[key] = extraAttributes[key]?.[0];
         });
         return defaults;
     });

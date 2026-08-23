@@ -21,11 +21,24 @@ class CategoryCreate(BaseModel):
     name: str
     sub_categories: List[Dict[str, str]] = []
 
+class SubCategoryCreate(BaseModel):
+    name: str
+
 class CategoryResponse(BaseModel):
     categoryId: int
     name: str # Category name (e.g. "Kenyan Profile")
     type: str # ID for frontend (e.g. "ke-profile")
     sub_categories: List[Dict[str, str]] = []
+
+class PopularSizeRange(BaseModel):
+    """A CEO-defined "this size sells well" band, mm, canonical wide/narrow.
+    Drives glassOffcutService's offcut tiering — see _meets_popular_threshold.
+    Per-VARIANT (not per-product) — different thicknesses/sizes of the same
+    glass product can each have their own scrap threshold and popular sizes."""
+    min_w: float
+    max_w: float
+    min_h: float
+    max_h: float
 
 class VariantCreate(BaseModel):
     attributes: Dict[str, Any] = {}
@@ -37,6 +50,18 @@ class VariantCreate(BaseModel):
     width: Optional[float] = None
     height: Optional[float] = None
     unit_quantity: Optional[float] = None
+    # Per-variant low-stock alarm threshold — defaults to 0 (no alarm) for every
+    # newly-generated variant; the CEO sets a real value later from Manage Variants.
+    low_stock_threshold: float = 0.0
+    # Offcut tuning — per-variant (see PopularSizeRange) so e.g. a 4mm sheet and a
+    # 12mm sheet of the same product can differ. Not required at creation: None
+    # picks a context-aware default server-side (150mm for a has_dimensions=True
+    # product, 2ft for a 1D bar/profile one — see products/service.py's
+    # create_product) and is refined later per-variant via Manage Variants.
+    # allow_rotation/popular_size_ranges are 2D (glass) only, ignored for 1D products.
+    min_usable: Optional[float] = None
+    allow_rotation: bool = True
+    popular_size_ranges: List[PopularSizeRange] = []
 
 class VariantUpdate(BaseModel):
     price: Optional[float] = None
@@ -47,6 +72,16 @@ class VariantUpdate(BaseModel):
     height: Optional[float] = None
     unit_quantity: Optional[float] = None
     stock_change: Optional[int] = None
+    low_stock_threshold: Optional[float] = None
+    min_usable: Optional[float] = None
+    allow_rotation: Optional[bool] = None
+    # Full replace (not merged) when provided — the CEO always resends the complete
+    # list from Manage Variants, same as how a fresh set of ranges is authored.
+    popular_size_ranges: Optional[List[PopularSizeRange]] = None
+    # Merged into the variant's existing attributes dict (not replaced) — lets the
+    # CEO backfill a newly-added attribute class onto pre-existing variants from
+    # Manage Variants without needing to also resend every attribute already set.
+    attributes: Optional[Dict[str, Any]] = None
 
 class VariantResponse(BaseModel):
     variantId: int
@@ -60,14 +95,10 @@ class VariantResponse(BaseModel):
     width: Optional[float] = None
     height: Optional[float] = None
     unit_quantity: Optional[float] = None
-
-class PopularSizeRange(BaseModel):
-    """A CEO-defined "this size sells well" band, mm, canonical wide/narrow.
-    Drives glassOffcutService's offcut tiering — see _meets_popular_threshold."""
-    min_w: float
-    max_w: float
-    min_h: float
-    max_h: float
+    low_stock_threshold: float = 0.0
+    min_usable: float = 150.0
+    allow_rotation: bool = True
+    popular_size_ranges: List[PopularSizeRange] = []
 
 
 class ProductCreate(BaseModel):
@@ -90,12 +121,6 @@ class ProductCreate(BaseModel):
     # and any custom-typed attribute); explicit (even []) always wins from then on.
     pool_ignored_attributes: Optional[List[str]] = None
 
-    # 2D (glass) offcut tuning — required when has_dimensions=True (see
-    # service.create_product's validation); ignored for 1D/simple products.
-    min_usable_dimension: Optional[float] = None
-    allow_rotation: bool = True
-    popular_size_ranges: List[PopularSizeRange] = []
-
     variants: List[VariantCreate] = []
 
 class ProductCreateResponse(BaseModel):
@@ -116,10 +141,6 @@ class ProductUpdateRequest(BaseModel):
 
     applicable_attributes: Optional[List[str]] = None
     has_dimensions: Optional[bool] = None
-
-    min_usable_dimension: Optional[float] = None
-    allow_rotation: Optional[bool] = None
-    popular_size_ranges: Optional[List[PopularSizeRange]] = None
 
 class ProductUpdateResponse(BaseModel):
     message: str
@@ -143,10 +164,6 @@ class ProductResponse(BaseModel):
     applicable_attributes: List[str] = []
     has_dimensions: bool = False
     pool_ignored_attributes: Optional[List[str]] = None
-
-    min_usable_dimension: Optional[float] = None
-    allow_rotation: bool = True
-    popular_size_ranges: List[PopularSizeRange] = []
 
     # Computed or Relation
     variants: List[VariantResponse] = []

@@ -10,6 +10,8 @@ import CorrectOffcutModal from '../components/orders/CorrectOffcutModal';
 import CorrectProfileOffcutModal from '../components/orders/CorrectProfileOffcutModal';
 import CuttingInstructions from '../components/orders/CuttingInstructions';
 import { REVIEW_THEME } from '../utils/cuttingInstructionFormat';
+import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
+import { getProfileColorHex, getContrastText, getCategoryAccent, tileGradient, hexToRgba } from '../utils/colors';
 
 const STATUS_COLORS = {
     pending:   { bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.25)', text: '#cbd5e1' },
@@ -40,23 +42,52 @@ const DetailBadge = ({ color, children }) => (
     <span style={{ fontSize: '0.62rem', fontWeight: 600, padding: '1px 6px', background: `${color}15`, border: `1px solid ${color}30`, borderRadius: '4px', color, textTransform: 'uppercase' }}>{children}</span>
 );
 
+// Same department-toggle pattern as CheckoutPage's CategoryToggle — a department
+// with no items in this order stays disabled, same "can't pick what isn't there" rule.
+const DeptToggle = ({ bucket, label, icon, color, checked, disabled, onToggle }) => (
+    <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onToggle(bucket)}
+        title={disabled ? `No ${label.toLowerCase()} items on this order` : undefined}
+        style={{
+            display: 'flex', alignItems: 'center', gap: '0.5rem',
+            padding: '0.625rem 0.875rem',
+            background: disabled ? 'rgba(255,255,255,0.02)' : checked ? `${color}15` : 'rgba(255,255,255,0.03)',
+            border: disabled ? '1px solid rgba(255,255,255,0.05)' : checked ? `1px solid ${color}50` : '1px solid rgba(255,255,255,0.08)',
+            borderRadius: '0.75rem',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            opacity: disabled ? 0.4 : 1,
+            transition: 'all 0.2s ease',
+            flex: 1,
+        }}
+    >
+        <span style={{ fontSize: '1rem' }}>{icon}</span>
+        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: disabled ? '#475569' : checked ? color : '#64748b' }}>{label}</span>
+    </button>
+);
+
 const ItemRow = ({ item, canCorrectOffcuts, canMarkCuttingDone, onCorrect, onMarkDone }) => {
     const lineItems = item.details?.lineItems || [];
     const attributes = item.details?.attributes;
     const extras = item.details?.extras;
     const pendingCut = item.cuttingCompleted === false;
+    const colorHex = getProfileColorHex(item.details?.color);
+    const accent = getCategoryAccent(item.category);
+    const tileText = colorHex ? getContrastText(colorHex) : accent;
+    const initial = item.name?.trim()?.[0]?.toUpperCase() || '?';
 
     return (
     <div style={{ padding: '1rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <div style={{
+            <div className="product-tile" style={{
                 width: '44px', height: '44px', borderRadius: '10px', flexShrink: 0,
-                background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
-                overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: colorHex ? tileGradient(colorHex) : hexToRgba(accent, 0.1),
+                border: `1px solid ${colorHex ? 'rgba(255,255,255,0.15)' : hexToRgba(accent, 0.25)}`,
+                boxShadow: colorHex ? 'inset 0 1px 0 rgba(255,255,255,0.15), inset 0 -4px 8px rgba(0,0,0,0.16)' : 'none',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-                {item.image
-                    ? <img src={item.image} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
-                    : <span style={{ fontSize: '1.1rem' }}>📦</span>}
+                <span style={{ position: 'relative', zIndex: 1, fontSize: '1rem', fontWeight: 800, color: tileText }}>{initial}</span>
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
@@ -220,10 +251,46 @@ export default function OrderSummaryPage() {
             return {
                 ...item,
                 name: product?.name ?? item.details?.name ?? `Product #${item.productId}`,
-                image: product?.image ?? null,
+                category: product?.category ?? null,
             };
         });
     }, [order, PRODUCTS]);
+
+    // Which departments actually have items on this order — same rule ReceiptPage's
+    // Checkout flow uses, so a department with nothing to print stays disabled.
+    const presentBuckets = useMemo(() => {
+        const present = { profile: false, glass: false, accessory: false };
+        items.forEach(item => {
+            const bucket = bucketOf(item.category);
+            if (bucket) present[bucket] = true;
+        });
+        return present;
+    }, [items]);
+
+    const [receiptCategories, setReceiptCategories] = useState(() => ({ profile: false, glass: false, accessory: false }));
+    // Re-sync whenever the set of present departments changes (order loads/reloads) —
+    // default every present department to checked, same as Checkout.
+    const [syncedPresentBuckets, setSyncedPresentBuckets] = useState(presentBuckets);
+    if (presentBuckets !== syncedPresentBuckets) {
+        setSyncedPresentBuckets(presentBuckets);
+        setReceiptCategories({ ...presentBuckets });
+    }
+    const toggleReceiptCategory = (bucket) => setReceiptCategories(prev => ({ ...prev, [bucket]: !prev[bucket] }));
+
+    // Reprinting a worksheet is the same permission boundary as generating one at
+    // checkout (/checkout/receipt is manager/cashier-only — see routePermissions.js).
+    const canPrintReceipt = ['manager', 'cashier'].includes(user?.role);
+    const handlePrintReceipt = () => {
+        navigate('/checkout/receipt', {
+            state: {
+                orderId: order.orderId,
+                cartItems: items,
+                customer: order.customer || { name: order.customerName },
+                categories: receiptCategories,
+                mode: 'reprint',
+            },
+        });
+    };
 
     if (!order) {
         return (
@@ -352,6 +419,38 @@ export default function OrderSummaryPage() {
                         <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0' }}>{order.customer?.name || order.customerName || 'Walk-in Customer'}</div>
                         {order.customer?.phone && <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '2px' }}>{order.customer.phone}</div>}
                     </Card>
+
+                    {canPrintReceipt && !isCancelled && (
+                        <Card title="Print Receipt">
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    {BUCKET_ORDER.map(bucket => (
+                                        <DeptToggle
+                                            key={bucket}
+                                            bucket={bucket}
+                                            label={BUCKET_META[bucket].label.replace(/ (Cutting|Prep)$/, '')}
+                                            icon={BUCKET_META[bucket].icon}
+                                            color={BUCKET_META[bucket].color}
+                                            checked={receiptCategories[bucket]}
+                                            disabled={!presentBuckets[bucket]}
+                                            onToggle={toggleReceiptCategory}
+                                        />
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={handlePrintReceipt}
+                                    disabled={!BUCKET_ORDER.some(b => receiptCategories[b])}
+                                    style={{
+                                        padding: '0.625rem 1rem', borderRadius: '0.75rem', border: 'none',
+                                        cursor: BUCKET_ORDER.some(b => receiptCategories[b]) ? 'pointer' : 'not-allowed',
+                                        background: BUCKET_ORDER.some(b => receiptCategories[b]) ? 'linear-gradient(135deg, rgba(245,158,11,0.85), rgba(234,88,12,0.85))' : 'rgba(255,255,255,0.06)',
+                                        color: BUCKET_ORDER.some(b => receiptCategories[b]) ? '#fff' : '#475569',
+                                        fontWeight: 700, fontSize: '0.82rem', transition: 'all 0.2s',
+                                    }}
+                                >🖨️ Print Receipt</button>
+                            </div>
+                        </Card>
+                    )}
 
                     <Card title="Payment">
                         <Row label="Method" value={order.paymentMethod || '—'} />

@@ -14,7 +14,7 @@ const buildSubCategoriesMap = cats => {
 // controls bar and the form itself — so it can be dropped into
 // ProductManagementPage's "Add Product" tab. Same split as CollectDebtTab/DuesTab.
 export function AddProductTab() {
-    const { products, categories, addProduct, addCategory, addProductVariants } = useProducts();
+    const { products, categories, addProduct, addCategory, addSubCategory, addProductVariants } = useProducts();
     const {
         attributeClasses,
         createAttributeClass, renameAttributeClass, deleteAttributeClass,
@@ -55,12 +55,29 @@ export function AddProductTab() {
 
     const [newProductData, setNewProductData] = useState({
         name: '', itemCode: '', category: '', subCategory: '',
-        image: null, applicableAttributes: ['Color'], defaultAttributes: {},
+        image: null, applicableAttributes: ['Color'],
         trackOffcuts: false, unit: 'ft',
     });
     const [hasDimensions, setHasDimensions] = useState(false);
     const [dimensionValues, setDimensionValues] = useState([]); // [{ length, width }]
     const [dimensionInput, setDimensionInput] = useState({ length: '', width: '', unit: '' });
+
+    // Offcut-tuning CEO inputs, seeded with a type-aware default (see
+    // handleNewCategoryChange/the hasDimensions toggle below): 150 (mm) for a
+    // has_dimensions=True (2D/glass) product, 2 (ft) for a 1D (bar/profile) one.
+    // allowRotation/popularSizeRanges stay 2D-only (glassOffcutService).
+    const [minUsable, setMinUsable] = useState('150');
+    const [allowRotation, setAllowRotation] = useState(true);
+    const [popularSizeRanges, setPopularSizeRanges] = useState([]); // [{ min_w, max_w, min_h, max_h }]
+    const [popularRangeInput, setPopularRangeInput] = useState({ min_w: '', max_w: '', min_h: '', max_h: '' });
+
+    const addPopularSizeRange = () => {
+        const { min_w, max_w, min_h, max_h } = popularRangeInput;
+        if (!min_w || !max_w || !min_h || !max_h) return;
+        setPopularSizeRanges(prev => [...prev, { min_w: parseFloat(min_w), max_w: parseFloat(max_w), min_h: parseFloat(min_h), max_h: parseFloat(max_h) }]);
+        setPopularRangeInput({ min_w: '', max_w: '', min_h: '', max_h: '' });
+    };
+    const removePopularSizeRange = idx => setPopularSizeRanges(prev => prev.filter((_, i) => i !== idx));
 
     // For category === 'accessories': explicit choice between length-tracked (cut/offcuts,
     // e.g. rubber rolls) and count-tracked (sold as Box/Pcs, e.g. screws) items.
@@ -299,6 +316,15 @@ export function AddProductTab() {
             length: attrs['Length'] ? parseFloat(attrs['Length']) : (dimPair ? parseFloat(dimPair.length) : (vals.length ? parseFloat(vals.length) : null)),
             width: dimPair ? parseFloat(dimPair.width) : null,
             unitQuantity,
+            // Offcut tuning — per-variant (see ManageVariantsModal for refining an
+            // individual variant afterward); in 'new' mode this creation-time panel
+            // seeds every variant in this batch with the same starting value. In
+            // 'variant' mode (adding to an existing product) there's no such panel,
+            // so null lets the backend fall back to the product's own context-aware
+            // default (150mm for 2D, 2ft for 1D — see products/service.py).
+            minUsable: (mode === 'new' && currentTrackOffcuts) ? (parseFloat(minUsable) || (currentHasDimensions ? 150 : 2)) : null,
+            allowRotation,
+            popularSizeRanges: currentHasDimensions ? popularSizeRanges : [],
         };
     });
 
@@ -334,18 +360,6 @@ export function AddProductTab() {
         setNewProductData(prev => ({ ...prev, [name]: value }));
     };
 
-    const handleDefaultAttributeChange = (attrKey, value) => {
-        const previousDefault = newProductData.defaultAttributes[attrKey];
-        setNewProductData(prev => ({ ...prev, defaultAttributes: { ...prev.defaultAttributes, [attrKey]: value } }));
-        setMatrixSelections(prev => {
-            const current = prev[attrKey] || [];
-            let updated = [...current];
-            if (previousDefault && previousDefault !== value) updated = updated.filter(v => v !== previousDefault);
-            if (value && !updated.includes(value)) updated.push(value);
-            return { ...prev, [attrKey]: updated };
-        });
-    };
-
     const handleNewCategoryChange = e => {
         const cat = e.target.value;
         let defaults = [];
@@ -354,12 +368,16 @@ export function AddProductTab() {
         setHasDimensions(cat === 'glass');
         setDimensionValues([]);
         setDimensionInput({ length: '', width: '', unit: '' });
+        setMinUsable(cat === 'glass' ? '150' : '2');
+        setAllowRotation(true);
+        setPopularSizeRanges([]);
+        setPopularRangeInput({ min_w: '', max_w: '', min_h: '', max_h: '' });
         setCustomAttributeValues({});
         setCustomAttributeInputs({});
         setAccessoryTrackingType(null);
         // Sub-Category is independent — picking a Category never auto-selects one, so the user
         // always has to choose it deliberately.
-        setNewProductData(prev => ({ ...prev, category: cat, subCategory: '', applicableAttributes: defaults, defaultAttributes: {}, trackOffcuts: false }));
+        setNewProductData(prev => ({ ...prev, category: cat, subCategory: '', applicableAttributes: defaults, trackOffcuts: false }));
         setMatrixSelections({});
         setMatrixValues({});
     };
@@ -368,13 +386,11 @@ export function AddProductTab() {
         setNewProductData(prev => {
             const has = prev.applicableAttributes.includes(attrKey);
             const nextAttrs = has ? prev.applicableAttributes.filter(a => a !== attrKey) : [...prev.applicableAttributes, attrKey];
-            const nextDefaults = { ...prev.defaultAttributes };
             if (has) {
-                delete nextDefaults[attrKey];
                 const nextMatrix = { ...matrixSelections }; delete nextMatrix[attrKey]; setMatrixSelections(nextMatrix);
                 setCustomAttributeValues(prevCustom => { const { [attrKey]: _removed, ...rest } = prevCustom; return rest; });
             }
-            return { ...prev, applicableAttributes: nextAttrs, defaultAttributes: nextDefaults };
+            return { ...prev, applicableAttributes: nextAttrs };
         });
     };
 
@@ -421,15 +437,15 @@ export function AddProductTab() {
         setSelectedExistingProduct(null);
     };
 
-    const handleAddConfigItem = newItem => {
+    const handleAddConfigItem = async newItem => {
         if (!newItem) return;
         if (activeConfigTab === 'categories') {
             const newId = newItem.toLowerCase().replace(/\s+/g, '-');
             addCategory({ id: newId, label: newItem, icon: '📦' });
         } else if (activeConfigTab === 'subcats') {
             if (!selectedParentCategory) return;
-            const newId = newItem.toLowerCase().replace(/\s+/g, '-');
-            setConfig(prev => ({ ...prev, subCategories: { ...prev.subCategories, [selectedParentCategory]: [...(prev.subCategories[selectedParentCategory] || []), { id: newId, label: newItem }] } }));
+            try { await addSubCategory(selectedParentCategory, newItem); }
+            catch { /* error toast already shown by api interceptor */ }
         } else {
             const classId = findAttributeClassId(activeConfigTab);
             if (classId) addAttributeValue(classId, newItem);
@@ -467,9 +483,6 @@ export function AddProductTab() {
         if (valueId) renameAttributeValue(valueId, trimmed);
         // Keep any in-progress selections pointing at the renamed value instead of going stale
         setMatrixSelections(prev => prev[attrKey] ? { ...prev, [attrKey]: prev[attrKey].map(v => v === oldValue ? trimmed : v) } : prev);
-        setNewProductData(prev => prev.defaultAttributes[attrKey] === oldValue
-            ? { ...prev, defaultAttributes: { ...prev.defaultAttributes, [attrKey]: trimmed } }
-            : prev);
     };
 
     // Rename the attribute class itself (e.g. "Color" -> "Colour")
@@ -482,15 +495,10 @@ export function AddProductTab() {
 
         const classId = findAttributeClassId(oldName);
         if (classId) renameAttributeClass(classId, trimmed);
-        setNewProductData(prev => {
-            const nextDefaults = { ...prev.defaultAttributes };
-            if (oldName in nextDefaults) { nextDefaults[trimmed] = nextDefaults[oldName]; delete nextDefaults[oldName]; }
-            return {
-                ...prev,
-                applicableAttributes: prev.applicableAttributes.map(a => a === oldName ? trimmed : a),
-                defaultAttributes: nextDefaults,
-            };
-        });
+        setNewProductData(prev => ({
+            ...prev,
+            applicableAttributes: prev.applicableAttributes.map(a => a === oldName ? trimmed : a),
+        }));
         setMatrixSelections(prev => {
             if (!(oldName in prev)) return prev;
             const { [oldName]: vals, ...rest } = prev;
@@ -515,15 +523,10 @@ export function AddProductTab() {
 
         const classId = findAttributeClassId(className);
         if (classId) deleteAttributeClass(classId);
-        setNewProductData(prev => {
-            const nextDefaults = { ...prev.defaultAttributes };
-            delete nextDefaults[className];
-            return {
-                ...prev,
-                applicableAttributes: prev.applicableAttributes.filter(a => a !== className),
-                defaultAttributes: nextDefaults,
-            };
-        });
+        setNewProductData(prev => ({
+            ...prev,
+            applicableAttributes: prev.applicableAttributes.filter(a => a !== className),
+        }));
         setMatrixSelections(prev => {
             if (!(className in prev)) return prev;
             const { [className]: _removed, ...rest } = prev;
@@ -556,6 +559,12 @@ export function AddProductTab() {
             alert("Please generate at least one variant.");
             return;
         }
+        // Min usable size/popular ranges are optional (sensible defaults apply, refined
+        // later per-variant via Manage Variants) — only reject a genuinely invalid value.
+        if (mode === 'new' && (hasDimensions || newProductData.trackOffcuts) && minUsable && parseFloat(minUsable) <= 0) {
+            alert("Minimum usable offcut size must be greater than 0.");
+            return;
+        }
         const variants = buildGeneratedVariants();
         if (mode === 'variant' && variants.length === 0) {
             alert("All selected variant(s) already exist for this product.");
@@ -569,12 +578,16 @@ export function AddProductTab() {
                 // saw a toggle for (generationKeys) count; a stale entry left over from
                 // an attribute since deselected is dropped rather than sent.
                 const poolIgnoredAttributes = generationKeys.filter(key => poolTogetherMap[key]);
-                const finalProduct = { id: `p-${Date.now()}`, ...newProductData, hasDimensions, poolIgnoredAttributes, attributes: matrixSelections, variants, image: 'https://placehold.co/300x200/555555/FFFFFF?text=New+Product' };
+                const finalProduct = {
+                    id: `p-${Date.now()}`, ...newProductData, hasDimensions, poolIgnoredAttributes, attributes: matrixSelections, variants,
+                    image: 'https://placehold.co/300x200/555555/FFFFFF?text=New+Product',
+                };
                 try {
                     await addProduct(finalProduct);
                     alert(`Product Created: ${newProductData.name}\n${variants.length} Variant(s) Generated.`);
-                    setNewProductData({ name: '', itemCode: '', category: '', subCategory: '', image: null, defaultAttributes: {}, applicableAttributes: ['Color'], trackOffcuts: false, unit: 'ft' });
+                    setNewProductData({ name: '', itemCode: '', category: '', subCategory: '', image: null, applicableAttributes: ['Color'], trackOffcuts: false, unit: 'ft' });
                     setHasDimensions(false);
+                    setMinUsable('2'); setAllowRotation(true); setPopularSizeRanges([]); setPopularRangeInput({ min_w: '', max_w: '', min_h: '', max_h: '' });
                     setMatrixSelections({}); setMatrixValues({}); setDimensionValues([]); setDimensionInput({ length: '', width: '', unit: '' });
                     setCustomAttributeValues({}); setCustomAttributeInputs({}); setPoolTogetherMap({});
                 } catch { /* error toast already shown by api interceptor */ }
@@ -733,6 +746,15 @@ export function AddProductTab() {
                                                         </button>
                                                         <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Track Offcuts (all variants)</span>
                                                     </label>
+                                                    {newProductData.trackOffcuts && !hasDimensions && (
+                                                        <div style={{ marginTop: '0.75rem' }}>
+                                                            <label style={{ ...labelStyle, marginBottom: '0.25rem' }}>Min Usable Offcut Length ({newProductData.unit || 'ft'})</label>
+                                                            <input type="number" step="1" min="0" placeholder="e.g. 2" value={minUsable}
+                                                                onChange={e => setMinUsable(e.target.value)} onFocus={onFocusBorder} onBlur={onBlurBorder}
+                                                                style={{ ...inputStyle, width: '120px', fontSize: '0.78rem', padding: '0.375rem 0.625rem' }} />
+                                                            <p style={{ fontSize: '0.6rem', color: '#475569', margin: '4px 0 0' }}>Below this length, a remainder is scrap, not a usable offcut. Refine later per-variant via Manage Variants.</p>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </div>
@@ -896,22 +918,13 @@ export function AddProductTab() {
                                                                 )}
                                                             </div>
                                                         )}
-                                                        {isSelected && attributeTypesMap[attrKey] !== 'custom' && attrKey !== 'Color' && (
-                                                            <div style={{ marginTop: '0.625rem' }}>
-                                                                <label style={{ ...labelStyle, marginBottom: '0.25rem' }}>Default {attrKey}</label>
-                                                                <select value={newProductData.defaultAttributes[attrKey] || ''} onChange={e => handleDefaultAttributeChange(attrKey, e.target.value)} onClick={e => e.stopPropagation()} style={{ ...selectStyle, fontSize: '0.78rem', padding: '0.375rem 0.625rem' }} onFocus={onFocusBorder} onBlur={onBlurBorder}>
-                                                                    <option value="">No Default</option>
-                                                                    {attributesMap[attrKey].map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                                                                </select>
-                                                            </div>
-                                                        )}
                                                     </div>
                                                 );
                                             })}
 
                                             {/* Dimensions toggle — available for any category */}
                                             <div style={{ borderRadius: '0.875rem', border: `1px solid ${hasDimensions ? 'rgba(6,182,212,0.4)' : 'rgba(255,255,255,0.07)'}`, background: hasDimensions ? 'rgba(6,182,212,0.08)' : 'rgba(255,255,255,0.03)', padding: '0.75rem 1rem', transition: 'all 0.15s' }}>
-                                                <div onClick={() => setHasDimensions(v => !v)} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
+                                                <div onClick={() => setHasDimensions(v => { const next = !v; setMinUsable(next ? '150' : '2'); return next; })} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}>
                                                     <div>
                                                         <span style={{ fontSize: '0.82rem', fontWeight: 700, color: hasDimensions ? '#22d3ee' : '#64748b' }}>Dimensions</span>
                                                         <p style={{ fontSize: '0.65rem', color: '#475569', margin: '2px 0 0' }}>Length × Width per variant</p>
@@ -951,6 +964,49 @@ export function AddProductTab() {
                                                                 ))}
                                                             </div>
                                                         )}
+                                                    </div>
+                                                )}
+                                                {hasDimensions && (
+                                                    <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.06)' }} onClick={e => e.stopPropagation()}>
+                                                        <p style={{ fontSize: '0.62rem', fontWeight: 700, color: '#22d3ee', letterSpacing: '0.06em', textTransform: 'uppercase', margin: '0 0 0.5rem' }}>Offcut Tuning (starting values for every variant in this batch)</p>
+                                                        <label style={{ ...labelStyle, marginBottom: '0.25rem' }}>Min Usable Offcut Size (mm)</label>
+                                                        <input type="number" step="1" min="0" placeholder="e.g. 150" value={minUsable}
+                                                            onChange={e => setMinUsable(e.target.value)} onFocus={onFocusBorder} onBlur={onBlurBorder}
+                                                            style={{ ...inputStyle, width: '120px', fontSize: '0.78rem', padding: '0.375rem 0.625rem' }} />
+                                                        <p style={{ fontSize: '0.6rem', color: '#475569', margin: '4px 0 0' }}>Below this size on either side, a remainder is scrap, not a usable offcut.</p>
+
+                                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.75rem', cursor: 'pointer' }}>
+                                                            <button type="button" onClick={() => setAllowRotation(v => !v)} style={{
+                                                                width: '30px', height: '17px', borderRadius: '100px', border: 'none', cursor: 'pointer', position: 'relative', flexShrink: 0,
+                                                                background: allowRotation ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'rgba(255,255,255,0.1)', transition: 'background 0.2s',
+                                                            }}>
+                                                                <span style={{ position: 'absolute', top: '2px', left: allowRotation ? '15px' : '2px', width: '13px', height: '13px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block' }} />
+                                                            </button>
+                                                            <span style={{ fontSize: '0.65rem', color: allowRotation ? '#4ade80' : '#64748b', fontWeight: 600 }}>
+                                                                Allow 90° rotation when fitting cuts {!allowRotation && '(disable for directional/patterned glass)'}
+                                                            </span>
+                                                        </label>
+
+                                                        <div style={{ marginTop: '0.75rem' }}>
+                                                            <label style={{ ...labelStyle, marginBottom: '0.25rem' }}>Popular Size Ranges (mm)</label>
+                                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
+                                                                <input type="number" step="1" placeholder="Min W" value={popularRangeInput.min_w} onChange={e => setPopularRangeInput(p => ({ ...p, min_w: e.target.value }))} onFocus={onFocusBorder} onBlur={onBlurBorder} style={{ ...inputStyle, flex: '1 1 60px', minWidth: '60px', fontSize: '0.78rem', padding: '0.375rem 0.625rem' }} />
+                                                                <input type="number" step="1" placeholder="Max W" value={popularRangeInput.max_w} onChange={e => setPopularRangeInput(p => ({ ...p, max_w: e.target.value }))} onFocus={onFocusBorder} onBlur={onBlurBorder} style={{ ...inputStyle, flex: '1 1 60px', minWidth: '60px', fontSize: '0.78rem', padding: '0.375rem 0.625rem' }} />
+                                                                <input type="number" step="1" placeholder="Min H" value={popularRangeInput.min_h} onChange={e => setPopularRangeInput(p => ({ ...p, min_h: e.target.value }))} onFocus={onFocusBorder} onBlur={onBlurBorder} style={{ ...inputStyle, flex: '1 1 60px', minWidth: '60px', fontSize: '0.78rem', padding: '0.375rem 0.625rem' }} />
+                                                                <input type="number" step="1" placeholder="Max H" value={popularRangeInput.max_h} onChange={e => setPopularRangeInput(p => ({ ...p, max_h: e.target.value }))} onFocus={onFocusBorder} onBlur={onBlurBorder} style={{ ...inputStyle, flex: '1 1 60px', minWidth: '60px', fontSize: '0.78rem', padding: '0.375rem 0.625rem' }} />
+                                                                <button type="button" onClick={addPopularSizeRange} style={{ flexShrink: 0, padding: '0 0.75rem', borderRadius: '0.625rem', border: '1px solid rgba(6,182,212,0.4)', background: 'rgba(6,182,212,0.15)', color: '#22d3ee', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>+ Add</button>
+                                                            </div>
+                                                            <p style={{ fontSize: '0.6rem', color: '#475569', margin: '4px 0 0' }}>"This size sells well" — optional; protects popular offcuts from being used up on smaller cuts first. Can also be set per-variant later via Manage Variants.</p>
+                                                            {popularSizeRanges.length > 0 && (
+                                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem', marginTop: '0.5rem' }}>
+                                                                    {popularSizeRanges.map((r, i) => (
+                                                                        <button key={i} type="button" onClick={() => removePopularSizeRange(i)} style={{ ...chipBtn(true, 'blue'), display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                                            {r.min_w}-{r.max_w} × {r.min_h}-{r.max_h} <span style={{ opacity: 0.7 }}>✕</span>
+                                                                        </button>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>

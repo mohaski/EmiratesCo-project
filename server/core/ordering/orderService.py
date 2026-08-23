@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from fastapi import Depends, HTTPException, Query
-from sqlmodel import Session, select
+from sqlmodel import Session, select, update
 from sqlalchemy import func
 
 from entities.orders import Order
@@ -693,6 +693,17 @@ def update_order(
         # ── 2. Restore stock from old items ───────────────────────────────────
         # Load into a plain list first so the loop isn't affected by deletions
         old_items = db.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all()
+        old_item_ids = [oi.item_id for oi in old_items]
+        if old_item_ids:
+            # A pooled/scrap Offcut row can outlive the item that last produced
+            # it (restore only decrements its quantity, since other unrelated
+            # cuts still own the rest) — leaving offcuts.source_item_id dangling
+            # at an item we're about to delete, which offcuts_source_item_id_fkey
+            # then refuses. Clear it here; it's provenance metadata only (drives
+            # the advisory "still awaiting cutting" notice), never load-bearing
+            # for stock accounting, so nulling it for a since-deleted item is safe.
+            from entities.offcuts import Offcut
+            db.exec(update(Offcut).where(Offcut.source_item_id.in_(old_item_ids)).values(source_item_id=None))
         for old_item in old_items:
             restore_stock_for_order_item(db, old_item)
             db.delete(old_item)
@@ -752,10 +763,13 @@ def update_order(
         vat = compute_VAT_amount(net) if order_data.VAT_status else Decimal("0.00")
         final_total = net + vat
 
-        # Accumulate payments: add the new payment on top of what was already collected
+        # Accumulate payments: add the new payment on top of what was already collected.
+        # new_payment is signed — positive when more was collected on this edit,
+        # negative when a refund was paid out (item total dropped below what was
+        # already collected) — so this same accumulation handles both directions.
         new_payment = ceil_amount(Decimal(str(order_data.amountPaid)))
         prior_paid = Decimal(str(order.amountPayed or 0))
-        total_paid = min(prior_paid + new_payment, final_total)
+        total_paid = max(Decimal("0.00"), min(prior_paid + new_payment, final_total))
         new_balance = max(final_total - total_paid, Decimal("0.00"))
 
         is_paid = new_balance <= Decimal("0.10")
@@ -811,8 +825,13 @@ def update_order(
         )
         db.add(audit)
 
-        # Record the payment collected during this edit (new_payment is the delta paid now)
-        if new_payment > Decimal("0"):
+        # Record the money movement for this edit (new_payment is the signed delta:
+        # positive = additional payment collected, negative = refund paid out to
+        # the customer). Either way it's one Payment row tagged with the method
+        # the cashier actually used — get_financial_summary sums Payment.amount
+        # per method, so a negative row here nets straight out of that day's
+        # cash/mpesa totals for the CEO, the same way the positive case adds to it.
+        if new_payment != Decimal("0"):
             from entities.payments import Payment
             pay_method = (order_data.paymentMethod or "cash").lower()
             if pay_method not in {"cash", "mpesa", "split", "number"}:
@@ -821,7 +840,7 @@ def update_order(
                 orderId=order_id,
                 amount=float(new_payment),
                 payment_method=pay_method,
-                reason="order",
+                reason="refund" if new_payment < Decimal("0") else "order",
                 payment_details=order_data.paymentDetails,
                 recorded_by=current_user.userId,
             )
