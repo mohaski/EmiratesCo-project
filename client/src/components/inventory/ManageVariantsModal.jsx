@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useProducts } from '../../context/ProductContext';
 import { useAttributes } from '../../context/AttributeContext';
+import { isProfileCategory } from '../../utils/colors';
 import ConfirmationModal from '../common/ConfirmationModal';
 
 export default function ManageVariantsModal({ isOpen, onClose, product }) {
@@ -11,6 +12,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const [editForm, setEditForm] = useState({ price: '', priceHalf: '', priceUnit: '', stockChange: 0, lowStockThreshold: 0, minUsable: 150, allowRotation: true, popularSizeRanges: [] });
     const [popularRangeDraft, setPopularRangeDraft] = useState({ min_w: '', max_w: '', min_h: '', max_h: '' });
     const [saving, setSaving] = useState(false);
+    const [savingDefault, setSavingDefault] = useState(null); // attribute key currently being saved, or null
 
     // --- Add Attribute panel: lets the CEO introduce a new attribute class onto an
     // already-existing product, then say where each current variant sits on it —
@@ -45,6 +47,15 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     // regardless of what unit their dimensions are recorded in — see GlassCalculator.
     const unitPriceLabel = product.hasDimensions ? 'ft²' : unit;
     const getVariantId = v => v.name || Object.values(v.attributes).join(' - ');
+    // Only attributes with more than one actual value are worth a default picker —
+    // a single-value attribute has nothing to choose between. "Color" is excluded for
+    // profile products because ProfileCalculator sources its color from the sales
+    // page's own color swatch selector, not a per-product default (see there).
+    const defaultableAttributeKeys = Object.keys(product.attributes || {}).filter(k => {
+        if ((product.attributes[k] || []).length <= 1) return false;
+        if (k === 'Color' && isProfileCategory(product.category)) return false;
+        return true;
+    });
 
     const priceFields = [
         { label: 'Full Price', key: 'price' },
@@ -95,6 +106,20 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
             setEditingVariantId(null);
         } catch { alert('Update failed'); }
         finally { setSaving(false); }
+    };
+
+    // Which value the sales modal should auto-select for a given attribute (e.g.
+    // "Color" -> "White") when a customer opens this product — see DynamicCalculator/
+    // ProfileCalculator/GlassCalculator/AccessoryCalculator, which all fall back to
+    // the first aggregated value when no default (or an unset one) is chosen here.
+    const handleSetDefaultAttribute = async (key, value) => {
+        setSavingDefault(key);
+        try {
+            const nextDefaults = { ...(product.defaultAttributes || {}) };
+            if (value) nextDefaults[key] = value; else delete nextDefaults[key];
+            await updateProduct({ ...product, defaultAttributes: nextDefaults });
+        } catch { alert('Failed to set default value'); }
+        finally { setSavingDefault(null); }
     };
 
     const confirmDeletion = async () => {
@@ -344,6 +369,31 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                     {/* Variants list */}
                     {!attrPanelOpen && (
                     <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 2rem' }} className="custom-scrollbar modal-body-pad">
+                        {defaultableAttributeKeys.length > 0 && (
+                            <div style={{ padding: '1.125rem 1.25rem', borderRadius: '1rem', background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.18)', marginBottom: '1.25rem' }}>
+                                <p style={{ fontSize: '0.68rem', fontWeight: 800, color: '#60a5fa', margin: '0 0 0.25rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Default Values</p>
+                                <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0 0 0.875rem' }}>Auto-selected when a customer opens this product in Sales.</p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                                    {defaultableAttributeKeys.map(key => (
+                                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
+                                            <span style={{ flex: 1, fontSize: '0.82rem', fontWeight: 600, color: '#cbd5e1' }}>{key}</span>
+                                            <select
+                                                value={product.defaultAttributes?.[key] || ''}
+                                                disabled={savingDefault === key}
+                                                onChange={e => handleSetDefaultAttribute(key, e.target.value)}
+                                                style={{
+                                                    width: '200px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                                                    borderRadius: '0.625rem', padding: '0.5rem 0.75rem', color: '#f1f5f9', fontSize: '0.8rem', outline: 'none', cursor: 'pointer',
+                                                    opacity: savingDefault === key ? 0.6 : 1,
+                                                }}>
+                                                <option value="">— No default (use first) —</option>
+                                                {(product.attributes[key] || []).map(v => <option key={v} value={v}>{v}</option>)}
+                                            </select>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         {variants.length === 0 ? (
                             <div style={{ textAlign: 'center', padding: '3.5rem 1rem', border: '1px dashed rgba(255,255,255,0.08)', borderRadius: '1.25rem', color: '#334155' }}>
                                 <div style={{ fontSize: '2.25rem', marginBottom: '0.75rem', opacity: 0.35 }}>📦</div>

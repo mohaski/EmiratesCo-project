@@ -6,7 +6,10 @@ const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [selections, setSelections] = useState(() => {
         const initial = initialDetails?.selections ? { ...initialDetails.selections } : {};
         attributeKeys.forEach(key => {
-            if (!initial[key] && product.attributes[key]?.length > 0) initial[key] = product.attributes[key][0];
+            if (!initial[key] && product.attributes[key]?.length > 0) {
+                const def = product.defaultAttributes?.[key];
+                initial[key] = (def && product.attributes[key].includes(def)) ? def : product.attributes[key][0];
+            }
         });
         return initial;
     });
@@ -20,11 +23,15 @@ const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
         attributeKeys.forEach(key => {
             if (!next[key]) {
                 const options = product.attributes[key] || [];
-                if (options.length > 0) { next[key] = options[0]; changed = true; }
+                if (options.length > 0) {
+                    const def = product.defaultAttributes?.[key];
+                    next[key] = (def && options.includes(def)) ? def : options[0];
+                    changed = true;
+                }
             }
         });
         if (changed) setSelections(next);
-    }, [product.attributes, selections, attributeKeys]);
+    }, [product.attributes, product.defaultAttributes, selections, attributeKeys]);
 
     const activeVariant = useMemo(() => {
         if (!product.variants) return null;

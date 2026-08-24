@@ -104,6 +104,7 @@ export const ProductProvider = ({ children }) => {
                 applicableAttributes,
                 hasDimensions,
                 poolIgnoredAttributes: p.pool_ignored_attributes ?? null,
+                defaultAttributes: p.default_attributes || {},
             };
         });
     };
@@ -241,6 +242,7 @@ export const ProductProvider = ({ children }) => {
                 unit: updatedProduct.unit,
             };
             if (updatedProduct.applicableAttributes) payload.applicable_attributes = updatedProduct.applicableAttributes;
+            if (updatedProduct.defaultAttributes) payload.default_attributes = updatedProduct.defaultAttributes;
             await api.productService.update(updatedProduct.id, payload);
             await refreshProducts();
         } catch (err) {

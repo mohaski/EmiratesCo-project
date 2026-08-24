@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useProducts } from '../context/ProductContext';
 import ConfirmationModal from '../components/common/ConfirmationModal';
 import ManageVariantsModal from '../components/inventory/ManageVariantsModal';
@@ -9,10 +9,11 @@ const PROFILE_SUB_CATEGORIES = [{ id: 'window', label: 'Windows' }, { id: 'door'
 const GLASS_SUB_CATEGORIES = [{ id: 'clear', label: 'Clear' }, { id: 'oneway', label: 'One/Way' }, { id: 'tint', label: 'Tinted' }, { id: 'mirror', label: 'Mirror' }, { id: 'frost', label: 'Frost' }, { id: 'obscure', label: 'Obscure' }, { id: 'alucoboard', label: 'Alucoboard' }];
 const ACCESSORY_SUB_CATEGORIES = [{ id: 'general', label: 'General' }];
 
-// Sub-categories are keyed off the category "family" (profile/glass/accessory),
-// not a fixed list of known categories, so any newly-added "<X> Profile" category
-// automatically gets the same Windows/Doors/General usages as the existing ones.
-const subCategoriesFor = (category) => {
+// Family-based fallbacks — used only for a category that has no sub-categories
+// of its own configured yet (via Manage Options), keyed off the category "family"
+// (profile/glass/accessory) so any newly-added "<X> Profile" category automatically
+// gets the same Windows/Doors/General usages as the existing ones.
+const fallbackSubCategoriesFor = (category) => {
     if (isProfileCategory(category)) return PROFILE_SUB_CATEGORIES;
     if (isGlassCategory(category)) return GLASS_SUB_CATEGORIES;
     if (isAccessoryCategory(category)) return ACCESSORY_SUB_CATEGORIES;
@@ -29,7 +30,26 @@ export function ManageProductsTab({ onAddProduct }) {
     const [selectedCategory, setSelectedCategory] = useState(() => (categories?.length > 0 ? categories[0].id : 'ke-profile'));
     const [selectedUsage, setSelectedUsage] = useState('window');
 
-    const usages = useMemo(() => subCategoriesFor(selectedCategory), [selectedCategory]);
+    // Prefer the category's own configured sub-categories (added via Manage Options,
+    // stored on categories.sub_categories) — same source useProductFiltering.js reads
+    // for the Sales/Inventory pages — falling back to the family defaults only when
+    // this category hasn't had any configured yet.
+    const usages = useMemo(() => {
+        const cat = categories.find(c => c.id === selectedCategory);
+        if (cat?.subCategories?.length > 0) return cat.subCategories;
+        return fallbackSubCategoriesFor(selectedCategory);
+    }, [selectedCategory, categories]);
+
+    // selectedUsage's initial value ('window') only makes sense for a Profile category —
+    // switching to Glass or Accessories (whose sub-category lists don't include 'window')
+    // otherwise leaves it pointing at a pill that isn't even shown, silently filtering out
+    // every product in the table. Snap it to the new category's first sub-category whenever
+    // the current selection no longer belongs to it.
+    useEffect(() => {
+        if (usages.length > 0 && !usages.some(u => u.id === selectedUsage)) {
+            setSelectedUsage(usages[0].id);
+        }
+    }, [usages, selectedUsage]);
 
     const [deleteModal, setDeleteModal] = useState({ open: false, product: null });
     const [variantsModal, setVariantsModal] = useState({ open: false, product: null });

@@ -52,7 +52,8 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         if (initialDetails?.extras) return initialDetails.extras;
         const defaults = {};
         Object.keys(extraAttributes).forEach(key => {
-            defaults[key] = extraAttributes[key]?.[0];
+            const def = product.defaultAttributes?.[key];
+            defaults[key] = (def && extraAttributes[key]?.includes(def)) ? def : extraAttributes[key]?.[0];
         });
         return defaults;
     });
@@ -97,11 +98,15 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             let changed = false;
             Object.keys(extraAttributes).forEach(key => {
                 const validOptions = optionsForKey[key] || [];
-                if (!next[key] || !validOptions.includes(next[key])) { next[key] = validOptions[0]; changed = true; }
+                if (!next[key] || !validOptions.includes(next[key])) {
+                    const def = product.defaultAttributes?.[key];
+                    next[key] = (def && validOptions.includes(def)) ? def : validOptions[0];
+                    changed = true;
+                }
             });
             return changed ? next : prev;
         });
-    }, [optionsForKey, extraAttributes]);
+    }, [optionsForKey, extraAttributes, product.defaultAttributes]);
 
     const pricing = useMemo(() => {
         let match = product.variants?.find(v => Object.entries(extraSelections).every(([key, val]) => v.attributes?.[key] === val));

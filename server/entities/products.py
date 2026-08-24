@@ -51,6 +51,13 @@ class Product(SQLModel, table=True):
     # share a pool) — a deliberate choice, not "not configured".
     pool_ignored_attributes: Optional[List[str]] = Field(default=None, sa_column=Column(JSON, nullable=True))
 
+    # CEO-chosen default value per attribute class (e.g. {"Color": "White"}) — used
+    # to pre-select the sales-modal calculators (DynamicCalculator/ProfileCalculator/
+    # GlassCalculator/AccessoryCalculator) instead of them falling back to whichever
+    # value happens to sort first. Set from ManageVariantsModal; keys not present here
+    # (or values no longer valid for the product) fall back to that same first-value rule.
+    default_attributes: Optional[Dict[str, str]] = Field(default=None, sa_column=Column(JSON, nullable=True))
+
     # Relationships
     category: Optional["Category"] = Relationship(back_populates="products")
     orderItems: List["OrderItem"] = Relationship(back_populates="product")

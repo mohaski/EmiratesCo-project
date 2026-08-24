@@ -46,7 +46,10 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
     const [extraSelections, setExtraSelections] = useState(() => {
         const defaults = {};
         Object.keys(extraAttributes).forEach(key => {
-            if (key !== 'Color') defaults[key] = extraAttributes[key]?.[0];
+            if (key !== 'Color') {
+                const def = product.defaultAttributes?.[key];
+                defaults[key] = (def && extraAttributes[key]?.includes(def)) ? def : extraAttributes[key]?.[0];
+            }
         });
         return initialDetails?.extras ? { ...defaults, ...initialDetails.extras } : defaults;
     });
@@ -61,7 +64,10 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
             const next = { ...prev };
             Object.keys(extraAttributes).forEach(key => {
                 if (!extraAttributes[key].includes(next[key])) {
-                    if (key !== 'Color') next[key] = extraAttributes[key][0];
+                    if (key !== 'Color') {
+                        const def = product.defaultAttributes?.[key];
+                        next[key] = (def && extraAttributes[key].includes(def)) ? def : extraAttributes[key][0];
+                    }
                     else delete next[key];
                 }
             });

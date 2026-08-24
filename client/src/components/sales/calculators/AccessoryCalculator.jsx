@@ -57,12 +57,16 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                 const next = { ...prev };
                 let changed = false;
                 Object.entries(availableAttributes).forEach(([key, opts]) => {
-                    if (opts.length > 0 && !next[key]) { next[key] = opts[0]; changed = true; }
+                    if (opts.length > 0 && !next[key]) {
+                        const def = product.defaultAttributes?.[key];
+                        next[key] = (def && opts.includes(def)) ? def : opts[0];
+                        changed = true;
+                    }
                 });
                 return changed ? next : prev;
             });
         }
-    }, [availableAttributes, hasVariants]);
+    }, [availableAttributes, hasVariants, product.defaultAttributes]);
 
     const [qtyFull, setQtyFull] = useState(initialDetails?.qtyFull || 0);
     const [qtyHalf, setQtyHalf] = useState(initialDetails?.qtyHalf || 0);
@@ -150,7 +154,11 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                     const price = activeItem.price || activeItem.priceFull || 0;
                     total = qty * price;
                     const availableOwnUnit = stock / (activeItem.unitQuantity || 1);
-                    if (qty > availableOwnUnit) { finalError = `Only ${availableOwnUnit} boxes available`; isValid = false; }
+                    // "boxes" only when this variant is actually packaged (a real box of N
+                    // pcs, canSellPcs) — an unpackaged variant's own unit (e.g. "pcs") is the
+                    // whole sale unit, not a box, same distinction the price label below makes.
+                    const unitLabel = canSellPcs ? 'boxes' : (activeItem.unit || 'units');
+                    if (qty > availableOwnUnit) { finalError = `Only ${availableOwnUnit} ${unitLabel} available`; isValid = false; }
                     lineItems.push({ type: 'accessory-unit', label: 'Quantity', qty, rate: price, total, meta: { unit: activeItem.unit } });
                 }
             }

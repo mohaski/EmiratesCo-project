@@ -41,8 +41,11 @@ echo.
 :: Single worker: the WebSocket broadcast manager (ws/manager.py) keeps
 :: connections in an in-process list, not shared across workers — with
 :: workers > 1, live-update pushes would miss clients on other workers.
-:: 127.0.0.1: this laptop is standalone (no other device needs to reach it).
-%NSSM% install %SERVICE_NAME% "%PYTHON%" "-m" "uvicorn" "main:app" "--host" "127.0.0.1" "--port" "8000" "--workers" "1"
+:: 0.0.0.0: bound to all interfaces so the app is reachable over the Tailscale
+:: virtual adapter for remote access (see server/.env CORS_ORIGINS comment and
+:: the "EmiratesCo API - Tailscale" firewall rule, which restricts inbound
+:: port 8000 to Tailscale's 100.64.0.0/10 range only).
+%NSSM% install %SERVICE_NAME% "%PYTHON%" "-m" "uvicorn" "main:app" "--host" "0.0.0.0" "--port" "8000" "--workers" "1"
 %NSSM% set %SERVICE_NAME% AppDirectory "%SERVER_DIR_NOSLASH%"
 %NSSM% set %SERVICE_NAME% DisplayName "EmiratesCo API Server"
 %NSSM% set %SERVICE_NAME% Description "FastAPI backend for EmiratesCo Management System"

@@ -141,6 +141,8 @@ class ProductUpdateRequest(BaseModel):
 
     applicable_attributes: Optional[List[str]] = None
     has_dimensions: Optional[bool] = None
+    # CEO-chosen default value per attribute class — see entities/products.py.
+    default_attributes: Optional[Dict[str, str]] = None
 
 class ProductUpdateResponse(BaseModel):
     message: str
@@ -164,6 +166,7 @@ class ProductResponse(BaseModel):
     applicable_attributes: List[str] = []
     has_dimensions: bool = False
     pool_ignored_attributes: Optional[List[str]] = None
+    default_attributes: Optional[Dict[str, str]] = None
 
     # Computed or Relation
     variants: List[VariantResponse] = []
