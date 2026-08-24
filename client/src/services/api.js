@@ -94,8 +94,14 @@ export const OrderService = {
         const response = await api.get(`/orders/audit/history?${params}`);
         return response.data;
     },
-    cancelOrder: async (id, pin) => {
-        const response = await api.put(`/orders/${id}/cancel`, { pin });
+    /** refund: { method: 'cash'|'mpesa'|'split', details?: { cash, mpesa } } — how the
+     * cashier is handing back whatever was already collected. Omit when nothing was paid. */
+    cancelOrder: async (id, pin, refund = null) => {
+        const response = await api.put(`/orders/${id}/cancel`, {
+            pin,
+            refundMethod: refund?.method || null,
+            refundDetails: refund?.details || null,
+        });
         return response.data;
     },
     correctOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainders, failed_cut_indices, forced_offcut_id, notes }) => {
@@ -294,6 +300,12 @@ export const FinancialService = {
     /** Aggregate outstanding balances across all customers — feeds the Dues page. */
     getOutstandingCredits: async () => {
         const response = await api.get('/financials/credits/outstanding');
+        return response.data;
+    },
+    /** Full payment history (every reason — order/debt/refund) for one order —
+     * feeds the Dues Follow-Up debt-detail view. */
+    getPaymentsForOrder: async (orderId) => {
+        const response = await api.get(`/financials/payments/order/${orderId}`);
         return response.data;
     },
     getTodayCash: async () => {

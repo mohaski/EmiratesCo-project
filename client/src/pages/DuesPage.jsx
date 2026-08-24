@@ -8,6 +8,16 @@ const STATUS_COLORS = {
     'Partially Paid': '#3b82f6',
 };
 
+function useWindowWidth() {
+    const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1280));
+    useEffect(() => {
+        const h = () => setWidth(window.innerWidth);
+        window.addEventListener('resize', h, { passive: true });
+        return () => window.removeEventListener('resize', h);
+    }, []);
+    return width;
+}
+
 // Pure content — no header/search of its own, see CollectDebtTab in
 // CollectPaymentsPage.jsx for the same split, now shared by DebtManagementPage.
 export function DuesTab({ searchQuery = '', onCountChange }) {
@@ -17,6 +27,7 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
     const [error, setError] = useState(null);
     const [sortBy, setSortBy] = useState('daysOutstanding');
     const [sortDir, setSortDir] = useState('desc');
+    const isMobile = useWindowWidth() < 768;
 
     const fetchCredits = useCallback(async ({ showLoading = false } = {}) => {
         if (showLoading) setLoading(true);
@@ -67,15 +78,8 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
         return sorted;
     }, [credits, searchQuery, sortBy, sortDir]);
 
-    const handleRowClick = useCallback(async (row) => {
-        try {
-            const full = await api.orderService.getOrder(row.orderId);
-            navigate('/orders/review', {
-                state: { order: { ...full, id: full.orderId, customer: { id: row.customerId, name: row.customerName, phone: row.customerPhone } } },
-            });
-        } catch (err) {
-            console.error('Failed to fetch order for summary view', err);
-        }
+    const handleRowClick = useCallback((row) => {
+        navigate('/debt-management/order', { state: { orderId: row.orderId, creditRow: row } });
     }, [navigate]);
 
     const SortHeader = ({ field, label, align = 'left' }) => (
@@ -106,6 +110,52 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
                     <p style={{ fontWeight: 500, fontSize: '0.875rem' }}>
                         {credits.length === 0 ? 'No outstanding balances — everyone is paid up.' : `No accounts found for "${searchQuery}"`}
                     </p>
+                </div>
+            ) : isMobile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                    {rows.map(row => {
+                        const overdue = row.daysOutstanding > 30;
+                        return (
+                            <div
+                                key={row.creditId}
+                                onClick={() => handleRowClick(row)}
+                                style={{
+                                    background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)',
+                                    borderRadius: '1rem', padding: '1rem 1.125rem', cursor: 'pointer',
+                                }}
+                            >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
+                                    <div style={{ minWidth: 0 }}>
+                                        <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#e2e8f0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.customerName}</div>
+                                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>{row.customerPhone}</div>
+                                    </div>
+                                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                        <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#fbbf24', fontFamily: 'var(--font-mono)' }}>KSH {row.amountDue.toLocaleString()}</div>
+                                        <div style={{ fontSize: '0.75rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>#{row.orderId}</div>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', marginTop: '0.75rem' }}>
+                                    <span style={{
+                                        fontSize: '0.72rem', fontWeight: 700,
+                                        color: overdue ? '#f87171' : '#94a3b8',
+                                        background: overdue ? 'rgba(239,68,68,0.1)' : 'rgba(255,255,255,0.05)',
+                                        border: overdue ? '1px solid rgba(239,68,68,0.25)' : '1px solid rgba(255,255,255,0.08)',
+                                        borderRadius: '6px', padding: '2px 8px',
+                                    }}>{row.daysOutstanding}d outstanding {overdue && '⚠'}</span>
+                                    <span style={{
+                                        fontSize: '0.7rem', fontWeight: 700,
+                                        color: STATUS_COLORS[row.status] || '#94a3b8',
+                                        background: `${STATUS_COLORS[row.status] || '#94a3b8'}18`,
+                                        border: `1px solid ${STATUS_COLORS[row.status] || '#94a3b8'}30`,
+                                        borderRadius: '6px', padding: '2px 8px',
+                                    }}>{row.status}</span>
+                                    <span style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 'auto' }}>
+                                        {row.lastPaymentAt ? `Last paid ${new Date(row.lastPaymentAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'No payments yet'}
+                                    </span>
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             ) : (
                 <div style={{

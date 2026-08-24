@@ -63,6 +63,19 @@ def get_date_cash_total(
     require_role(["cashier", "manager", "ceo", "admin"], current_user)
     return PaymentService.calculate_cash_payments_for_certain_date(date, db)
 
+@router.get("/payments/order/{order_id}", response_model=List[model.PaymentRecord])
+def get_payments_for_order(
+    order_id: int,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """
+    Full payment history for a single order — feeds the Dues Follow-Up
+    debt-detail view (order + every payment made against it, cleared or not).
+    """
+    require_role(["ceo", "manager", "admin"], current_user)
+    return PaymentService.get_payments_for_order(order_id, db)
+
 @router.get("/summary", response_model=model.FinancialSummaryResponse)
 def get_financial_summary(
     period: str = Query("day", description="'day' | 'month' | 'year'"),

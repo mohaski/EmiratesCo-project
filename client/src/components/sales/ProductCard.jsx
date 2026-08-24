@@ -29,7 +29,7 @@ function ProductCard({ product, onClick, selectedColor }) {
         if (matchingVariant) {
             displayPrice = {
                 full: matchingVariant.price || 0,
-                half: matchingVariant.priceHalf || (matchingVariant.price ? matchingVariant.price / 2 : 0),
+                half: matchingVariant.priceHalf || 0,
                 unit: matchingVariant.priceUnit || 0,
             };
         }
@@ -55,7 +55,7 @@ function ProductCard({ product, onClick, selectedColor }) {
             if (headerVal && !variantMap.has(headerVal)) {
                 variantMap.set(headerVal, {
                     full: v.price || v.priceFull || 0,
-                    half: v.priceHalf || (v.price ? v.price / 2 : 0),
+                    half: v.priceHalf || 0,
                     unit: v.priceUnit || v.priceFoot || v.priceSqFt || 0,
                 });
             }

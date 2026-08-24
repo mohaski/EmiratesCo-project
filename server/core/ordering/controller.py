@@ -230,7 +230,7 @@ async def cancel_order(
     current_user = Depends(get_current_user)
 ):
     """Cancel an order — requires the CEO-configured PIN. Restores stock/offcuts."""
-    result = orderService.cancel_order_with_pin(order_id, body.pin, db, current_user)
+    result = orderService.cancel_order_with_pin(order_id, body.pin, db, current_user, body.refundMethod, body.refundDetails)
     background_tasks.add_task(manager.broadcast, "orders_updated")
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result

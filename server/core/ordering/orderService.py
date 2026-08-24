@@ -892,6 +892,11 @@ def correct_offcut_for_order_item(
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.status == "cancelled":
+        raise HTTPException(
+            status_code=400,
+            detail="This order has been cancelled — its stock/offcuts were already restored, so its cutting records can no longer be corrected.",
+        )
 
     item = db.get(OrderItem, item_id)
     if not item or item.order_id != order_id:
@@ -980,6 +985,11 @@ def correct_profile_offcut_for_order_item(
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if order.status == "cancelled":
+        raise HTTPException(
+            status_code=400,
+            detail="This order has been cancelled — its stock/offcuts were already restored, so its cutting records can no longer be corrected.",
+        )
 
     item = db.get(OrderItem, item_id)
     if not item or item.order_id != order_id:
@@ -1211,21 +1221,79 @@ def get_orders_with_balance(db: Session, skip: int = 0, limit: int = 200) -> lis
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-def _restore_and_cancel(db: Session, order: Order) -> None:
+def _restore_and_cancel(
+    db: Session,
+    order: Order,
+    current_user=None,
+    refund_method: str | None = None,
+    refund_details: dict | None = None,
+) -> dict:
     """
-    Restore stock/offcuts for every item on an order and flip it to cancelled.
-    Idempotent — a no-op if the order is already cancelled, so callers can't
-    accidentally double-restore stock by cancelling twice.
+    Restore stock/offcuts for every item on an order, refund whatever was
+    already collected against it, void any outstanding balance, and flip the
+    order to cancelled. Idempotent — a no-op if the order is already
+    cancelled, so callers can't accidentally double-restore stock (or
+    double-refund) by cancelling twice.
+
+    refund_method/refund_details: the cashier's explicit choice of how the
+    refund is being handed back (see CancelOrderModal) — falls back to
+    whatever method this order was last paid through if not given, for
+    callers that don't collect one.
+
+    Returns a small dict of what happened financially, for the caller's audit
+    log — {"amount_refunded": float, "refund_method": str | None}.
     """
     from core.inventory.inventoryService import restore_stock_for_order_item
+    from core.financials.PaymentService import _sync_credit_for_order
 
     if order.status == "cancelled":
-        return
+        return {"amount_refunded": 0.0, "refund_method": None}
+
     items = db.exec(select(OrderItem).where(OrderItem.order_id == order.orderId)).all()
     for item in items:
         restore_stock_for_order_item(db, item)
+
+    # Cancelling voids any outstanding balance regardless of whether anything
+    # was ever paid — the goods were never delivered, so the customer doesn't
+    # owe for them any more.
+    order.balance = 0.0
+
+    amount_paid = order.amountPayed or 0
+    resolved_method = None
+    if amount_paid > 0.10:
+        from entities.payments import Payment
+
+        resolved_method = (refund_method or "").lower() or None
+        resolved_details = refund_details
+        if resolved_method not in {"cash", "mpesa", "split", "number"}:
+            # No explicit choice given — fall back to whatever this order was
+            # last paid through, same default CheckoutPage uses ('cash') when
+            # there's nothing more specific to go on.
+            latest_payment = max(order.payments, key=lambda p: p.payed_at) if order.payments else None
+            resolved_method = (latest_payment.payment_method if latest_payment else None) or "cash"
+            resolved_details = None
+            if resolved_method == "split" and latest_payment and latest_payment.payment_details:
+                resolved_details = {k: -float(v or 0) for k, v in latest_payment.payment_details.items()}
+
+        db.add(Payment(
+            orderId=order.orderId,
+            amount=-float(amount_paid),
+            payment_method=resolved_method,
+            reason="refund",
+            payment_details=resolved_details,
+            recorded_by=current_user.userId if current_user else None,
+        ))
+        order.amountPayed = 0.0
+
+    order.payment_status = "Unpaid"
     order.status = "cancelled"
     db.add(order)
+
+    # Close out any Credit row so a cancelled order stops showing as an
+    # outstanding debt on the Dues page.
+    _sync_credit_for_order(db, order)
+
+    return {"amount_refunded": float(amount_paid) if amount_paid > 0.10 else 0.0, "refund_method": resolved_method}
 
 
 def update_order_status(
@@ -1285,11 +1353,17 @@ def cancel_order_with_pin(
     order_id: int,
     pin: str,
     db: Session = Depends(get_session),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    refund_method: str | None = None,
+    refund_details: dict | None = None,
 ) -> model.OrderStatusUpdateResponse:
     """
     Cancel an order from Order History. Requires the CEO-configured 4-digit PIN.
     Restores stock/offcuts for every item; idempotent if already cancelled.
+    refund_method/refund_details: how the cashier is handing back whatever was
+    already collected — the cashier picks this explicitly when there's
+    something to refund (see CancelOrderModal); _restore_and_cancel falls
+    back to the order's last payment method if left unset.
     """
     from core.settings.service import verify_cancel_pin, cancel_pin_is_configured
 
@@ -1313,17 +1387,25 @@ def cancel_order_with_pin(
             raise HTTPException(status_code=400, detail="This order is more than a week old and can no longer be cancelled.")
 
         old_status = order.status
-        _restore_and_cancel(db, order)
+        result = _restore_and_cancel(db, order, current_user, refund_method, refund_details)
 
         if old_status != "cancelled":
+            refund_note = (
+                f"Refunded KSH {result['amount_refunded']:.2f} via {result['refund_method']}"
+                if result["amount_refunded"] > 0 else "Nothing was collected against this order"
+            )
             db.add(EditHistory(
                 entity_type="order_cancellation",
                 entity_id=order_id,
                 edited_by=current_user.userId,
                 action="cancel",
                 before_snapshot={"status": old_status},
-                after_snapshot={"status": "cancelled"},
-                notes=current_user.username,
+                after_snapshot={
+                    "status": "cancelled",
+                    "amount_refunded": result["amount_refunded"],
+                    "refund_method": result["refund_method"],
+                },
+                notes=f"{current_user.username} — {refund_note}",
             ))
 
         db.commit()

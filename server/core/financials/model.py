@@ -74,3 +74,15 @@ class OutstandingCreditItem(BaseModel):
     createdAt: str
     daysOutstanding: int
     lastPaymentAt: Optional[str] = None
+
+
+class PaymentRecord(BaseModel):
+    """Single Payment row against an order — feeds the Dues Follow-Up
+    debt-detail view's payment history list."""
+    paymentId: int
+    amount: float
+    method: str
+    reason: str
+    paymentDetails: Optional[Dict[str, Any]] = None
+    payedAt: str
+    recordedByName: Optional[str] = None

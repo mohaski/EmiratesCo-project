@@ -14,6 +14,7 @@ export const ROUTE_ROLES = {
     // merged with Dues Follow-Up under '/debt-management' instead (see below).
     '/collect-payments':    ['cashier'],
     '/debt-management':     ['ceo', 'manager', 'admin'],
+    '/debt-management/order': ['ceo', 'manager', 'admin'],
     '/inventory':           ['cashier', 'manager', 'ceo'],
     '/product-management':  ['admin', 'ceo'],
     // Manager gets everything (checkout, return, loans, catalog) as tabs on one page — see '/tools/manage'.

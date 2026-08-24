@@ -232,9 +232,11 @@ export const OrderProvider = ({ children }) => {
     }, []);
 
     // Cancelling requires the CEO-configured PIN; throws on wrong/missing PIN
-    // so the caller (the cancel modal) can show an inline error.
-    const cancelOrder = useCallback(async (orderId, pin) => {
-        await api.orderService.cancelOrder(orderId, pin);
+    // so the caller (the cancel modal) can show an inline error. refund is
+    // { method, details? } — how the cashier is handing back whatever was
+    // already collected; omitted when the order had nothing paid against it.
+    const cancelOrder = useCallback(async (orderId, pin, refund = null) => {
+        await api.orderService.cancelOrder(orderId, pin, refund);
         await fetchOrders();
     }, [fetchOrders]);
 

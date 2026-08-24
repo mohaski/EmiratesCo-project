@@ -109,8 +109,15 @@ class OrderStatusUpdateResponse(BaseModel):
     message: str
 
 class OrderCancelRequest(BaseModel):
-    """Payload for cancelling an order — requires the CEO-configured PIN."""
+    """Payload for cancelling an order — requires the CEO-configured PIN.
+    refundMethod/refundDetails: how the cashier is handing back whatever was
+    already collected (cash/mpesa/split, with a {cash, mpesa} breakdown for
+    split) — optional since a fully-unpaid order has nothing to refund; when
+    omitted on a paid order, the backend falls back to whatever method that
+    order was last paid through."""
     pin: str
+    refundMethod: Optional[str] = None
+    refundDetails: Optional[Dict[str, Any]] = None
 
 class OrderEditRequest(BaseModel):
     """Payload for editing an existing order (replaces items + recalculates)."""

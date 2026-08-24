@@ -77,8 +77,8 @@ export default function OrdersPage() {
             navigate('/sales', { state: { mode: 'edit', orderData: order } });
         }
     }, [navigate]);
-    const handleCancelConfirm = useCallback(async (pin) => {
-        await cancelOrder(orderToCancel.id, pin);
+    const handleCancelConfirm = useCallback(async (pin, refund) => {
+        await cancelOrder(orderToCancel.id, pin, refund);
         setOrderToCancel(null);
     }, [cancelOrder, orderToCancel]);
 

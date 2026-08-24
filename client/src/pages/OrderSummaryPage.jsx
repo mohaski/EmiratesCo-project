@@ -198,7 +198,9 @@ export default function OrderSummaryPage() {
     const isMobile = windowWidth < 768;
 
     const [order, setOrder] = useState(location.state?.order || null);
-    const canCorrectOffcuts = ['manager', 'ceo', 'admin'].includes(user?.role);
+    // A cancelled order's stock/offcuts were already restored — its cutting
+    // records no longer describe anything live, so there's nothing to correct.
+    const canCorrectOffcuts = ['manager', 'ceo', 'admin'].includes(user?.role) && order?.status !== 'cancelled';
     const canMarkCuttingDone = ['cashier', 'admin'].includes(user?.role);
 
     const refreshOrder = async () => {
@@ -317,8 +319,8 @@ export default function OrderSummaryPage() {
 
     const handleEdit = () => navigate('/sales', { state: { mode: 'edit', orderData: { ...order, id: order.orderId } } });
 
-    const handleCancelConfirm = async (pin) => {
-        await cancelOrder(order.orderId, pin);
+    const handleCancelConfirm = async (pin, refund) => {
+        await cancelOrder(order.orderId, pin, refund);
         setShowCancel(false);
         navigate('/orders');
     };
@@ -472,7 +474,7 @@ export default function OrderSummaryPage() {
 
             {showCancel && (
                 <CancelOrderModal
-                    order={{ id: order.orderId }}
+                    order={{ id: order.orderId, amountPaid: order.amountPaid }}
                     onClose={() => setShowCancel(false)}
                     onConfirm={handleCancelConfirm}
                 />

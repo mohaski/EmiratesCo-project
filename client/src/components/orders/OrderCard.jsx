@@ -40,8 +40,8 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, h
         <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '3px', background: order.balance > 0.1 ? 'linear-gradient(180deg, #f59e0b, #d97706)' : 'linear-gradient(180deg, #3b82f6, #06b6d4)', borderRadius: '3px 0 0 3px' }} />
 
         {/* Order Info */}
-        <div style={{ flex: 1, minWidth: 0, paddingLeft: '0.5rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', marginBottom: '0.375rem' }}>
+        <div style={{ flex: 1, minWidth: '180px', paddingLeft: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.625rem', marginBottom: '0.375rem' }}>
                 <span style={{
                     background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
                     color: '#93c5fd', padding: '2px 8px', borderRadius: '6px',

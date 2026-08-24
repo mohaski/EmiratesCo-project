@@ -104,7 +104,17 @@ def get_financial_summary(period: str, date_str: str | None, db: Session) -> mod
         raise HTTPException(status_code=400, detail="period must be 'day', 'month', or 'year'")
 
     try:
-        anchor = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else datetime.utcnow().date()
+        if date_str:
+            anchor = datetime.strptime(date_str, "%Y-%m-%d").date()
+        else:
+            # "Today" must be anchored to the DB's local date, not the app
+            # server's UTC clock — Payment.payed_at is a naive timestamp
+            # stored in the DB session's local timezone (e.g. Africa/Nairobi,
+            # UTC+3). Anchoring on datetime.utcnow().date() instead drifts by
+            # that offset, so any payment recorded in the first few hours
+            # after local midnight got excluded from "today"'s totals until
+            # the app server's UTC clock caught up.
+            anchor = db.exec(select(func.current_date())).one()
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use 'YYYY-MM-DD'")
 
@@ -173,6 +183,32 @@ def get_financial_summary(period: str, date_str: str | None, db: Session) -> mod
         order_count=len(orders),
         status_counts=status_counts,
     )
+
+
+def get_payments_for_order(order_id: int, db: Session) -> list[model.PaymentRecord]:
+    """Full payment history for one order (every reason — order/debt/refund),
+    oldest first — feeds the Dues Follow-Up debt-detail view."""
+    from entities.users import User
+
+    rows = db.exec(
+        select(Payment, User)
+        .join(User, Payment.recorded_by == User.userId, isouter=True)
+        .where(Payment.orderId == order_id)
+        .order_by(Payment.payed_at.asc())
+    ).all()
+
+    return [
+        model.PaymentRecord(
+            paymentId=p.paymentId,
+            amount=p.amount,
+            method=p.payment_method,
+            reason=p.reason,
+            paymentDetails=p.payment_details,
+            payedAt=p.payed_at.isoformat() if p.payed_at else "",
+            recordedByName=u.username if u else None,
+        )
+        for p, u in rows
+    ]
 
 
 def _sync_credit_for_order(db: Session, order: Order) -> None:

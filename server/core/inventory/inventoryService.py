@@ -774,10 +774,13 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
                 if sources:
                     restore_specific_offcut_sources(db, product, variant, sources, pool_key)
                 else:
+                    half_len = round(full_len / 2.0, 4)
                     for _ in range(qty):
-                        _restore_simple_stock(db, product, variant, 1)
-                        half_len = round(full_len / 2.0, 4)
-                        _remove_offcut(db, product, variant, half_len, pool_key)
+                        if _remove_offcut(db, product, variant, half_len, pool_key):
+                            _restore_simple_stock(db, product, variant, 1)
+                        else:
+                            status = "scrap" if _is_scrap_1d(half_len, variant) else "available"
+                            _upsert_offcut(db, product, variant, half_len, pool_key=pool_key, status=status)
 
         elif "cut" in l_type:
             meta = line.get("meta", {})
@@ -793,12 +796,18 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
                     # Use the exact recorded sources — mirrors restore_specific_offcut_sources
                     restore_specific_offcut_sources(db, product, variant, sources, pool_key)
                 else:
-                    # No source record (legacy) — fall back to full-bar assumption
+                    # No source record (legacy) — fall back to full-bar assumption,
+                    # unless the remainder it would have produced is no longer
+                    # intact (already subdivided by a later cut), in which case
+                    # only this cut's own length is actually being freed.
+                    remainder = round(full_len - cut_len, 4)
                     for _ in range(qty):
-                        _restore_simple_stock(db, product, variant, 1)
-                        remainder = round(full_len - cut_len, 4)
-                        if remainder > 0.01:
-                            _remove_offcut(db, product, variant, remainder, pool_key)
+                        remainder_intact = remainder <= 0.01 or _remove_offcut(db, product, variant, remainder, pool_key)
+                        if remainder_intact:
+                            _restore_simple_stock(db, product, variant, 1)
+                        else:
+                            status = "scrap" if _is_scrap_1d(cut_len, variant) else "available"
+                            _upsert_offcut(db, product, variant, cut_len, pool_key=pool_key, status=status)
 
         elif l_type == "accessory-pcs":
             _restore_packaged_stock_pooled(db, product, variant, qty, line, pool_key)
@@ -814,8 +823,13 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
             _restore_simple_stock(db, product, variant, qty)
 
 
-def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] = None) -> None:
-    """Decrement (or delete) an offcut that was previously created as a remainder."""
+def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] = None) -> bool:
+    """Decrement (or delete) an offcut that was previously created as a remainder.
+    Returns whether a matching offcut was actually found — callers use this to
+    tell "the remainder is still intact, fully undone" apart from "someone else
+    already consumed/subdivided it, there's nothing here to remove" (see
+    restore_specific_offcut_sources, which falls back to a smaller, honest
+    restoration in the latter case rather than assuming it succeeded)."""
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
     stmt = select(Offcut).where(
@@ -826,12 +840,14 @@ def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] 
     ).with_for_update()
 
     existing = db.exec(stmt).first()
-    if existing:
-        if existing.quantity <= 1:
-            db.delete(existing)
-        else:
-            existing.quantity -= 1
-            db.add(existing)
+    if not existing:
+        return False
+    if existing.quantity <= 1:
+        db.delete(existing)
+    else:
+        existing.quantity -= 1
+        db.add(existing)
+    return True
 
 
 # ── Store-manager offcut reassignment helpers ─────────────────────────────────
@@ -860,9 +876,13 @@ def restore_specific_offcut_sources(
 
     for src in sources:
         remainder = float(src.get("remainder_created", 0))
+        length_used = float(src.get("length_used", 0))
+        source_kind = src.get("source")
 
-        if src.get("source") == "offcut":
-            # Restore the consumed offcut piece
+        if source_kind == "offcut":
+            # Restore the consumed offcut piece — this puts back exactly what
+            # this cut took, so it's correct regardless of what happened to
+            # the remainder it produced afterwards; no fallback needed here.
             oc_id = src.get("offcut_id")
             oc_len = float(src.get("offcut_length", 0))
             if oc_id:
@@ -879,13 +899,23 @@ def restore_specific_offcut_sources(
                         length=oc_len,
                         quantity=1,
                     ))
+            if remainder > 0.01:
+                _remove_offcut(db, product, variant, remainder, pool_key)
         else:
-            # Restore 1 whole bar to stock
-            _restore_simple_stock(db, product, variant, 1)
-
-        # Remove the remainder offcut that was created by this cut
-        if remainder > 0.01:
-            _remove_offcut(db, product, variant, remainder, pool_key)
+            # "full_bar": this cut consumed a whole fresh bar, producing this
+            # cut's piece plus `remainder`. Restoring it is only valid if
+            # that remainder is still fully intact — if it's already been
+            # subdivided by another (still-live) order, part of the original
+            # bar is legitimately committed elsewhere, and there is no whole
+            # bar to give back. In that case the only material actually being
+            # freed by this cancel/edit is the length THIS cut itself used —
+            # credit that back as a new offcut instead of a phantom whole bar.
+            remainder_intact = remainder <= 0.01 or _remove_offcut(db, product, variant, remainder, pool_key)
+            if remainder_intact:
+                _restore_simple_stock(db, product, variant, 1)
+            elif length_used > 0:
+                status = "scrap" if _is_scrap_1d(length_used, variant) else "available"
+                _upsert_offcut(db, product, variant, length_used, pool_key=pool_key, status=status)
 
 
 def _consume_offcut_sources(

@@ -737,7 +737,11 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
         return new_offcut.offcutId
 
 
-def _remove_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available", pool_key: Optional[str] = None) -> None:
+def _find_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available", pool_key: Optional[str] = None) -> Optional[Offcut]:
+    """Read side of _remove_glass_offcut, split out so a caller that needs to
+    check several remainders before deciding whether to touch ANY of them
+    (see _restore_one_source) can look them all up — locking each row against
+    concurrent use — without mutating until it knows the full picture."""
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
     stmt = select(Offcut).where(
@@ -747,13 +751,23 @@ def _remove_glass_offcut(db: Session, product: Product, variant: Optional[Varian
         Offcut.height >= height - OFFCUT_MATCH_TOLERANCE_MM, Offcut.height <= height + OFFCUT_MATCH_TOLERANCE_MM,
         Offcut.pool_key == pool_key,
     ).with_for_update()
-    existing = db.exec(stmt).first()
-    if existing:
-        if existing.quantity <= 1:
-            db.delete(existing)
-        else:
-            existing.quantity -= 1
-            db.add(existing)
+    return db.exec(stmt).first()
+
+
+def _remove_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float, status: str = "available", pool_key: Optional[str] = None) -> bool:
+    """Returns whether a matching remainder was actually found and removed —
+    see _restore_one_source, which uses this to tell a fully-intact remainder
+    (safe to restore the whole sheet it came from) apart from one a later cut
+    already subdivided (nothing here to remove; the whole sheet can't come back)."""
+    existing = _find_glass_offcut(db, product, variant, width, height, status, pool_key)
+    if not existing:
+        return False
+    if existing.quantity <= 1:
+        db.delete(existing)
+    else:
+        existing.quantity -= 1
+        db.add(existing)
+    return True
 
 
 def _layout_remainder_rects(src_w: float, src_h: float, grid_w: float, grid_h: float, split: str) -> tuple:
@@ -1190,6 +1204,9 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
         pool_key = compute_pool_key(db, variant)
 
     if src.get("source") == "offcut":
+        # Restore the consumed offcut piece — correct regardless of what
+        # happened to the remainder(s) it produced afterwards, same as the
+        # 1D case (see restore_specific_offcut_sources in inventoryService.py).
         oc_id = src.get("offcut_id")
         existing = db.get(Offcut, oc_id) if oc_id else None
         if existing:
@@ -1203,11 +1220,46 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
                 width=src.get("offcut_width"), height=src.get("offcut_height"),
                 length=0.0, quantity=1, status="available",
             ))
+        for r in src.get("remainders_created", []):
+            _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"), pool_key)
     else:
-        _restore_sheet_stock(db, product, variant, 1)
+        # "sheet": this line consumed a whole fresh sheet, producing its own
+        # cut piece(s) plus these remainders (up to 2, from the guillotine
+        # split). Restoring the whole sheet is only valid if EVERY remainder
+        # it produced is still fully intact — if a later (still-live) order
+        # has already cut into one, part of the sheet is legitimately
+        # committed elsewhere and there's no whole sheet left to give back.
+        # Look all of them up first (without mutating) so a miss on the
+        # second one can't leave the first already removed for a restore
+        # we then decide not to do.
+        remainders = src.get("remainders_created", [])
+        found_rows = []
+        all_intact = True
+        for r in remainders:
+            row = _find_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"), pool_key)
+            if row is None:
+                all_intact = False
+                break
+            found_rows.append(row)
 
-    for r in src.get("remainders_created", []):
-        _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"), pool_key)
+        if all_intact:
+            _restore_sheet_stock(db, product, variant, 1)
+            for row in found_rows:
+                if row.quantity <= 1:
+                    db.delete(row)
+                else:
+                    row.quantity -= 1
+                    db.add(row)
+        else:
+            # Leave whatever remainders are still there untouched (they're
+            # still legitimately available, independent of this cancel/edit)
+            # and give back only the piece(s) THIS line itself cut.
+            for piece in src.get("cuts", []):
+                w, h = piece.get("width"), piece.get("height")
+                if not w or not h:
+                    continue
+                status = "scrap" if _is_scrap((w, h), variant) else "available"
+                _upsert_glass_offcut(db, product, variant, w, h, status, pool_key=pool_key)
 
 
 def apply_manual_glass_selection(db: Session, product: Product, variant: Optional[Variant], cut_l: float, cut_w: float, unit: str, forced_offcut_id: Optional[int] = None) -> dict:
