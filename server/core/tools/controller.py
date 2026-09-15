@@ -30,7 +30,7 @@ async def create_tool(
     db: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):
-    require_role(["manager"], current_user)
+    require_role(["ceo"], current_user)
     result = service.create_tool(data, db)
     background_tasks.add_task(manager.broadcast, "tools_updated")
     return result
@@ -62,6 +62,17 @@ async def create_loan(
     return result
 
 
+@router.get("/issues", response_model=List[model.ToolIssueResponse])
+def list_tool_issues(
+    db: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """Item condition review: every reported defect and which worker had the
+    tool out when it came back damaged. CEO-only."""
+    require_role(["ceo"], current_user)
+    return service.get_tool_issues(db)
+
+
 @router.put("/loans/{loan_id}/return", response_model=model.ToolReturnResponse)
 async def return_loan_items(
     loan_id: int,
@@ -88,7 +99,7 @@ async def update_tool(
     db: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):
-    require_role(["manager"], current_user)
+    require_role(["ceo"], current_user)
     result = service.update_tool(tool_id, data, db)
     background_tasks.add_task(manager.broadcast, "tools_updated")
     return result

@@ -47,6 +47,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
     const [fullQty, setFullQty] = useState(initialDetails?.fullSheet || 0);
     const [halfQty, setHalfQty] = useState(initialDetails?.halfSheet || 0);
+    const [halfSide, setHalfSide] = useState(initialDetails?.halfSide || 'width');
     const [cutPieces, setCutPieces] = useState(initialDetails?.cutPieces || []);
     const [extraSelections, setExtraSelections] = useState(() => {
         if (initialDetails?.extras) return initialDetails.extras;
@@ -131,13 +132,25 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         };
     }, [product, extraSelections]);
 
+    // Splitting a sheet down the middle of one side always leaves a leftover
+    // identical to the piece sold — see server-side half_sheet_piece_dims_mm —
+    // so the same computed size doubles as both the "what you get" and "what's
+    // left" preview shown in the card below.
+    const halfPreview = useMemo(() => {
+        const { sheetLengthMm, sheetWidthMm } = pricing;
+        if (!(sheetLengthMm > 0 && sheetWidthMm > 0)) return null;
+        return halfSide === 'width'
+            ? { l: sheetLengthMm, w: sheetWidthMm / 2 }
+            : { l: sheetLengthMm / 2, w: sheetWidthMm };
+    }, [pricing, halfSide]);
+
     const lineItems = useMemo(() => {
         const items = [];
         if (fullQty > 0) items.push({ type: 'sheet-full', label: 'Full Sheet', qty: fullQty, rate: pricing.priceFull, total: fullQty * pricing.priceFull, meta: {} });
-        if (halfQty > 0) items.push({ type: 'sheet-half', label: 'Half Sheet', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: {} });
+        if (halfQty > 0) items.push({ type: 'sheet-half', label: 'Half Sheet', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { halfSide } });
         cutPieces.forEach(cut => items.push({ type: 'glass-cut', label: cut.label, qty: cut.q, rate: cut.area * pricing.priceSqFt, total: cut.area * cut.q * pricing.priceSqFt, meta: { l: cut.l, w: cut.w, u: cut.u, area: cut.area, rateSqFt: pricing.priceSqFt } }));
         return items;
-    }, [fullQty, halfQty, cutPieces, pricing]);
+    }, [fullQty, halfQty, halfSide, cutPieces, pricing]);
 
     useEffect(() => {
         let syncValid = true;
@@ -152,8 +165,8 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         const attributes = [];
         if (extraSelections['Thickness']) attributes.push({ label: 'Thickness', value: extraSelections['Thickness'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Thickness') attributes.push({ label: key, value: val }); });
-        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, checkingStock: feasibility.checking, stockError: feasibility.message });
-    }, [fullQty, halfQty, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility]);
+        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, checkingStock: feasibility.checking, stockError: feasibility.message });
+    }, [fullQty, halfQty, halfSide, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current sheet stock/offcuts? Reuses the exact real checkout deduction
@@ -293,7 +306,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} style={{ width: '32px', height: '32px', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.07)', color: '#94a3b8', fontSize: '1rem', flexShrink: 0 }}>-</button>
-                        <input type="number" value={fullQty} onChange={e => setFullQty(Math.max(0, parseInt(e.target.value) || 0))} style={{ ...inputStyle, textAlign: 'center', flex: 1 }} />
+                        <input type="number" value={fullQty === 0 ? '' : fullQty} onChange={e => setFullQty(e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value) || 0))} placeholder="0" style={{ ...inputStyle, textAlign: 'center', flex: 1 }} />
                         <button onClick={() => setFullQty(fullQty + 1)} style={{ width: '32px', height: '32px', borderRadius: '8px', border: 'none', cursor: 'pointer', background: 'rgba(6,182,212,0.15)', color: '#22d3ee', fontSize: '1rem', flexShrink: 0 }}>+</button>
                     </div>
                     {error && <p style={{ fontSize: '0.65rem', color: '#f87171', fontWeight: 700, marginTop: '4px', animation: 'pulse 1.5s ease-in-out infinite' }}>{error}</p>}
@@ -314,6 +327,22 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                             <span style={{ position: 'absolute', top: '3px', left: halfQty > 0 ? '22px' : '3px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block' }} />
                         </button>
                     </div>
+
+                    {halfQty > 0 && halfPreview && (
+                        <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                            <span style={labelStyle}>Split Along</span>
+                            <div style={{ display: 'flex', gap: '0.375rem', marginBottom: '0.5rem' }}>
+                                {[{ v: 'length', l: 'Length' }, { v: 'width', l: 'Width' }].map(opt => (
+                                    <button key={opt.v} onClick={() => setHalfSide(opt.v)} style={{ ...chipBtn(halfSide === opt.v, '#06b6d4'), flex: 1, textAlign: 'center' }}>
+                                        {opt.l}
+                                    </button>
+                                ))}
+                            </div>
+                            <p style={{ fontSize: '0.68rem', color: '#64748b', margin: 0, fontFamily: 'var(--font-mono)' }}>
+                                {halfPreview.l.toFixed(0)}×{halfPreview.w.toFixed(0)}mm each — matching offcut saved automatically
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -379,7 +408,10 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                         )}
                         {halfQty > 0 && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.625rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.78rem' }}>
-                                <span style={{ color: '#94a3b8' }}>Half Sheet ×{halfQty}</span>
+                                <div>
+                                    <span style={{ color: '#94a3b8' }}>Half Sheet ×{halfQty}</span>
+                                    <span style={{ color: '#475569', fontSize: '0.65rem', marginLeft: '0.5rem', fontFamily: 'var(--font-mono)' }}>split by {halfSide}</span>
+                                </div>
                                 <span style={{ color: '#22d3ee', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>KSH{(halfQty * pricing.priceHalf).toLocaleString()}</span>
                             </div>
                         )}

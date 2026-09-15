@@ -6,7 +6,7 @@ from entities.variants import Variant
 from entities.offcuts import Offcut
 from entities.orderItems import OrderItem
 from entities.orders import Order
-from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines
+from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines, half_sheet_piece_dims_mm
 from core.inventory.poolKey import load_attribute_types, pool_key_from_attributes, compute_pool_key, pool_sibling_variants
 from loggiing import logger
 
@@ -97,9 +97,29 @@ def _process_line_items(
     # 2D glass cuts are resolved as one batch across all glass-cut lines in this
     # item (see glassOffcutService.resolve_glass_cut_lines) rather than line-by-line,
     # so the largest cut doesn't get starved of the best offcut by smaller cuts.
+    # Half-sheet sales on a has_dimensions product are 2D pieces too (half of the
+    # sheet along whichever side the cashier chose to split — see
+    # GlassCalculator.jsx's "Split Along" picker) so they're folded into the same
+    # batch: this lets a half-sheet sale reuse a matching existing offcut instead
+    # of always opening a fresh sheet, and makes its own leftover half a real,
+    # width/height-populated offcut instead of the physically arbitrary "half of
+    # variant.length" 1D remainder the old generic "half" branch below produced
+    # (which was invisible to every 2D query and effectively dead stock).
     glass_cut_lines = [l for l in line_items if l.get("type", "") == "glass-cut" and int(l.get("qty", 0)) > 0]
-    if glass_cut_lines and track:
-        resolve_glass_cut_lines(db, product, variant, glass_cut_lines, item_id)
+    two_d_lines = list(glass_cut_lines)
+    if track and product.has_dimensions:
+        for l in line_items:
+            if l.get("type", "") != "sheet-half" or int(l.get("qty", 0)) <= 0:
+                continue
+            half_side = (l.get("meta") or {}).get("halfSide", "width")
+            piece_w, piece_h = half_sheet_piece_dims_mm(variant, half_side)
+            if piece_w <= 0 or piece_h <= 0:
+                continue  # no sheet size set on this variant -- falls back to a plain full-sheet deduction below
+            l["meta"] = {**(l.get("meta") or {}), "l": piece_w, "w": piece_h, "u": "mm"}
+            l["_resolved_as_2d"] = True
+            two_d_lines.append(l)
+    if two_d_lines and track:
+        resolve_glass_cut_lines(db, product, variant, two_d_lines, item_id)
         cuttable = True
 
     # Manually-selected profile cut lines must be consumed before any automatic
@@ -127,6 +147,18 @@ def _process_line_items(
             if not track:
                 _deduct_full_stock(db, product, variant, qty)
             # else: already resolved above via resolve_glass_cut_lines
+            continue
+
+        if l_type == "sheet-half" and product.has_dimensions:
+            if track and line.get("_resolved_as_2d"):
+                pass  # already resolved above via resolve_glass_cut_lines
+            else:
+                if track:
+                    logger.warning(
+                        f"Product {product.productId} has no sheet dimensions set; "
+                        "deducting 1 whole sheet per half sold."
+                    )
+                _deduct_full_stock(db, product, variant, qty)
             continue
 
         if "full" in l_type:
@@ -748,8 +780,19 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
     pool_key = compute_pool_key(db, variant)
 
     glass_cut_lines = [l for l in line_items if l.get("type", "") == "glass-cut" and int(l.get("qty", 0)) > 0]
-    if glass_cut_lines and track:
-        restore_glass_cut_lines(db, product, variant, glass_cut_lines)
+    two_d_lines = list(glass_cut_lines)
+    if track and product.has_dimensions:
+        # Only a line that actually went through the 2D engine at deduct time
+        # carries offcut_sources — a sheet-half line that fell back to a plain
+        # full-sheet deduction (no sheet size set on the variant) never got any,
+        # so restore_glass_cut_lines would silently no-op for it; that fallback
+        # case is instead restored as simple stock in the loop below.
+        two_d_lines += [
+            l for l in line_items
+            if l.get("type", "") == "sheet-half" and int(l.get("qty", 0)) > 0 and l.get("offcut_sources")
+        ]
+    if two_d_lines and track:
+        restore_glass_cut_lines(db, product, variant, two_d_lines)
 
     for line in line_items:
         l_type = line.get("type", "")
@@ -761,6 +804,13 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
             if not track:
                 _restore_simple_stock(db, product, variant, qty)
             # else: already restored above via restore_glass_cut_lines
+            continue
+
+        if l_type == "sheet-half" and product.has_dimensions:
+            if track and line.get("offcut_sources"):
+                pass  # already restored above via restore_glass_cut_lines
+            else:
+                _restore_simple_stock(db, product, variant, qty)
             continue
 
         if "full" in l_type:

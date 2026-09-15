@@ -6,7 +6,7 @@ import api from '../services/api';
 import AddStockModal from '../components/inventory/AddStockModal';
 import AddOffcutsModal from '../components/inventory/AddOffcutsModal';
 import StockSessionDetailModal from '../components/inventory/StockSessionDetailModal';
-import { getCategoryAccent, hexToRgba } from '../utils/colors';
+import { getCategoryAccent, hexToRgba, getProfileColorHex } from '../utils/colors';
 
 const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Brown', 'Grey', 'Matt Black'];
 const GLASS_THICKNESSES = ['4mm', '6mm', '8mm', '10mm', '12mm'];
@@ -403,21 +403,44 @@ export default function InventoryPage() {
                                         </div>
                                     </div>
                                     {showBreakdown && (
-                                        <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', paddingLeft: '0.125rem' }}>
-                                            {Object.entries(item.stockVariants).map(([variantLabel, qty]) => {
-                                                const isLow = !!item.stockVariantAlarms?.[variantLabel];
-                                                return (
-                                                    <span key={variantLabel} style={{
-                                                        fontSize: '0.68rem', fontWeight: 600, color: isLow ? '#f87171' : '#94a3b8',
-                                                        background: isLow ? 'rgba(239,68,68,0.1)' : 'rgba(255,255,255,0.04)',
-                                                        border: `1px solid ${isLow ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.08)'}`,
-                                                        borderRadius: '100px', padding: '2px 9px',
-                                                        animation: isLow ? 'pulse 1.5s ease-in-out infinite' : 'none',
-                                                    }}>
-                                                        {isLow && '⚠ '}{variantLabel}: <span style={{ color: isLow ? '#fca5a5' : '#e2e8f0', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>{qty}</span>
-                                                    </span>
-                                                );
-                                            })}
+                                        <div style={{ paddingLeft: '0.125rem' }}>
+                                            <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#334155', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
+                                                Stock by Variant
+                                            </div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))', gap: '0.4rem' }}>
+                                                {Object.entries(item.stockVariants).map(([variantLabel, qty]) => {
+                                                    const isLow = !!item.stockVariantAlarms?.[variantLabel];
+                                                    const isOut = qty <= 0;
+                                                    const swatchHex = getProfileColorHex(variantLabel.split(' - ')[0]?.trim());
+                                                    const status = isOut ? 'out' : isLow ? 'low' : 'ok';
+                                                    const statusColor = { out: '#f87171', low: '#fbbf24', ok: '#4ade80' }[status];
+                                                    const statusBg = { out: 'rgba(239,68,68,0.08)', low: 'rgba(251,191,36,0.06)', ok: 'rgba(255,255,255,0.03)' }[status];
+                                                    const statusBorder = { out: 'rgba(239,68,68,0.28)', low: 'rgba(251,191,36,0.28)', ok: 'rgba(255,255,255,0.08)' }[status];
+                                                    return (
+                                                        <div key={variantLabel} title={`${variantLabel}: ${qty}${isOut ? ' — out of stock' : isLow ? ' — low stock' : ''}`} style={{
+                                                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                                            padding: '0.4rem 0.6rem', borderRadius: '0.6rem',
+                                                            background: statusBg, border: `1px solid ${statusBorder}`,
+                                                            animation: isOut ? 'pulse 1.5s ease-in-out infinite' : 'none',
+                                                        }}>
+                                                            {swatchHex && (
+                                                                <span style={{
+                                                                    width: '10px', height: '10px', borderRadius: '50%', flexShrink: 0,
+                                                                    background: swatchHex,
+                                                                    boxShadow: swatchHex.toUpperCase() === '#FFFFFF' ? 'inset 0 0 0 1px rgba(0,0,0,0.2)' : '0 0 0 1px rgba(255,255,255,0.15)',
+                                                                }} />
+                                                            )}
+                                                            <span style={{
+                                                                fontSize: '0.7rem', fontWeight: 600, color: '#94a3b8', flex: 1, minWidth: 0,
+                                                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                                            }}>{variantLabel}</span>
+                                                            <span style={{ fontSize: '0.78rem', fontWeight: 800, fontFamily: 'var(--font-mono)', color: statusColor, flexShrink: 0 }}>
+                                                                {isOut && '● '}{qty}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
                                     )}
                                     </div>

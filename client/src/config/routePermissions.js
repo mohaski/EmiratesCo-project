@@ -18,8 +18,9 @@ export const ROUTE_ROLES = {
     '/inventory':           ['cashier', 'manager', 'ceo'],
     '/product-management':  ['admin', 'ceo'],
     // Manager gets everything (checkout, return, loans, catalog) as tabs on one page — see '/tools/manage'.
+    // CEO also gets this page, for the CEO-only "Item Conditions" tab (ManagerToolsPage gates it by role).
     '/tools':               ['cashier'],
-    '/tools/manage':        ['manager'],
+    '/tools/manage':        ['manager', 'ceo'],
     '/change-password':     ['admin', 'ceo', 'manager', 'cashier'],
     '/users':               ['ceo', 'admin'],
     '/activity':            ['ceo', 'admin'],

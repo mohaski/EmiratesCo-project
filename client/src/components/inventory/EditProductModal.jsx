@@ -1,23 +1,54 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useProducts } from '../../context/ProductContext';
+import { useAttributes } from '../../context/AttributeContext';
 
 export default function EditProductModal({ isOpen, onClose, product }) {
     const { updateProduct } = useProducts();
+    const { attributeClasses } = useAttributes();
     const [form, setForm] = useState({ name: '', trackOffcuts: false, unit: 'ft' });
+    // { [attributeKey]: boolean } — whether that attribute is ignored when pooling
+    // offcuts/stock across variants (see core/inventory/poolKey.py). Lets the CEO
+    // fix a pooling choice that was missed/wrong when the product or attribute was
+    // first created, without having to re-add the attribute via Manage Variants.
+    const [poolIgnored, setPoolIgnored] = useState({});
+
+    const attributeTypesMap = useMemo(() => {
+        const m = {};
+        attributeClasses.forEach(c => { m[c.name] = c.type; });
+        return m;
+    }, [attributeClasses]);
+
+    // Every attribute that actually participates in pooling for this product —
+    // its own applicable attributes, plus the built-in "Dimensions" (glass sheets).
+    const poolableKeys = useMemo(() => (
+        [...(product?.applicableAttributes || []), ...(product?.hasDimensions ? ['Dimensions'] : [])]
+    ), [product]);
 
     useEffect(() => {
-        if (product) setForm({
+        if (!product) return;
+        setForm({
             name: product.name || '',
             trackOffcuts: product.trackOffcuts || false,
             unit: product.unit || 'ft',
         });
-    }, [product]);
+        // Seed each toggle from the product's explicit pool_ignored_attributes if it
+        // has one, otherwise from the automatic rule (Dimensions + custom-typed
+        // attributes pool together by default) — mirrors core/inventory/poolKey.py.
+        const explicit = product.poolIgnoredAttributes;
+        const init = {};
+        poolableKeys.forEach(key => {
+            init[key] = explicit != null ? explicit.includes(key) : (key === 'Dimensions' || attributeTypesMap[key] === 'custom');
+        });
+        setPoolIgnored(init);
+    }, [product, poolableKeys, attributeTypesMap]);
 
     const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
+    const togglePoolIgnored = key => setPoolIgnored(p => ({ ...p, [key]: !p[key] }));
 
     const handleSave = () => {
         if (!product) return;
-        const payload = { ...product, name: form.name, trackOffcuts: form.trackOffcuts, unit: form.unit };
+        const poolIgnoredAttributes = poolableKeys.filter(k => poolIgnored[k]);
+        const payload = { ...product, name: form.name, trackOffcuts: form.trackOffcuts, unit: form.unit, poolIgnoredAttributes };
         updateProduct(payload);
         onClose();
     };
@@ -89,6 +120,31 @@ export default function EditProductModal({ isOpen, onClose, product }) {
                             <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Enable best-fit cut & offcut remainder logic</div>
                         </div>
                     </div>
+
+                    {poolableKeys.length > 0 && (
+                        <div>
+                            <label style={labelStyle}>Offcut/Stock Pooling</label>
+                            <p style={{ fontSize: '0.68rem', color: '#64748b', margin: '-0.25rem 0 0.625rem' }}>
+                                On = variants differing only by this attribute share one offcut/stock pool. Off = each value gets its own separate pool.
+                            </p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {poolableKeys.map(key => (
+                                    <div key={key} onClick={() => togglePoolIgnored(key)} style={{
+                                        display: 'flex', alignItems: 'center', gap: '0.625rem', padding: '0.625rem 0.75rem',
+                                        borderRadius: '0.625rem', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', cursor: 'pointer',
+                                    }}>
+                                        <div style={{
+                                            width: '30px', height: '17px', borderRadius: '100px', position: 'relative', flexShrink: 0,
+                                            background: poolIgnored[key] ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'rgba(255,255,255,0.1)', transition: 'background 0.2s',
+                                        }}>
+                                            <span style={{ position: 'absolute', top: '2px', left: poolIgnored[key] ? '15px' : '2px', width: '13px', height: '13px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block' }} />
+                                        </div>
+                                        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: poolIgnored[key] ? '#4ade80' : '#94a3b8' }}>{key}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
                 <div className="modal-footer-pad" style={{ padding: '0 1.5rem 1.5rem', display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                     <button onClick={onClose} style={{

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 import CuttingInstructions from '../components/orders/CuttingInstructions';
+import { printTapesViaQZ } from '../utils/qzPrint';
 
 // 80mm thermal POS roll — ~72mm printable width. Pure black-on-white, monospace,
 // single column: no side-by-side layout or colour tints survive a 1-bit thermal head.
@@ -121,7 +122,42 @@ export default function ReceiptPage() {
 
     const visibleBuckets = BUCKET_ORDER.filter(b => categories?.[b] && grouped[b].length > 0);
     const isLoading = Boolean(orderId) && !orderDetail && !loadError;
-    const handlePrint = () => window.print();
+
+    // Keyed by bucket name so we can hand the actual rendered tape nodes to QZ Tray
+    // in visibleBuckets order, one print job per department slip.
+    const tapeRefs = useRef(new Map());
+    const setTapeRef = useCallback((bucket) => (el) => {
+        if (el) tapeRefs.current.set(bucket, el);
+        else tapeRefs.current.delete(bucket);
+    }, []);
+
+    // QZ Tray (a local desktop agent — see utils/qzPrint.js) prints straight to the
+    // thermal printer with no dialog. Chrome's own --kiosk-printing flag is a known
+    // broken feature that still shows the dialog, so this is the only reliable silent
+    // route; if QZ Tray isn't installed/running on this till, fall back to the browser
+    // print dialog so printing still works, just not silently.
+    const handlePrint = useCallback(async () => {
+        const nodes = visibleBuckets.map(b => tapeRefs.current.get(b)).filter(Boolean);
+        if (nodes.length === 0) return;
+        try {
+            await printTapesViaQZ(nodes);
+        } catch (err) {
+            console.warn('QZ Tray print failed, falling back to browser print dialog', err);
+            window.print();
+        }
+    }, [visibleBuckets]);
+
+    // Auto-print the worksheet(s) the moment they're ready, so the seller doesn't have
+    // to click through — cutting/checking staff just tear off what the printer produces.
+    // Guarded with a ref (not just isLoading) so it fires exactly once per visit, not on
+    // every re-render once loading settles.
+    const hasAutoPrintedRef = useRef(false);
+    useEffect(() => {
+        if (!isLoading && !hasAutoPrintedRef.current && visibleBuckets.length > 0) {
+            hasAutoPrintedRef.current = true;
+            handlePrint();
+        }
+    }, [isLoading, visibleBuckets.length, handlePrint]);
 
     if (!orderId || !cartItems) {
         return (
@@ -186,6 +222,7 @@ export default function ReceiptPage() {
                     return (
                         <div key={bucket} className="receipt-section">
                             <div
+                                ref={setTapeRef(bucket)}
                                 className="receipt-tape print:shadow-none"
                                 style={{
                                     width: `min(${TAPE_WIDTH}, 100%)`, boxSizing: 'border-box', background: '#ffffff', color: '#000000',

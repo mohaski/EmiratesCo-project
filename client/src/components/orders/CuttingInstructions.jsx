@@ -15,10 +15,24 @@ import { RECEIPT_THEME, fmtLen, fmtMm, groupCuts, canonicalWH } from '../../util
 const PendingSourceNotice = ({ notice, theme }) => (
     <div style={{ fontSize: '9.5px', fontWeight: 700, color: theme.border, border: `1px solid ${theme.border}`, borderRadius: '3px', padding: '2px 5px', margin: '3px 0' }}>
         ⚠ Depends on an offcut from Order #{notice.order_id}
-        {notice.customer_name ? ` (${notice.customer_name})` : ''} — not yet confirmed cut.
-        Check with whoever's working that order, or if it was you, carry on.
+        {notice.customer_name ? ` (${notice.customer_name})` : ''}.
     </div>
 );
+
+// Small labeled tag used in front of every dimension so the cutter never has
+// to infer, from font weight alone, whether a number is what to CUT or what's
+// left over. All three are plain outlines (no fill — cheap printers smear
+// solid black boxes), differentiated by border weight/style and label text:
+// a bold outline is the piece to cut, a thin outline is a kept remainder
+// (stock), a dashed outline is scrap (waste).
+const CHIP_LABEL = { cut: 'CUT', stock: 'KEEP', waste: 'WASTE' };
+const chipStyle = (theme, variant) => {
+    const base = { display: 'inline-block', background: 'transparent', fontSize: '7.5px', fontWeight: 800, letterSpacing: '0.04em', padding: '1px 4px', borderRadius: '2px', flexShrink: 0, lineHeight: 1.5, whiteSpace: 'nowrap' };
+    if (variant === 'cut') return { ...base, color: theme.strong, border: `2px solid ${theme.strong}` };
+    if (variant === 'stock') return { ...base, color: theme.strong, border: `1px solid ${theme.strong}` };
+    return { ...base, color: theme.dim, border: `1px dashed ${theme.dim}` };
+};
+const CutChip = ({ variant, theme }) => <span style={chipStyle(theme, variant)}>{CHIP_LABEL[variant]}</span>;
 
 // One 1D (bar/profile) offcut_sources entry — {source, offcut_id, length_used, offcut_length, remainder_created, remainder_status}.
 // `superseded` marks an event a manager correction has fully reversed and
@@ -27,24 +41,28 @@ const PendingSourceNotice = ({ notice, theme }) => (
 const CuttingInstructionLine1D = ({ src, theme, renderActions }) => (
     <div style={{ fontSize: '10.5px', lineHeight: 1.4, opacity: src.superseded ? 0.5 : 1 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <div>
+            <div style={{ fontSize: '8px', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: theme.label }}>
                 {src.source === 'offcut'
-                    ? <span>Cut <strong>{fmtLen(src.length_used)}</strong> from <strong>Offcut #{src.offcut_id}</strong> ({fmtLen(src.offcut_length)} available)</span>
-                    : <span>Cut <strong>{fmtLen(src.length_used)}</strong> from a <strong>new bar</strong></span>
+                    ? <>Source: Offcut #{src.offcut_id}<span style={{ textTransform: 'none', fontWeight: theme.dimWeight, color: theme.dim }}> ({fmtLen(src.offcut_length)} available)</span></>
+                    : <>Source: New bar</>
                 }
-                {src.superseded && <span style={{ color: theme.dim, fontWeight: theme.dimWeight }}> — replaced</span>}
+                {src.superseded && <span style={{ textTransform: 'none', color: theme.dim, fontWeight: theme.dimWeight }}> — replaced</span>}
             </div>
             {renderActions && renderActions(src)}
         </div>
         {src.pending_source_notice && <PendingSourceNotice notice={src.pending_source_notice} theme={theme} />}
-        {src.remainder_created > 0 && (
-            <div style={{ fontSize: '9.5px', color: theme.dim, fontWeight: theme.dimWeight, marginTop: '2px' }}>
-                {src.remainder_status === 'scrap'
-                    ? <>&gt;&gt; {fmtLen(src.remainder_created)} waste</>
-                    : <>&gt;&gt; {fmtLen(src.remainder_created)} to stock</>
-                }
+        <div style={{ marginTop: '3px', paddingLeft: '6px', borderLeft: `2px solid ${theme.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <CutChip variant="cut" theme={theme} />
+                <strong style={{ color: theme.strong, fontSize: '11.5px' }}>{fmtLen(src.length_used)}</strong>
             </div>
-        )}
+            {src.remainder_created > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '2px' }}>
+                    <CutChip variant={src.remainder_status === 'scrap' ? 'waste' : 'stock'} theme={theme} />
+                    <span style={{ color: theme.dim, fontWeight: theme.dimWeight }}>{fmtLen(src.remainder_created)}</span>
+                </div>
+            )}
+        </div>
     </div>
 );
 
@@ -141,24 +159,31 @@ const CuttingInstructionLine2D = ({ src, theme, renderActions }) => {
             <CutSketch src={src} theme={theme} />
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-                    <strong>{fmtMm(wide)} x {fmtMm(narrow)}</strong>
+                    <div>
+                        <div style={{ fontSize: '8px', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: theme.label }}>
+                            {src.source === 'offcut' ? `Source: Offcut #${src.offcut_id}` : 'Source: New sheet'}
+                        </div>
+                        <strong style={{ color: theme.strong, fontSize: '11.5px' }}>{fmtMm(wide)} x {fmtMm(narrow)}</strong>
+                    </div>
                     {renderActions && renderActions(src)}
                 </div>
-                {groups.map((g, i) => (
-                    <div key={i}>
-                        Cut <strong>{g.count > 1 ? `${g.count} x ` : ''}{fmtMm(g.width)} x {fmtMm(g.height)}</strong>
-                        {g.rotated && <span style={{ color: theme.dim, fontWeight: theme.dimWeight }}> (rotated to fit)</span>}
-                    </div>
-                ))}
                 {src.pending_source_notice && <PendingSourceNotice notice={src.pending_source_notice} theme={theme} />}
-                {(src.remainders_created || []).map((r, i) => (
-                    <div key={i} style={{ fontSize: '9.5px', color: theme.dim, fontWeight: theme.dimWeight, marginTop: '2px' }}>
-                        {r.status === 'scrap'
-                            ? <>&gt;&gt; {fmtMm(r.width)} x {fmtMm(r.height)} waste</>
-                            : <>&gt;&gt; {fmtMm(r.width)} x {fmtMm(r.height)} to stock{r.is_popular ? ' ★ popular size' : ''}</>
-                        }
-                    </div>
-                ))}
+                <div style={{ marginTop: '3px', paddingLeft: '6px', borderLeft: `2px solid ${theme.border}` }}>
+                    {groups.map((g, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '1px' }}>
+                            <CutChip variant="cut" theme={theme} />
+                            <span style={{ color: theme.strong }}><strong>{fmtMm(g.width)} x {fmtMm(g.height)}</strong>{g.count > 1 ? ` - ${g.count}pcs` : ''}</span>
+                        </div>
+                    ))}
+                    {(src.remainders_created || []).map((r, i) => (
+                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '2px' }}>
+                            <CutChip variant={r.status === 'scrap' ? 'waste' : 'stock'} theme={theme} />
+                            <span style={{ color: theme.dim, fontWeight: theme.dimWeight }}>
+                                {fmtMm(r.width)} x {fmtMm(r.height)}
+                            </span>
+                        </div>
+                    ))}
+                </div>
             </div>
         </div>
     );
@@ -175,9 +200,11 @@ export default function CuttingInstructions({ sources, theme = RECEIPT_THEME, re
                 Cutting Instruction
             </div>
             {sources.map((src, idx) => (
-                'cuts' in src
-                    ? <CuttingInstructionLine2D key={idx} src={src} theme={theme} renderActions={renderActions} />
-                    : <CuttingInstructionLine1D key={idx} src={src} theme={theme} renderActions={renderActions} />
+                <div key={idx} style={idx > 0 ? { marginTop: '6px', paddingTop: '5px', borderTop: `1px dotted ${theme.border}` } : undefined}>
+                    {'cuts' in src
+                        ? <CuttingInstructionLine2D src={src} theme={theme} renderActions={renderActions} />
+                        : <CuttingInstructionLine1D src={src} theme={theme} renderActions={renderActions} />}
+                </div>
             ))}
         </div>
     );

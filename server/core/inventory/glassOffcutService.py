@@ -155,6 +155,28 @@ def _get_full_dims(variant: Optional[Variant]) -> tuple:
     return 0.0, 0.0
 
 
+def half_sheet_piece_dims_mm(variant: Optional[Variant], half_side: str) -> tuple:
+    """The physical size (in mm) of ONE half-sheet piece, splitting the sheet
+    down the middle of `half_side` ('length' or 'width' — which of the sheet's
+    own two dimensions gets halved; the other stays full). Feeding a piece of
+    exactly this size into the normal glass-cut pool (_fulfill_pool) is enough
+    to get correct behavior for free: cut from a fresh sheet, the guillotine
+    split leaves exactly one clean remainder of this same size (the unsold
+    other half) since one split rectangle is always zero-area; cut from an
+    existing offcut of this same size (e.g. the leftover half of an earlier
+    half-sheet sale), it's consumed with no remainder at all. This is what
+    turns "half sheet" into a real, poolable 2D offcut instead of the old
+    1D-shaped remainder that no 2D query could ever see again (see
+    inventoryService._process_line_items). Returns (0.0, 0.0) if the variant
+    has no usable sheet dimensions."""
+    full_w, full_h = _get_full_dims(variant)
+    if full_w <= 0 or full_h <= 0:
+        return 0.0, 0.0
+    if half_side == "width":
+        return full_w, full_h / 2.0
+    return full_w / 2.0, full_h
+
+
 # ── Packing strategies ───────────────────────────────────────────────────────
 # Multiple tie-break heuristics are tried per resolution (see resolve_glass_cut_lines)
 # and the best FULL result is kept — dedicated nesting tools get better results

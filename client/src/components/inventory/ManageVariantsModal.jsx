@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useProducts } from '../../context/ProductContext';
 import { useAttributes } from '../../context/AttributeContext';
 import { isProfileCategory } from '../../utils/colors';
@@ -9,7 +9,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const { attributeClasses, createAttributeClass, addAttributeValue } = useAttributes();
     const [confirmDelete, setConfirmDelete] = useState({ open: false, variant: null });
     const [editingVariantId, setEditingVariantId] = useState(null);
-    const [editForm, setEditForm] = useState({ price: '', priceHalf: '', priceUnit: '', stockChange: 0, lowStockThreshold: 0, minUsable: 150, allowRotation: true, popularSizeRanges: [] });
+    const [editForm, setEditForm] = useState({ price: '', priceHalf: '', priceUnit: '', stockChange: '', lowStockThreshold: '', minUsable: '', allowRotation: true, popularSizeRanges: [] });
     const [popularRangeDraft, setPopularRangeDraft] = useState({ min_w: '', max_w: '', min_h: '', max_h: '' });
     const [saving, setSaving] = useState(false);
     const [savingDefault, setSavingDefault] = useState(null); // attribute key currently being saved, or null
@@ -25,6 +25,18 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const [newValueDraft, setNewValueDraft] = useState('');
     const [variantAttrValues, setVariantAttrValues] = useState({}); // { [variantKey]: value }
     const [savingAttr, setSavingAttr] = useState(false);
+    // Whether this new attribute should pool offcuts/stock together across its
+    // values (see core/inventory/poolKey.py) — defaults to the automatic rule
+    // (custom-typed attributes pool together, list-typed ones don't), same as
+    // AddProductPage's poolTogetherMap, but the CEO can override it here since
+    // this attribute is being added to an existing product after the fact.
+    const [newAttrPoolTogether, setNewAttrPoolTogether] = useState(false);
+
+    const attributeTypesMap = useMemo(() => {
+        const m = {};
+        attributeClasses.forEach(c => { m[c.name] = c.type; });
+        return m;
+    }, [attributeClasses]);
 
     // Once a brand-new class is actually created (see handleCreateNewClass below), switch
     // attrClassChoice over to its real id as soon as it shows up in attributeClasses — this
@@ -38,6 +50,18 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
         const match = attributeClasses.find(c => c.name === trimmed);
         if (match) setAttrClassChoice(String(match.id));
     }, [attributeClasses, attrClassChoice, newClassName]);
+
+    // Reset the pooling toggle to the automatic default whenever the chosen
+    // attribute (or, for a new class, its type) changes — the CEO can still
+    // override it from there before saving. Computed inline (not from the
+    // effectiveClassType/selectedClass consts below) since those depend on
+    // `product`, which isn't available yet before the early-return guard.
+    useEffect(() => {
+        const type = attrClassChoice === '__new__'
+            ? newClassType
+            : attributeClasses.find(c => String(c.id) === String(attrClassChoice))?.type;
+        setNewAttrPoolTogether(type === 'custom');
+    }, [attributeClasses, attrClassChoice, newClassType]);
 
     if (!isOpen || !product) return null;
 
@@ -65,9 +89,9 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const handleEditClick = v => {
         setEditingVariantId(getVariantId(v));
         setEditForm({
-            price: v.price || v.priceFull || 0, priceHalf: v.priceHalf || 0, priceUnit: v.priceUnit || 0, stockChange: 0,
-            lowStockThreshold: v.lowStockThreshold || 0,
-            minUsable: v.minUsable ?? 150, allowRotation: v.allowRotation ?? true, popularSizeRanges: v.popularSizeRanges || [],
+            price: v.price || v.priceFull || '', priceHalf: v.priceHalf || '', priceUnit: v.priceUnit || '', stockChange: '',
+            lowStockThreshold: v.lowStockThreshold || '',
+            minUsable: v.minUsable ?? '', allowRotation: v.allowRotation ?? true, popularSizeRanges: v.popularSizeRanges || [],
         });
         setPopularRangeDraft({ min_w: '', max_w: '', min_h: '', max_h: '' });
     };
@@ -96,7 +120,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                 price_unit: parseFloat(editForm.priceUnit) || 0,
                 stock_change: (parseInt(editForm.stockChange) || 0) * packFactor(originalVariant),
                 low_stock_threshold: parseFloat(editForm.lowStockThreshold) || 0,
-                ...(product.trackOffcuts ? { min_usable: parseFloat(editForm.minUsable) || 0 } : {}),
+                ...(product.trackOffcuts ? { min_usable: parseFloat(editForm.minUsable) || (product.hasDimensions ? 150 : 2) } : {}),
                 ...(product.hasDimensions ? {
                     allow_rotation: editForm.allowRotation,
                     popular_size_ranges: editForm.popularSizeRanges,
@@ -146,6 +170,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
         setNewClassType('list');
         setNewValueDraft('');
         setVariantAttrValues({});
+        setNewAttrPoolTogether(false);
         setAttrPanelOpen(true);
     };
     const closeAttrPanel = () => setAttrPanelOpen(false);
@@ -188,8 +213,31 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
             if (isNewClass) {
                 await createAttributeClass(effectiveClassName, newClassType === 'custom' ? 'custom' : 'list');
             }
+            // Does the CEO's pooling choice for this attribute diverge from what the
+            // automatic rule (core/inventory/poolKey.py) would already do? If not,
+            // leave product.poolIgnoredAttributes untouched (stays on the automatic
+            // rule). If it does, the product must switch to an explicit list from
+            // here on — seeded with everything the automatic rule ignores TODAY for
+            // this product's existing attributes, so their pooling doesn't silently
+            // change underfoot the moment an explicit list takes over.
+            const automaticDefault = effectiveClassType === 'custom';
+            let nextPoolIgnored;
+            if (product.poolIgnoredAttributes != null) {
+                const explicit = new Set(product.poolIgnoredAttributes);
+                if (newAttrPoolTogether) explicit.add(effectiveClassName); else explicit.delete(effectiveClassName);
+                nextPoolIgnored = Array.from(explicit);
+            } else if (newAttrPoolTogether !== automaticDefault) {
+                const seed = new Set(applicableAttributes.filter(a => attributeTypesMap[a] === 'custom'));
+                if (product.hasDimensions) seed.add('Dimensions');
+                if (newAttrPoolTogether) seed.add(effectiveClassName);
+                nextPoolIgnored = Array.from(seed);
+            }
             // 1. Register the attribute on the product itself, so new variants offer it too.
-            await updateProduct({ ...product, applicableAttributes: [...applicableAttributes, effectiveClassName] });
+            await updateProduct({
+                ...product,
+                applicableAttributes: [...applicableAttributes, effectiveClassName],
+                ...(nextPoolIgnored !== undefined ? { poolIgnoredAttributes: nextPoolIgnored } : {}),
+            });
             // 2. Backfill each existing variant with its chosen value (blanks are left unset).
             for (const v of variants) {
                 const val = (variantAttrValues[getVariantId(v)] || '').trim();
@@ -324,6 +372,27 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                     )}
                                 </div>
                             </div>
+
+                            {effectiveClassName && (
+                                <div style={{ padding: '1rem 1.25rem', borderRadius: '1rem', background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.18)', marginBottom: '1.25rem' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }}>
+                                        <button type="button" onClick={() => setNewAttrPoolTogether(v => !v)} style={{
+                                            width: '30px', height: '17px', borderRadius: '100px', border: 'none', cursor: 'pointer', position: 'relative', flexShrink: 0,
+                                            background: newAttrPoolTogether ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'rgba(255,255,255,0.1)', transition: 'background 0.2s',
+                                        }}>
+                                            <span style={{ position: 'absolute', top: '2px', left: newAttrPoolTogether ? '15px' : '2px', width: '13px', height: '13px', borderRadius: '50%', background: '#fff', transition: 'left 0.2s', display: 'block' }} />
+                                        </button>
+                                        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: newAttrPoolTogether ? '#4ade80' : '#cbd5e1' }}>
+                                            Pool offcuts/stock together across "{effectiveClassName}" values
+                                        </span>
+                                    </label>
+                                    <p style={{ fontSize: '0.68rem', color: '#64748b', margin: '0.5rem 0 0' }}>
+                                        {newAttrPoolTogether
+                                            ? `Variants differing only by "${effectiveClassName}" will share one offcut/stock pool — turn this on when the values don't change the physical item (e.g. a bar length or a pack size).`
+                                            : `Each "${effectiveClassName}" value gets its own separate offcut/stock pool — this is what makes offcuts "disappear" for a variant if the attribute changes its pool key after offcuts already exist. Turn this on above if the values are really the same physical item.`}
+                                    </p>
+                                </div>
+                            )}
 
                             {effectiveClassName && !isNewClass && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
@@ -491,7 +560,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                             <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#60a5fa', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>{f.label}</div>
                                                             <div style={{ position: 'relative' }}>
                                                                 <span style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', fontSize: '0.68rem', color: '#475569', fontFamily: 'var(--font-mono)', pointerEvents: 'none' }}>KSH</span>
-                                                                <input type="number" style={{ ...inputStyle, paddingLeft: '34px' }} value={editForm[f.key]}
+                                                                <input type="number" placeholder="0" style={{ ...inputStyle, paddingLeft: '34px' }} value={editForm[f.key]}
                                                                     onChange={e => setEditForm(p => ({ ...p, [f.key]: e.target.value }))}
                                                                     onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.55)'; e.target.style.background = 'rgba(59,130,246,0.06)'; }}
                                                                     onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.background = 'rgba(255,255,255,0.05)'; }} />
@@ -505,7 +574,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                         <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#4ade80', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Adjust Stock</div>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
                                                             <button type="button" disabled={saving} onClick={() => setEditForm(p => ({ ...p, stockChange: (parseInt(p.stockChange) || 0) - 1 }))} style={{ width: '26px', height: '34px', borderRadius: '7px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: '#94a3b8', cursor: 'pointer', fontWeight: 700 }}>−</button>
-                                                            <input type="number" style={{ ...inputStyle, width: '76px', textAlign: 'center' }} value={editForm.stockChange}
+                                                            <input type="number" placeholder="0" style={{ ...inputStyle, width: '76px', textAlign: 'center' }} value={editForm.stockChange}
                                                                 onChange={e => setEditForm(p => ({ ...p, stockChange: e.target.value }))}
                                                                 onFocus={e => { e.target.style.borderColor = 'rgba(34,197,94,0.55)'; e.target.style.background = 'rgba(34,197,94,0.06)'; }}
                                                                 onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.background = 'rgba(255,255,255,0.05)'; }} />
@@ -518,7 +587,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
 
                                                     <div>
                                                         <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#f87171', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Low Stock Alert</div>
-                                                        <input type="number" min="0" style={{ ...inputStyle, width: '92px' }} value={editForm.lowStockThreshold}
+                                                        <input type="number" min="0" placeholder="0" style={{ ...inputStyle, width: '92px' }} value={editForm.lowStockThreshold}
                                                             onChange={e => setEditForm(p => ({ ...p, lowStockThreshold: e.target.value }))}
                                                             onFocus={e => { e.target.style.borderColor = 'rgba(239,68,68,0.55)'; e.target.style.background = 'rgba(239,68,68,0.06)'; }}
                                                             onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.background = 'rgba(255,255,255,0.05)'; }} />
@@ -532,7 +601,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                         <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.875rem', flexWrap: 'wrap' }}>
                                                             <div>
                                                                 <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#f87171', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Min Usable Size ({product.hasDimensions ? 'mm' : unit})</div>
-                                                                <input type="number" min="0" style={{ ...inputStyle, width: '92px' }} value={editForm.minUsable}
+                                                                <input type="number" min="0" placeholder={product.hasDimensions ? '150' : '2'} style={{ ...inputStyle, width: '92px' }} value={editForm.minUsable}
                                                                     onChange={e => setEditForm(p => ({ ...p, minUsable: e.target.value }))}
                                                                     onFocus={e => { e.target.style.borderColor = 'rgba(239,68,68,0.55)'; e.target.style.background = 'rgba(239,68,68,0.06)'; }}
                                                                     onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.12)'; e.target.style.background = 'rgba(255,255,255,0.05)'; }} />

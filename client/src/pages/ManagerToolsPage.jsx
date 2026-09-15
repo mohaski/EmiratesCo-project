@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ToolService } from '../services/api';
 import { useToast } from '../context/ToastContext';
+import { useAuth } from '../context/AuthContext';
 import { wsEvents } from '../utils/wsEvents';
 import { CheckoutTab, ReturnTab } from './ToolCheckoutPage';
 
@@ -292,11 +293,74 @@ function ToolCatalogTab() {
     );
 }
 
+// ── Item Conditions Tab (CEO only) ──────────────────────────────────────────
+
+function ItemConditionsTab() {
+    const [issues, setIssues] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    const fetchIssues = useCallback(async () => {
+        setLoading(true);
+        try {
+            const data = await ToolService.getIssues();
+            setIssues(data);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => { fetchIssues(); }, [fetchIssues]);
+    useEffect(() => wsEvents.on('tools_updated', fetchIssues), [fetchIssues]);
+
+    return (
+        <div style={{ padding: '1.75rem 2rem' }}>
+            <div style={{ ...cardStyle, overflow: 'hidden' }}>
+                <div className="table-scroll">
+                <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
+                    <thead>
+                        <tr>
+                            {['Tool', 'Issue', 'Caused By', 'Issued By', 'Returned By', 'Returned At', 'Current Status'].map(h => (
+                                <th key={h} style={{ fontSize: '0.65rem', fontWeight: 700, color: '#334155', letterSpacing: '0.1em', textTransform: 'uppercase', padding: '0.9rem 1rem', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                                    {h}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading ? (
+                            <tr><td colSpan={7} style={{ padding: '1.5rem', color: '#475569', fontSize: '0.82rem' }}>Loading…</td></tr>
+                        ) : issues.length === 0 ? (
+                            <tr><td colSpan={7} style={{ padding: '1.5rem', color: '#475569', fontSize: '0.82rem' }}>No reported tool issues.</td></tr>
+                        ) : issues.map(issue => (
+                            <tr key={issue.itemId}>
+                                <td style={{ padding: '0.9rem 1rem', fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0' }}>{issue.toolName}</td>
+                                <td style={{ padding: '0.9rem 1rem', fontSize: '0.8rem', color: '#f87171' }}>{issue.defectNote}</td>
+                                <td style={{ padding: '0.9rem 1rem', fontSize: '0.85rem', fontWeight: 700, color: '#fbbf24' }}>{issue.workerName}</td>
+                                <td style={{ padding: '0.9rem 1rem', fontSize: '0.78rem', color: '#64748b' }}>{issue.issuedBy || '—'}</td>
+                                <td style={{ padding: '0.9rem 1rem', fontSize: '0.78rem', color: '#64748b' }}>{issue.returnedBy || '—'}</td>
+                                <td style={{ padding: '0.9rem 1rem', fontSize: '0.78rem', color: '#64748b', fontFamily: 'var(--font-mono)' }}>
+                                    {issue.returnedAt ? new Date(issue.returnedAt).toLocaleString() : '—'}
+                                </td>
+                                <td style={{ padding: '0.9rem 1rem' }}><Badge status={issue.toolStatus} /></td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 const TABS = [
     ['loans', 'Worker Loans'],
     ['checkout', 'Check Out'],
     ['return', 'Return Tools'],
+];
+
+const CEO_TABS = [
     ['catalog', 'Tool Catalog'],
+    ['conditions', 'Item Conditions'],
 ];
 
 const TAB_CONTENT = {
@@ -304,12 +368,15 @@ const TAB_CONTENT = {
     checkout: CheckoutTab,
     return: ReturnTab,
     catalog: ToolCatalogTab,
+    conditions: ItemConditionsTab,
 };
 
 export default function ManagerToolsPage() {
     const [tab, setTab] = useState('loans');
     const navigate = useNavigate();
-    const ActiveTab = TAB_CONTENT[tab];
+    const { user } = useAuth();
+    const tabs = user?.role === 'ceo' ? [...TABS, ...CEO_TABS] : TABS;
+    const ActiveTab = TAB_CONTENT[tab] || WorkerLoansTab;
 
     return (
         <div style={{ minHeight: '100%', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
@@ -326,7 +393,7 @@ export default function ManagerToolsPage() {
                     🧰 Tool Tracking
                 </h1>
                 <div className="scrollbar-hide" style={{ display: 'flex', gap: '0.5rem', background: 'rgba(255,255,255,0.04)', borderRadius: '0.75rem', padding: '4px', width: 'fit-content', maxWidth: '100%', overflowX: 'auto' }}>
-                    {TABS.map(([key, label]) => (
+                    {tabs.map(([key, label]) => (
                         <button key={key} onClick={() => setTab(key)} style={{
                             padding: '0.5rem 1.25rem', borderRadius: '0.55rem', border: 'none', cursor: 'pointer',
                             fontSize: '0.8rem', fontWeight: 700, whiteSpace: 'nowrap', flexShrink: 0,

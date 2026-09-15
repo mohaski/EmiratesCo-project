@@ -243,6 +243,7 @@ export const ProductProvider = ({ children }) => {
             };
             if (updatedProduct.applicableAttributes) payload.applicable_attributes = updatedProduct.applicableAttributes;
             if (updatedProduct.defaultAttributes) payload.default_attributes = updatedProduct.defaultAttributes;
+            if (updatedProduct.poolIgnoredAttributes !== undefined) payload.pool_ignored_attributes = updatedProduct.poolIgnoredAttributes;
             await api.productService.update(updatedProduct.id, payload);
             await refreshProducts();
         } catch (err) {

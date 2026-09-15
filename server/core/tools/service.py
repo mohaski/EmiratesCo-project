@@ -178,6 +178,44 @@ def get_all_loans(
     return [_loan_to_response(loan, db) for loan in loans]
 
 
+def get_tool_issues(db: Session) -> List[model.ToolIssueResponse]:
+    """Every reported tool defect, with the worker who had the tool out when it
+    was returned damaged — for the CEO's item-condition review only."""
+    stmt = (
+        select(ToolLoanItem)
+        .where(ToolLoanItem.defect_note.is_not(None))
+        .order_by(ToolLoanItem.returned_at.desc())
+    )
+    items = db.exec(stmt).all()
+    if not items:
+        return []
+
+    tool_ids = {item.tool_id for item in items}
+    loan_ids = {item.loan_id for item in items}
+    tools_cache = {t.toolId: t for t in db.exec(select(Tool).where(Tool.toolId.in_(tool_ids))).all()}
+    loans_cache = {l.loanId: l for l in db.exec(select(ToolLoan).where(ToolLoan.loanId.in_(loan_ids))).all()}
+
+    results = []
+    for item in items:
+        tool = tools_cache.get(item.tool_id)
+        loan = loans_cache.get(item.loan_id)
+        if not tool or not loan:
+            continue
+        results.append(model.ToolIssueResponse(
+            itemId=item.itemId,
+            toolId=tool.toolId,
+            toolName=tool.name,
+            toolStatus=tool.status,
+            defectNote=item.defect_note,
+            workerName=loan.workerName,
+            loanId=loan.loanId,
+            issuedBy=_user_display_name(db, loan.issued_by),
+            returnedBy=_user_display_name(db, loan.returned_by),
+            returnedAt=item.returned_at.isoformat() if item.returned_at else None,
+        ))
+    return results
+
+
 def process_return(loan_id: int, data: model.ToolReturnRequest, db: Session, current_user) -> model.ToolReturnResponse:
     try:
         loan = db.get(ToolLoan, loan_id)

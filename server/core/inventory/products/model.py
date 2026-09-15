@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -143,6 +143,9 @@ class ProductUpdateRequest(BaseModel):
     has_dimensions: Optional[bool] = None
     # CEO-chosen default value per attribute class — see entities/products.py.
     default_attributes: Optional[Dict[str, str]] = None
+    # See core/inventory/poolKey.py — explicit override of which attributes to
+    # ignore when pooling offcuts/stock across variants.
+    pool_ignored_attributes: Optional[List[str]] = None
 
 class ProductUpdateResponse(BaseModel):
     message: str
@@ -167,6 +170,16 @@ class ProductResponse(BaseModel):
     has_dimensions: bool = False
     pool_ignored_attributes: Optional[List[str]] = None
     default_attributes: Optional[Dict[str, str]] = None
+
+    @field_validator("default_attributes", mode="before")
+    @classmethod
+    def _coerce_default_attributes(cls, v):
+        # A few legacy rows carry a JSON array (e.g. `[null]`) in this column
+        # instead of an object -- ORM loads don't validate on read, so that
+        # reaches here as-is. Treat anything that isn't a dict as "no defaults
+        # set" instead of failing response serialization for the WHOLE product
+        # list over a handful of malformed rows.
+        return v if isinstance(v, dict) else None
 
     # Computed or Relation
     variants: List[VariantResponse] = []

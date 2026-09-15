@@ -482,6 +482,11 @@ export const ToolService = {
         const response = await api.put(`/tools/loans/${loanId}/return`, data);
         return response.data;
     },
+    /** Item condition report — every reported defect + who had it out. CEO only. */
+    getIssues: async () => {
+        const response = await api.get('/tools/issues');
+        return response.data;
+    },
 };
 
 export const SettingsService = {

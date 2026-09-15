@@ -66,7 +66,7 @@ export function AddProductTab() {
     // handleNewCategoryChange/the hasDimensions toggle below): 150 (mm) for a
     // has_dimensions=True (2D/glass) product, 2 (ft) for a 1D (bar/profile) one.
     // allowRotation/popularSizeRanges stay 2D-only (glassOffcutService).
-    const [minUsable, setMinUsable] = useState('150');
+    const [minUsable, setMinUsable] = useState('');
     const [allowRotation, setAllowRotation] = useState(true);
     const [popularSizeRanges, setPopularSizeRanges] = useState([]); // [{ min_w, max_w, min_h, max_h }]
     const [popularRangeInput, setPopularRangeInput] = useState({ min_w: '', max_w: '', min_h: '', max_h: '' });

@@ -5,8 +5,11 @@
 // dim/dimWeight: thermal printers render gray, normal-weight text too faint to
 // read — the receipt theme uses solid black + bold so "dim" only means
 // "secondary", not "hard to print".
-export const RECEIPT_THEME = { border: '#000', dim: '#000', label: 'inherit', dimWeight: 700 };
-export const REVIEW_THEME = { border: 'rgba(255,255,255,0.12)', dim: '#94a3b8', label: '#64748b', dimWeight: 400 };
+// strong: primary dimension numbers (source size, cut size) — deliberately
+// distinct from `dim` (waste/stock annotations) so the two can't be confused
+// at a glance.
+export const RECEIPT_THEME = { border: '#000', dim: '#000', label: 'inherit', dimWeight: 700, strong: '#000' };
+export const REVIEW_THEME = { border: 'rgba(255,255,255,0.12)', dim: '#94a3b8', label: '#64748b', dimWeight: 400, strong: '#e2e8f0' };
 
 export const fmtLen = (n) => {
     const num = parseFloat(n);

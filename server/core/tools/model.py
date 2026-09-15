@@ -73,3 +73,18 @@ class ToolReturnRequest(BaseModel):
 class ToolReturnResponse(BaseModel):
     message: str
     loanStatus: str
+
+
+# ── Item Condition Report (CEO only) ────────────────────────────────────────
+
+class ToolIssueResponse(BaseModel):
+    itemId: int
+    toolId: int
+    toolName: str
+    toolStatus: str
+    defectNote: str
+    workerName: str
+    loanId: int
+    issuedBy: Optional[str] = None
+    returnedBy: Optional[str] = None
+    returnedAt: Optional[str] = None
