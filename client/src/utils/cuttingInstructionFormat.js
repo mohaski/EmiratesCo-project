@@ -47,3 +47,53 @@ export const groupCuts = (cuts) => {
     });
     return groups;
 };
+
+// Groups a single OrderItem's glass (2D) cut-lines' offcut_sources by the
+// physical sheet-opening event that produced them (server-side group_id —
+// see glassOffcutService._apply_candidate's owns_consumption/group_id docs),
+// so lines that were joint-packed onto ONE sheet render as ONE combined
+// cutting instruction — cuts and remainders pooled together — instead of
+// splitting back into per-line fragments where only the "owning" line ever
+// carries the real remainders. Mirrors what the pre-confirmation dry-run
+// preview already shows for an in-progress cart (server-side
+// _consolidate_preview_events), just applied to an already-placed order.
+//
+// Returns [{ ownerLineIdx, ownerEventIdx, mergedSrc, cutOrigins }, ...] — one
+// per distinct physical sheet actually touched. `mergedSrc` is ready to hand
+// straight to <CuttingInstructions sources={[mergedSrc]} />. `cutOrigins` is
+// parallel to `mergedSrc.cuts`: cutOrigins[i] = {lineIdx, cutIdx} says which
+// ORIGINAL cut-line piece `i` belongs to, and that piece's own index within
+// that line's un-merged event.cuts — enough for a correction UI to flag a
+// missed cut against the right line even when it isn't the line that owns
+// the recorded consumption. 1D (profile/bar) sources aren't part of this
+// joint-packing feature and are left out entirely — render those per-line,
+// as before.
+export const groupJointGlassSources = (lineItems) => {
+    const groups = new Map();
+    (lineItems || []).forEach((li, lineIdx) => {
+        (li.offcut_sources || []).forEach((ev, eventIdx) => {
+            if (!('cuts' in ev)) return;
+            const key = ev.group_id || `single-${lineIdx}-${eventIdx}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push({ lineIdx, eventIdx, ev });
+        });
+    });
+
+    return Array.from(groups.values()).map(members => {
+        const owner = members.find(m => m.ev.owns_consumption !== false) || members[0];
+        const cuts = [];
+        const cutOrigins = [];
+        members.forEach(({ lineIdx, ev }) => {
+            (ev.cuts || []).forEach((c, cutIdx) => {
+                cuts.push(c);
+                cutOrigins.push({ lineIdx, cutIdx });
+            });
+        });
+        return {
+            ownerLineIdx: owner.lineIdx,
+            ownerEventIdx: owner.eventIdx,
+            cutOrigins,
+            mergedSrc: { ...owner.ev, cuts, remainders_created: owner.ev.remainders_created || [] },
+        };
+    });
+};

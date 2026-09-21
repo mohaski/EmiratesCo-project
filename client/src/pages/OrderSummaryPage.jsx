@@ -9,7 +9,7 @@ import CancelOrderModal from '../components/orders/CancelOrderModal';
 import CorrectOffcutModal from '../components/orders/CorrectOffcutModal';
 import CorrectProfileOffcutModal from '../components/orders/CorrectProfileOffcutModal';
 import CuttingInstructions from '../components/orders/CuttingInstructions';
-import { REVIEW_THEME } from '../utils/cuttingInstructionFormat';
+import { REVIEW_THEME, groupJointGlassSources } from '../utils/cuttingInstructionFormat';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 import { getProfileColorHex, getContrastText, getCategoryAccent, tileGradient, hexToRgba } from '../utils/colors';
 
@@ -40,6 +40,17 @@ const Row = ({ label, value, strong }) => (
 
 const DetailBadge = ({ color, children }) => (
     <span style={{ fontSize: '0.62rem', fontWeight: 600, padding: '1px 6px', background: `${color}15`, border: `1px solid ${color}30`, borderRadius: '4px', color, textTransform: 'uppercase' }}>{children}</span>
+);
+
+const CorrectButton = ({ onClick }) => (
+    <button
+        onClick={onClick}
+        style={{
+            flexShrink: 0, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
+            color: '#fbbf24', fontSize: '0.68rem', fontWeight: 700, padding: '2px 9px',
+            borderRadius: '100px', cursor: 'pointer', whiteSpace: 'nowrap',
+        }}
+    >Correct</button>
 );
 
 // Same department-toggle pattern as CheckoutPage's CategoryToggle — a department
@@ -145,36 +156,52 @@ const ItemRow = ({ item, canCorrectOffcuts, canMarkCuttingDone, onCorrect, onMar
             </div>
         )}
 
+        {/* 1D (bar/profile) cutting instructions — rendered per line, unaffected
+            by joint-packing (that's a 2D/glass-only feature — see
+            groupJointGlassSources). */}
         {canCorrectOffcuts && lineItems.map((li, lineIdx) => {
-            const sources = li.offcut_sources;
-            if (!sources || sources.length === 0) return null;
+            const sources = (li.offcut_sources || []).filter(s => !('cuts' in s));
+            if (sources.length === 0) return null;
             return (
                 <div key={lineIdx} style={{ marginLeft: '56px', marginTop: '0.375rem' }}>
                     <CuttingInstructions
                         sources={sources}
                         theme={REVIEW_THEME}
                         renderActions={(src) => {
-                            const eventIdx = sources.indexOf(src);
-                            const is2D = 'cuts' in src;
-                            const correctable = is2D
-                                ? src.owns_consumption !== false && (src.remainders_created || []).length > 0
-                                : !src.superseded;
-                            if (!correctable) return null;
+                            const eventIdx = (li.offcut_sources || []).indexOf(src);
+                            if (src.superseded) return null;
                             return (
-                                <button
-                                    onClick={() => onCorrect({ kind: is2D ? 'glass' : 'profile', itemId: item.itemId, productId: item.productId, variantId: item.variantId, lineIdx, eventIdx, event: src })}
-                                    style={{
-                                        flexShrink: 0, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
-                                        color: '#fbbf24', fontSize: '0.68rem', fontWeight: 700, padding: '2px 9px',
-                                        borderRadius: '100px', cursor: 'pointer', whiteSpace: 'nowrap',
-                                    }}
-                                >Correct</button>
+                                <CorrectButton onClick={() => onCorrect({ kind: 'profile', itemId: item.itemId, productId: item.productId, variantId: item.variantId, lineIdx, eventIdx, event: src })} />
                             );
                         }}
                     />
                 </div>
             );
         })}
+
+        {/* 2D (glass) cutting instructions — merged per physical sheet, so a
+            sheet joint-packed across several cut-lines shows once, with every
+            cut and the real remainder(s) together (see groupJointGlassSources),
+            instead of splitting back into per-line fragments where only the
+            "owning" line ever carries a correctable remainder. */}
+        {canCorrectOffcuts && groupJointGlassSources(lineItems).map((group, gi) => (
+            <div key={`glass-${gi}`} style={{ marginLeft: '56px', marginTop: '0.375rem' }}>
+                <CuttingInstructions
+                    sources={[group.mergedSrc]}
+                    theme={REVIEW_THEME}
+                    renderActions={(src) => {
+                        const correctable = (src.remainders_created || []).length > 0;
+                        if (!correctable) return null;
+                        return (
+                            <CorrectButton onClick={() => onCorrect({
+                                kind: 'glass', itemId: item.itemId, productId: item.productId, variantId: item.variantId,
+                                lineIdx: group.ownerLineIdx, eventIdx: group.ownerEventIdx, cutOrigins: group.cutOrigins, event: src,
+                            })} />
+                        );
+                    }}
+                />
+            </div>
+        ))}
     </div>
     );
 };
@@ -209,9 +236,14 @@ export default function OrderSummaryPage() {
     };
 
     const handleOffcutCorrected = async (newRemainders, notes, failedCutIndices, forcedOffcutId) => {
+        // failedCutIndices are positions in the (possibly cross-line-merged)
+        // cuts array the modal was shown — map each back to which original
+        // cut-line it actually belongs to via correcting.cutOrigins (see
+        // groupJointGlassSources).
+        const failed_cuts = (failedCutIndices || []).map(i => correcting.cutOrigins[i]);
         await api.orderService.correctOffcutEvent(order.orderId, {
             item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
-            new_remainders: newRemainders, failed_cut_indices: failedCutIndices, forced_offcut_id: forcedOffcutId, notes,
+            new_remainders: newRemainders, failed_cuts, forced_offcut_id: forcedOffcutId, notes,
         });
         await refreshOrder();
         showToast('Offcut correction saved', 'success');

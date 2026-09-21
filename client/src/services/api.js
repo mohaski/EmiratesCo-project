@@ -104,9 +104,9 @@ export const OrderService = {
         });
         return response.data;
     },
-    correctOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainders, failed_cut_indices, forced_offcut_id, notes }) => {
+    correctOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainders, failed_cuts, forced_offcut_id, notes }) => {
         const response = await api.put(`/orders/${orderId}/correct-offcut`, {
-            item_id, line_idx, event_idx, new_remainders, failed_cut_indices, forced_offcut_id, notes,
+            item_id, line_idx, event_idx, new_remainders, failed_cuts, forced_offcut_id, notes,
         });
         return response.data;
     },

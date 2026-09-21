@@ -140,18 +140,30 @@ class OffcutRemainderInput(BaseModel):
     height: float
     status: Optional[str] = None
 
+class FailedCutRef(BaseModel):
+    """One missed cut, addressed by which cut-line it actually belongs to —
+    not necessarily the line whose event owns the recorded consumption (see
+    CorrectOffcutRequest.failed_cuts)."""
+    line_idx: int
+    cut_idx: int
+
 class CorrectOffcutRequest(BaseModel):
     """Payload for correcting a single owning offcut_sources event on an order
     line — replaces the remainders that cutting event recorded with what the
-    manager says actually came out of it. failed_cut_indices marks any of the
-    event's own delivered cuts (index into its `cuts` list) that never actually
-    came out of this source — those get pulled out and re-resolved against a
-    replacement offcut/sheet (forced_offcut_id overrides the auto-suggestion)."""
+    manager says actually came out of it. failed_cuts marks any delivered cuts
+    that never actually came out of this source — those get pulled out and
+    re-resolved against a replacement offcut/sheet (forced_offcut_id overrides
+    the auto-suggestion). A physical sheet joint-packed across several of this
+    OrderItem's cut-lines (see glassOffcutService._apply_candidate's
+    owns_consumption/group_id) splits into one owning event (line_idx/event_idx
+    below) plus a non-owning stub per sibling line — each failed_cuts entry's
+    own line_idx says which of those lines that particular missed piece came
+    from, so a sibling line's cut can be flagged too, not just the owner's."""
     item_id: int
     line_idx: int
     event_idx: int
     new_remainders: List[OffcutRemainderInput]
-    failed_cut_indices: List[int] = []
+    failed_cuts: List[FailedCutRef] = []
     forced_offcut_id: Optional[int] = None
     notes: Optional[str] = None
 

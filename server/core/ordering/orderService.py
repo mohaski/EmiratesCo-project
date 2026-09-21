@@ -868,7 +868,7 @@ def correct_offcut_for_order_item(
     line_idx: int,
     event_idx: int,
     new_remainders: list,
-    failed_cut_indices: list,
+    failed_cuts: list,
     forced_offcut_id: int | None,
     notes: str | None,
     db: Session,
@@ -877,12 +877,22 @@ def correct_offcut_for_order_item(
     """
     Manager correction for a single cutting event on a past order: real-world
     cutting sometimes produces a different remainder than what got recorded at
-    checkout, and/or one of the event's own delivered cuts never actually came
-    out of this source (the cutter missed). Reverses the remainder(s) that
-    event recorded and applies the manager-supplied replacement, and — for any
-    failed_cut_indices — pulls those cuts out and resolves a replacement source
-    for them (see glassOffcutService.correct_glass_offcut_event for the actual
+    checkout, and/or one of the delivered cuts never actually came out of its
+    source (the cutter missed). Reverses the remainder(s) the owning event
+    recorded and applies the manager-supplied replacement, and — for any
+    failed_cuts — pulls those cuts out and resolves a replacement source for
+    them (see glassOffcutService.correct_glass_offcut_event for the actual
     offcut inventory mutation), then writes an EditHistory row.
+
+    A sheet joint-packed across several of this OrderItem's cut-lines (see
+    glassOffcutService._apply_candidate's owns_consumption/group_id) splits
+    into one owning event (line_idx/event_idx here) plus a non-owning "stub"
+    per sibling line, each holding only that line's own cuts. Every sibling
+    sharing the owning event's group_id is looked up here and handed to
+    correct_glass_offcut_event as `sibling_events`, so each failed_cuts entry's
+    own line_idx can address any line in the group, not just the owner's —
+    and any resulting replacement event lands back on whichever line's missed
+    piece it actually replaces, not always the owner's.
     """
     from sqlalchemy.orm.attributes import flag_modified
     from core.inventory.glassOffcutService import correct_glass_offcut_event
@@ -913,18 +923,37 @@ def correct_offcut_for_order_item(
 
     event = offcut_sources[event_idx]
 
+    group_id = event.get("group_id")
+    sibling_events = {}
+    if group_id is not None:
+        for other_idx, other_line in enumerate(line_items):
+            if other_idx == line_idx:
+                continue
+            for other_event in other_line.get("offcut_sources") or []:
+                if other_event.get("group_id") == group_id:
+                    sibling_events[other_idx] = other_event
+                    break
+
     product = db.get(Product, item.product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     variant = db.get(Variant, item.variant_id) if item.variant_id else None
 
+    failed_cut_refs = [{"line_idx": fc.line_idx, "cut_idx": fc.cut_idx} for fc in failed_cuts]
+
     try:
         result = correct_glass_offcut_event(
             db, product, variant, event, [r.model_dump() for r in new_remainders],
-            failed_cut_indices, forced_offcut_id,
+            failed_cut_refs, forced_offcut_id,
+            sibling_events=sibling_events, owner_line_idx=line_idx,
         )
-        if result["replacement_events"]:
-            offcut_sources.extend(result["replacement_events"])
+        for origin_idx, rep_events in result["replacement_events_by_line"].items():
+            target_idx = origin_idx if isinstance(origin_idx, int) and 0 <= origin_idx < len(line_items) else line_idx
+            target_sources = line_items[target_idx].get("offcut_sources")
+            if target_sources is None:
+                target_sources = []
+                line_items[target_idx]["offcut_sources"] = target_sources
+            target_sources.extend(rep_events)
 
         item.details = {**details, "lineItems": line_items}
         flag_modified(item, "details")
@@ -938,7 +967,7 @@ def correct_offcut_for_order_item(
             before_snapshot={"item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "remainders": result["before"]},
             after_snapshot={
                 "item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "remainders": result["after"],
-                "replacement_events": result["replacement_events"],
+                "failed_cuts": failed_cut_refs, "replacement_events": result["replacement_events"],
             },
             notes=notes,
         )

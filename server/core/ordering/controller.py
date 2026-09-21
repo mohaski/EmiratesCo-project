@@ -163,7 +163,7 @@ async def correct_offcut(
     and/or replace any of its delivered cuts that never actually came out of it."""
     result = orderService.correct_offcut_for_order_item(
         order_id, body.item_id, body.line_idx, body.event_idx,
-        body.new_remainders, body.failed_cut_indices, body.forced_offcut_id, body.notes, db, current_user,
+        body.new_remainders, body.failed_cuts, body.forced_offcut_id, body.notes, db, current_user,
     )
     background_tasks.add_task(manager.broadcast, "products_updated")
     return model.CorrectOffcutResponse(

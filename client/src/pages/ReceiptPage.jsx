@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 import CuttingInstructions from '../components/orders/CuttingInstructions';
+import { groupJointGlassSources } from '../utils/cuttingInstructionFormat';
 import { printTapesViaQZ } from '../utils/qzPrint';
 
 // 80mm thermal POS roll — ~72mm printable width. Pure black-on-white, monospace,
@@ -32,11 +33,18 @@ const LeaderRow = ({ left, right }) => (
 const SIZE_ONLY_LABELS = new Set(['Dimensions', 'Length']);
 
 const ReceiptItemRow = ({ item, index }) => {
-    const hasPooledCut = (item.details?.lineItems || []).some(li => {
+    const lineItems = item.details?.lineItems || [];
+    const hasPooledCut = lineItems.some(li => {
         const t = li.type || '';
         return t === 'glass-cut' || t.includes('cut') || t.includes('half');
     });
     const visibleAttributes = (item.details?.attributes || []).filter(attr => !hasPooledCut || !SIZE_ONLY_LABELS.has(attr.label));
+    // A sheet joint-packed across several cut-lines (see
+    // glassOffcutService._apply_candidate's owns_consumption/group_id) needs
+    // to print ONCE, with every cut and the real leftover together — not
+    // split back into per-line fragments where only one line's box would
+    // show any remainder at all. See groupJointGlassSources.
+    const glassGroups = groupJointGlassSources(lineItems);
 
     return (
     <div>
@@ -55,14 +63,21 @@ const ReceiptItemRow = ({ item, index }) => {
             </div>
         )}
 
-        {(item.details?.lineItems || []).map((li, idx) => (
-            <div key={idx}>
-                <LeaderRow
-                    left={`${li.label}${li.meta?.l ? ` (${li.meta.l}x${li.meta.w}${li.meta.u || ''})` : ''}`}
-                    right={`qty ${li.qty}`}
-                />
-                <CuttingInstructions sources={li.offcut_sources} />
-            </div>
+        {lineItems.map((li, idx) => (
+            <LeaderRow
+                key={idx}
+                left={`${li.label}${li.meta?.l ? ` (${li.meta.l}x${li.meta.w}${li.meta.u || ''})` : ''}`}
+                right={`qty ${li.qty}`}
+            />
+        ))}
+
+        {lineItems.map((li, idx) => {
+            const is2D = (li.offcut_sources || []).some(s => 'cuts' in s);
+            if (is2D) return null; // printed once per physical sheet below instead
+            return <CuttingInstructions key={idx} sources={li.offcut_sources} />;
+        })}
+        {glassGroups.map((g, gi) => (
+            <CuttingInstructions key={`glass-${gi}`} sources={[g.mergedSrc]} />
         ))}
     </div>
     );

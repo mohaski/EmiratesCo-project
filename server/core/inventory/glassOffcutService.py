@@ -1382,6 +1382,7 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
 def correct_glass_offcut_event(
     db: Session, product: Product, variant: Optional[Variant], event: dict, new_remainders: list,
     failed_cut_indices: Optional[list] = None, forced_offcut_id: Optional[int] = None,
+    sibling_events: Optional[dict] = None, owner_line_idx: Optional[int] = None,
 ) -> dict:
     """
     Manager-facing correction for a single owning offcut_sources event: physical
@@ -1390,17 +1391,35 @@ def correct_glass_offcut_event(
     remainders this event recorded (same call _restore_one_source makes) and
     re-applying the manager-supplied replacement list.
 
-    Separately, one or more of this event's own delivered `cuts` may have been
-    missed entirely (the piece never actually came out of this source) — for
-    each index in failed_cut_indices, that cut is removed from `event["cuts"]`
-    and resolve_replacement_pieces finds (or is told, via forced_offcut_id) a
-    replacement source for it. The event's own `source`/`offcut_id` (what THIS
-    source actually consumed/left behind) is otherwise untouched.
+    Separately, one or more delivered cuts may have been missed entirely (the
+    piece never actually came out of its source) — normally that's one of
+    THIS event's own `cuts`, addressed by a plain int index into it (the
+    original, single-line shape). But when the physical sheet was joint-packed
+    across several of this OrderItem's cut-lines (see _apply_candidate's
+    owns_consumption/group_id), the other lines' pieces live in their own
+    non-owning "stub" events — invisible to this event's own `cuts` — so a
+    missed cut there can't be addressed that way. Pass `sibling_events`
+    ({line_idx: event}, one entry per OTHER line sharing this event's
+    group_id) and `owner_line_idx` (this event's own line) to make those
+    reachable too: a failed_cut_indices entry may then also be a
+    {"line_idx", "cut_idx"} dict addressing any line in the group (owner
+    included), not just a bare int against this event.
 
-    Returns {"before", "after", "replacement_events"} — before/after describe
-    the remainder correction (as before), replacement_events is the (possibly
-    empty) list of new offcut_sources-shaped entries the caller should append
-    to the same lineItem's offcut_sources.
+    For each flagged cut, it's removed from wherever it actually lives (this
+    event or a sibling's) and resolve_replacement_pieces finds (or is told,
+    via forced_offcut_id) a replacement source for it. This event's own
+    `source`/`offcut_id` (what THIS source actually consumed/left behind) is
+    otherwise untouched.
+
+    Returns {"before", "after", "replacement_events", "replacement_events_by_line"}
+    — before/after describe the remainder correction (as before),
+    replacement_events is the flat (possibly empty) list of new
+    offcut_sources-shaped entries a caller ignoring joint-packing can just
+    append to this event's own lineItem, and replacement_events_by_line groups
+    the same entries by which line's missed piece(s) they actually replace
+    (falling back to owner_line_idx, or the sentinel "__owner__" if that
+    wasn't given, when a replacement can't be traced to one specific line —
+    e.g. two different lines both flagged an identically-sized missed cut).
     """
     if "cuts" not in event or "remainders_created" not in event:
         raise ValueError("This cutting event isn't a correctable 2D glass-cut event")
@@ -1430,14 +1449,66 @@ def correct_glass_offcut_event(
     event["remainders_created"] = after
 
     replacement_events = []
+    replacement_events_by_line = {}
     if failed_cut_indices:
-        cuts = event.get("cuts", [])
-        bad = [i for i in failed_cut_indices if not (0 <= i < len(cuts))]
-        if bad:
-            raise ValueError(f"Invalid cut index/indices for this event: {bad}")
-        failed_set = set(failed_cut_indices)
-        failed_pieces = [(cuts[i]["width"], cuts[i]["height"]) for i in failed_cut_indices]
-        event["cuts"] = [c for i, c in enumerate(cuts) if i not in failed_set]
-        replacement_events = resolve_replacement_pieces(db, product, variant, failed_pieces, forced_offcut_id)
+        owner_key = owner_line_idx if owner_line_idx is not None else "__owner__"
+        events_by_line = dict(sibling_events or {})
+        events_by_line[owner_key] = event
 
-    return {"before": before, "after": after, "replacement_events": replacement_events}
+        # Normalize every entry to (line_key, cut_idx) — a bare int keeps its
+        # original meaning ("one of THIS event's own cuts"); a {line_idx,
+        # cut_idx} dict addresses a specific line's own participating event.
+        refs = []
+        for fc in failed_cut_indices:
+            if isinstance(fc, dict):
+                li = fc["line_idx"]
+                if li not in events_by_line:
+                    raise ValueError(f"Line {li} isn't part of this cutting event's group")
+                refs.append((li, fc["cut_idx"]))
+            else:
+                refs.append((owner_key, fc))
+
+        by_line_idxs: dict = {}
+        for li, ci in refs:
+            cuts = events_by_line[li].get("cuts", [])
+            if not (0 <= ci < len(cuts)):
+                raise ValueError(f"Invalid cut index/indices for this event: {ci}")
+            by_line_idxs.setdefault(li, set()).add(ci)
+
+        failed_pieces = []
+        origin_by_dims_queue: dict = {}
+        for li, idxs in by_line_idxs.items():
+            cuts = events_by_line[li]["cuts"]
+            for ci in sorted(idxs):
+                w, h = cuts[ci]["width"], cuts[ci]["height"]
+                failed_pieces.append((w, h))
+                # Sorted (not raw w/h) — a replacement source may place the
+                # same physical piece in the OTHER orientation than it was
+                # originally cut in (see _pack_rect_multi's own orientation
+                # choice), which would otherwise silently break this lookup.
+                key = tuple(sorted((round(float(w), 3), round(float(h), 3))))
+                origin_by_dims_queue.setdefault(key, []).append(li)
+            events_by_line[li]["cuts"] = [c for i, c in enumerate(cuts) if i not in idxs]
+
+        replacement_events = resolve_replacement_pieces(db, product, variant, failed_pieces, forced_offcut_id)
+        for rep_event in replacement_events:
+            rep_cuts = rep_event.get("cuts") or []
+            if not rep_cuts:
+                continue
+            # Every cut within one replacement event shares one dims key (see
+            # resolve_replacement_pieces) — attribute the whole event to
+            # whichever origin line queued the FIRST of those pieces, and
+            # consume that many entries off the queue so a later event of the
+            # same dims (e.g. a second replacement source opened for
+            # overflow) doesn't get attributed to the same origin again.
+            key = tuple(sorted((round(float(rep_cuts[0]["width"]), 3), round(float(rep_cuts[0]["height"]), 3))))
+            queue = origin_by_dims_queue.get(key, [])
+            origin_line = queue[0] if queue else owner_key
+            del queue[:len(rep_cuts)]
+            replacement_events_by_line.setdefault(origin_line, []).append(rep_event)
+
+    return {
+        "before": before, "after": after,
+        "replacement_events": replacement_events,
+        "replacement_events_by_line": replacement_events_by_line,
+    }

@@ -84,9 +84,9 @@ $outFile = Join-Path $BackupDir "$DbName`_$timestamp.dump"
 try {
     $env:PGPASSWORD = $DbPassword
     try {
-        & $PgDumpExe -h $DbHost -p $DbPort -U $DbUser -F c -f $outFile $DbName
+        $pgOutput = & $PgDumpExe -h $DbHost -p $DbPort -U $DbUser -F c -f $outFile $DbName 2>&1 | Out-String
         if ($LASTEXITCODE -ne 0) {
-            throw "pg_dump exited with code $LASTEXITCODE"
+            throw "pg_dump exited with code $LASTEXITCODE`: $pgOutput"
         }
     } finally {
         Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
@@ -100,9 +100,9 @@ try {
 
 try {
     $s3Key = "backups/$(Split-Path -Leaf $outFile)"
-    & $AwsExe s3 cp $outFile "s3://$S3Bucket/$s3Key" --profile $AwsProfile
+    $awsOutput = & $AwsExe s3 cp $outFile "s3://$S3Bucket/$s3Key" --profile $AwsProfile 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
-        throw "aws s3 cp exited with code $LASTEXITCODE"
+        throw "aws s3 cp exited with code $LASTEXITCODE`: $awsOutput"
     }
     Write-Log "[OK] Uploaded to s3://$S3Bucket/$s3Key"
 } catch {

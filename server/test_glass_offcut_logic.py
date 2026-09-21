@@ -1269,6 +1269,71 @@ def test_32_snubs_big_waste_even_when_consolidating_makes_less_total_scrap(db, p
     print("PASS")
 
 
+def test_33_correct_offcut_flags_missed_cut_on_joint_sibling_line(db, p, v):
+    print("\n--- Test 33: Correction can flag a missed cut on a joint-packed SIBLING line, not just the owner ---")
+    _clear_offcuts(db, p)
+    v.length = 2140.0
+    v.width = 1650.0
+    v.stock_quantity = 10
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+
+    # Same joint-packing setup as test 12: line 1 (741x1345) and line 2
+    # (905x650) share one sheet. Here we correct a MISSED cut on line 2's
+    # side of that shared sheet via the owning (line 1) event's correction
+    # call — proving sibling_events/owner_line_idx let a manager flag a cut
+    # that lives in a non-owning "stub" event, not just the owner's own cuts.
+    line1 = _mk_line(741, 1345, qty=2)
+    line2 = _mk_line(905, 650, qty=2)
+    lines = [line1, line2]
+    gos.resolve_glass_cut_lines(db, p, v, lines)
+    db.commit()
+
+    line1_group_ids = {e["group_id"] for e in line1["offcut_sources"]}
+    line2_group_ids = {e["group_id"] for e in line2["offcut_sources"]}
+    shared_group_ids = line1_group_ids & line2_group_ids
+    assert shared_group_ids, "Expected a shared sheet between line 1 and line 2 (setup mirrors test 12)"
+    shared_gid = next(iter(shared_group_ids))
+
+    owner_event = next(e for e in line1["offcut_sources"] if e["group_id"] == shared_gid and e.get("owns_consumption", True))
+    sibling_event = next(e for e in line2["offcut_sources"] if e["group_id"] == shared_gid and not e.get("owns_consumption", True))
+    assert sibling_event["cuts"], "Expected the shared line-2 event to carry at least one cut"
+
+    owner_cuts_before = len(owner_event["cuts"])
+    sibling_cuts_before = len(sibling_event["cuts"])
+
+    result = gos.correct_glass_offcut_event(
+        db, p, v, owner_event, owner_event["remainders_created"],
+        failed_cut_indices=[{"line_idx": 1, "cut_idx": 0}],
+        sibling_events={1: sibling_event}, owner_line_idx=0,
+    )
+    db.commit()
+
+    assert len(owner_event["cuts"]) == owner_cuts_before, "Owner event's own cuts shouldn't be touched by a sibling's missed cut"
+    assert len(sibling_event["cuts"]) == sibling_cuts_before - 1, "The missed cut should have been removed from the SIBLING (line 2) event, not the owner"
+
+    assert result["replacement_events"], "Expected a replacement source for the missed piece"
+    assert 1 in result["replacement_events_by_line"], f"Expected the replacement to be attributed to line 2, got {result['replacement_events_by_line'].keys()}"
+    assert 0 not in result["replacement_events_by_line"], "Replacement for line 2's missed cut shouldn't be attributed to line 1 (the owner)"
+
+    replacement_cuts = [c for e in result["replacement_events_by_line"][1] for c in e["cuts"]]
+    assert len(replacement_cuts) == 1, f"Expected exactly 1 replacement cut, got {len(replacement_cuts)}"
+    c = replacement_cuts[0]
+    matches_missed_dims = (
+        (abs(c["width"] - 905.0) < 1.0 and abs(c["height"] - 650.0) < 1.0)
+        or (abs(c["width"] - 650.0) < 1.0 and abs(c["height"] - 905.0) < 1.0)
+    )
+    assert matches_missed_dims, f"Replacement cut should match line 2's missed piece dims, got {c}"
+
+    v.length = 2440.0
+    v.width = 1830.0
+    db.add(v)
+    db.commit()
+    _clear_offcuts(db, p)
+    print("PASS")
+
+
 def run():
     engine = create_engine(DATABASE_URL)
     with Session(engine) as db:
@@ -1314,6 +1379,7 @@ def run():
             ("test_30_ceo_popular_range_drives_tiering_without_sales_history", lambda: test_30_ceo_popular_range_drives_tiering_without_sales_history(db, p, v)),
             ("test_31_small_tier_consolidates_before_splitting", lambda: test_31_small_tier_consolidates_before_splitting(db, p, v)),
             ("test_32_snubs_big_waste_even_when_consolidating_makes_less_total_scrap", lambda: test_32_snubs_big_waste_even_when_consolidating_makes_less_total_scrap(db, p, v)),
+            ("test_33_correct_offcut_flags_missed_cut_on_joint_sibling_line", lambda: test_33_correct_offcut_flags_missed_cut_on_joint_sibling_line(db, p, v)),
         ]:
             try:
                 fn()
