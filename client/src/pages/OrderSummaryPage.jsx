@@ -240,7 +240,10 @@ export default function OrderSummaryPage() {
         // cuts array the modal was shown — map each back to which original
         // cut-line it actually belongs to via correcting.cutOrigins (see
         // groupJointGlassSources).
-        const failed_cuts = (failedCutIndices || []).map(i => correcting.cutOrigins[i]);
+        const failed_cuts = (failedCutIndices || []).map(i => {
+            const origin = correcting.cutOrigins[i];
+            return { line_idx: origin.lineIdx, cut_idx: origin.cutIdx };
+        });
         await api.orderService.correctOffcutEvent(order.orderId, {
             item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
             new_remainders: newRemainders, failed_cuts, forced_offcut_id: forcedOffcutId, notes,
