@@ -77,5 +77,12 @@ class StockInputSessionResponse(BaseModel):
 
 
 class StockInputItemCorrection(BaseModel):
-    entered_quantity: float
+    """entered_quantity corrects a restock line; length/width/height/quantity
+    correct an offcut line (only the ones relevant to that product's shape
+    need to be sent)."""
+    entered_quantity: Optional[float] = None
+    length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    quantity: Optional[int] = None
     notes: Optional[str] = None

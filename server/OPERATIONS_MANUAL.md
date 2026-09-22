@@ -19,7 +19,7 @@ That's it — the backend is already running in the background at all times; not
 
 | Component | What it is | Status check |
 |---|---|---|
-| **EmiratesCoAPI** | The FastAPI backend, installed as a Windows service via NSSM. Auto-starts on boot, auto-restarts if it crashes (`AppExit=Restart`). Bound to `127.0.0.1:8000` only (not reachable from the network). | `Get-Service EmiratesCoAPI` |
+| **EmiratesCoAPI** | The FastAPI backend, installed as a Windows service via NSSM. Auto-starts on boot, auto-restarts if it crashes (`AppExit=Restart`). Bound to `0.0.0.0:8000`, reachable over Tailscale only — Windows Firewall rule `EmiratesCo API - Tailscale` restricts inbound port 8000 to the `100.64.0.0/10` tailnet range, so it is not exposed to the open LAN or internet. | `Get-Service EmiratesCoAPI` |
 | **postgresql-x64-17** | The Postgres database — all orders, products, users, payments live here. | `Get-Service postgresql-x64-17` |
 | **EmiratesCo DB Backup** | Scheduled Task, runs `server\backup_db.ps1` nightly at 23:30. Writes a `pg_dump` to `server\backups\`, keeps 14 days, prunes older ones automatically. | `Get-ScheduledTask "EmiratesCo DB Backup"` |
 
@@ -113,3 +113,41 @@ and set up the nightly backup task (command printed at the end of the script, or
 | App unreachable after laptop reboot | Service not set to auto-start, or a manual dev server is squatting on port 8000 | `Get-Service EmiratesCoAPI` should show `Running`; never run `uvicorn` manually on port 8000 |
 | `dev.bat` fails with "... was unexpected at this time." | A cmd.exe parenthesis-parsing bug (fixed 2026-08-04) | Should not recur — if it does, check for literal `(` `)` characters inside `echo` lines within an `if (...)` block |
 | Windows asks `emirates` for a password unexpectedly | Either auto-login isn't configured yet (§6), or the machine woke from sleep/lock (password-on-wake is disabled machine-wide, so this shouldn't happen anymore) | See §6 to finish the auto-login setup |
+| Emergency Failover "push" fails immediately | Peer unreachable, or `FAILOVER_SHARED_SECRET` doesn't match on both machines | Check `FAILOVER_PEER_URL`/`FAILOVER_SHARED_SECRET` in both `.env` files, and confirm Tailscale is up (`tailscale status`) on both machines |
+| Emergency Failover "receive" succeeded but the app looks wrong afterward | The restore replaced the DB as designed — check whether the source machine actually had the data you expected | Check `server\failover_state.json` for the event log, and `server\backups\pre-failover-safety_*.dump` for the pre-restore snapshot of what was there before (can be restored back manually with `pg_restore` if the push was a mistake) |
+
+---
+
+## 8. Emergency Failover (power-outage continuity)
+
+Two machines — the main shop device (behind a UPS with limited runtime) and a battery-powered
+standby laptop — each run their own full copy of this app and are joined on the same Tailscale
+tailnet. A manager can push a live copy of one machine's database to the other and have it
+restore there, so the business can keep running on whichever machine currently has power. The
+same feature runs both directions: the manager clicks "Fail over to peer" on whichever machine
+currently has the newer data, and operations move to the other one.
+
+**How it works**: `POST /failover/push` on the source machine runs `pg_dump` locally and uploads
+it to the peer's `POST /failover/receive-backup`, which validates the file, takes its own
+safety backup first (`server\backups\pre-failover-safety_*.dump`), then runs `pg_restore
+--clean --if-exists` to overwrite its database. This is destructive to the peer's current data
+by design — only use it when certain the initiating machine has the data that should win.
+
+**One-time setup on each machine** (`server\.env`, add if missing):
+```
+FAILOVER_PEER_URL=http://<peer-tailscale-ip-or-hostname>:8000
+FAILOVER_SHARED_SECRET=<same long random string on BOTH machines>
+MACHINE_NAME=<a human label, e.g. "Main Device" or "Laptop (Standby)">
+PG_BIN_DIR=C:\Program Files\PostgreSQL\17\bin
+```
+Generate the shared secret once (`python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+and copy it by hand into both `.env` files — it is never committed to git.
+
+**Deploying this feature to a machine that doesn't have it yet:**
+```powershell
+git pull
+cd client && npm run build
+nssm restart EmiratesCoAPI      # as Administrator
+```
+Both machines need this. The manager-only page lives at `/failover` in the app (nav: "Emergency
+Failover", manager/CEO roles only).

@@ -50,7 +50,13 @@ class Settings:
     
     # Redis Settings
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    
+
+    # Emergency Failover Settings — see server/OPERATIONS_MANUAL.md
+    FAILOVER_PEER_URL: str = os.getenv("FAILOVER_PEER_URL", "")
+    FAILOVER_SHARED_SECRET: str = os.getenv("FAILOVER_SHARED_SECRET", "")
+    MACHINE_NAME: str = os.getenv("MACHINE_NAME", "")
+    PG_BIN_DIR: str = os.getenv("PG_BIN_DIR", r"C:\Program Files\PostgreSQL\17\bin")
+
     @classmethod
     def get_database_url(cls) -> str:
         """Get database URL, either from DATABASE_URL or constructed from individual components"""

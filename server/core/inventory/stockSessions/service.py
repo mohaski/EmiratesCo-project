@@ -287,22 +287,23 @@ def correct_stock_input_session_item(
     db: Session,
     current_user,
 ) -> model.StockInputSessionItemResponse:
-    """CEO-only correction of a finalized session line — reverses the item's
-    previously-applied delta from live stock and re-applies a new one computed
-    from the same conversion_factor captured at entry time. Restock lines only —
-    an offcut line's dimensions/quantity aren't a single scalar to "correct" the
-    same way; adjusting an already-created offcut goes through the existing
-    offcut-correction flows on the order that consumes it."""
+    """CEO-only correction of a finalized session line — restock lines reverse
+    the item's previously-applied delta from live stock and re-apply a new one
+    computed from the same conversion_factor captured at entry time; offcut
+    lines edit the pool row's dimensions/quantity directly (see
+    _correct_offcut_line). Stock Sessions are CEO-only end to end, so this
+    stays CEO-only regardless of line type."""
     require_role(["ceo"], current_user)
-
-    if payload.entered_quantity < 0:
-        raise HTTPException(status_code=400, detail="entered_quantity cannot be negative")
 
     item = db.get(StockInputSessionItem, item_id)
     if not item or item.session_id != session_id:
         raise HTTPException(status_code=404, detail="Stock input session item not found")
-    if item.line_type != "restock":
-        raise HTTPException(status_code=400, detail="Only restock lines can be corrected here")
+
+    if item.line_type == "offcut":
+        return _correct_offcut_line(db, item, payload, current_user)
+
+    if payload.entered_quantity is None or payload.entered_quantity < 0:
+        raise HTTPException(status_code=400, detail="entered_quantity is required and cannot be negative")
 
     try:
         old_delta = item.quantity_change
@@ -372,4 +373,166 @@ def correct_stock_input_session_item(
     except Exception as e:
         db.rollback()
         logger.error(f"Correct Stock Input Session Item Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _correct_offcut_line(
+    db: Session,
+    item: StockInputSessionItem,
+    payload: model.StockInputItemCorrection,
+    current_user,
+) -> model.StockInputSessionItemResponse:
+    """Fixes a data-entry mistake on an offcut line right after finalizing —
+    edits the pool row in place. Only safe while the offcut is untouched:
+    once any piece of it has been consumed (quantity has moved off what was
+    originally recorded, or the row is gone entirely), its dimensions/quantity
+    are no longer a simple scalar to correct — that goes through the existing
+    offcut-correction flows on the order that consumed it. Caller already
+    enforces CEO-only via correct_stock_input_session_item."""
+    offcut = db.get(Offcut, item.created_offcut_id) if item.created_offcut_id else None
+    if not offcut or offcut.quantity != item.offcut_quantity:
+        raise HTTPException(status_code=400, detail="This offcut has already been used and can no longer be corrected here")
+
+    product = db.get(Product, item.product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product no longer exists")
+
+    new_quantity = payload.quantity if payload.quantity is not None else item.offcut_quantity
+    if new_quantity < 1:
+        raise HTTPException(status_code=400, detail="quantity must be at least 1")
+
+    try:
+        before_snapshot = {
+            "item_id": item.id,
+            "offcut_length": item.offcut_length,
+            "offcut_width": item.offcut_width,
+            "offcut_height": item.offcut_height,
+            "offcut_quantity": item.offcut_quantity,
+        }
+
+        if product.has_dimensions:
+            new_width = payload.width if payload.width is not None else item.offcut_width
+            new_height = payload.height if payload.height is not None else item.offcut_height
+            if new_width is None or new_height is None or new_width <= 0 or new_height <= 0:
+                raise HTTPException(status_code=400, detail="width and height are required")
+            offcut.width = new_width
+            offcut.height = new_height
+            item.offcut_width = new_width
+            item.offcut_height = new_height
+        else:
+            new_length = payload.length if payload.length is not None else item.offcut_length
+            if new_length is None or new_length <= 0:
+                raise HTTPException(status_code=400, detail="length is required")
+            offcut.length = new_length
+            item.offcut_length = new_length
+
+        offcut.quantity = new_quantity
+        item.offcut_quantity = new_quantity
+        db.add(offcut)
+
+        item.edited_by = UUID(current_user.userId)
+        item.edited_at = datetime.now(timezone.utc)
+        db.add(item)
+
+        db.add(EditHistory(
+            entity_type="stock_batch_correction",
+            entity_id=item.session_id,
+            edited_by=UUID(current_user.userId),
+            action="correct",
+            before_snapshot=before_snapshot,
+            after_snapshot={
+                "item_id": item.id,
+                "offcut_length": item.offcut_length,
+                "offcut_width": item.offcut_width,
+                "offcut_height": item.offcut_height,
+                "offcut_quantity": item.offcut_quantity,
+            },
+            notes=payload.notes or current_user.username,
+        ))
+
+        db.commit()
+        db.refresh(item)
+
+        logger.info(f"Stock input session offcut item {item.id} corrected by {current_user.userId}")
+        return _item_response(db, item)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Correct Stock Input Session Offcut Item Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def delete_stock_input_session_offcut(
+    session_id: int,
+    item_id: int,
+    db: Session,
+    current_user,
+) -> model.StockInputSessionItemResponse:
+    """CEO-only: permanently removes the Offcut pool row a finalized session
+    line created — for undoing a line that should never have been added, not
+    for adjusting one (see _correct_offcut_line for that). Deletes by this
+    line's own created_offcut_id, a 1:1 link to the exact row it created at
+    finalize time (_apply_offcut_line always inserts a fresh Offcut row rather
+    than merging into a matching one) — so a second, pre-existing offcut of
+    the same product/variant/dimensions (e.g. another 8ft length already in
+    the pool) is a separate row and is never touched by this. Only safe while
+    the offcut is untouched since finalizing, same guard as correction."""
+    require_role(["ceo"], current_user)
+
+    item = db.get(StockInputSessionItem, item_id)
+    if not item or item.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Stock input session item not found")
+    if item.line_type != "offcut":
+        raise HTTPException(status_code=400, detail="Only offcut lines can be deleted here")
+
+    offcut = db.get(Offcut, item.created_offcut_id) if item.created_offcut_id else None
+    if not offcut:
+        raise HTTPException(status_code=400, detail="This offcut has already been removed")
+    if offcut.quantity != item.offcut_quantity:
+        raise HTTPException(status_code=400, detail="This offcut has already been used and can no longer be deleted")
+
+    try:
+        before_snapshot = {
+            "item_id": item.id,
+            "offcut_id": offcut.offcutId,
+            "offcut_length": item.offcut_length,
+            "offcut_width": item.offcut_width,
+            "offcut_height": item.offcut_height,
+            "offcut_quantity": item.offcut_quantity,
+        }
+
+        # Null the FK before deleting the row it points to, so the delete
+        # doesn't violate created_offcut_id's foreign key constraint.
+        item.created_offcut_id = None
+        item.offcut_quantity = 0
+        item.edited_by = UUID(current_user.userId)
+        item.edited_at = datetime.now(timezone.utc)
+        db.add(item)
+        db.flush()
+
+        db.delete(offcut)
+
+        db.add(EditHistory(
+            entity_type="stock_batch_correction",
+            entity_id=item.session_id,
+            edited_by=UUID(current_user.userId),
+            action="delete",
+            before_snapshot=before_snapshot,
+            after_snapshot={"item_id": item.id, "deleted": True},
+            notes=current_user.username,
+        ))
+
+        db.commit()
+        db.refresh(item)
+
+        logger.info(f"Stock input session offcut item {item.id} (offcut {before_snapshot['offcut_id']}) deleted by {current_user.userId}")
+        return _item_response(db, item)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Delete Stock Input Session Offcut Item Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

@@ -509,7 +509,7 @@ export const StockSessionService = {
         const response = await api.post('/stock-sessions/', payload);
         return response.data;
     },
-    /** Session list — ceo/manager only. */
+    /** Session list — ceo-only. */
     list: async (skip = 0, limit = 100) => {
         const response = await api.get(`/stock-sessions/?skip=${skip}&limit=${limit}`);
         return response.data;
@@ -521,6 +521,26 @@ export const StockSessionService = {
     /** CEO-only correction of a single finalized line's quantity. */
     correctItem: async (sessionId, itemId, payload) => {
         const response = await api.patch(`/stock-sessions/${sessionId}/items/${itemId}`, payload);
+        return response.data;
+    },
+    /** CEO-only: permanently deletes an offcut line's pool row (only while untouched since finalizing). */
+    deleteOffcutItem: async (sessionId, itemId) => {
+        const response = await api.delete(`/stock-sessions/${sessionId}/items/${itemId}`);
+        return response.data;
+    },
+};
+
+export const FailoverService = {
+    /** This machine's identity, peer reachability, last sync timestamps, and history. */
+    getStatus: async () => {
+        const response = await api.get('/failover/status');
+        return response.data;
+    },
+    /** Dumps this machine's DB, pushes it to the configured peer, and has the
+     * peer restore it — the peer's current data is overwritten. No body: the
+     * peer URL/secret are server-side config only. */
+    pushToPeer: async () => {
+        const response = await api.post('/failover/push');
         return response.data;
     },
 };
@@ -536,5 +556,6 @@ api.messagingService = MessagingService;
 api.settingsService = SettingsService;
 api.toolService = ToolService;
 api.stockSessionService = StockSessionService;
+api.failoverService = FailoverService;
 
 export default api;

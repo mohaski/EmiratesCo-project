@@ -56,3 +56,16 @@ async def correct_stock_input_session_item(
     result = service.correct_stock_input_session_item(session_id, item_id, payload, db, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result
+
+
+@router.delete("/{session_id}/items/{item_id}", response_model=model.StockInputSessionItemResponse)
+async def delete_stock_input_session_offcut(
+    session_id: int,
+    item_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    result = service.delete_stock_input_session_offcut(session_id, item_id, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result

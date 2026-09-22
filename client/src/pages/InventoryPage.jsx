@@ -51,7 +51,7 @@ export default function InventoryPage() {
     const canAddOffcuts = user?.role === 'manager';
     // CEO oversight: show every product's per-variant stock, not just the aggregate total.
     const canViewVariantBreakdown = user?.role === 'ceo';
-    const canViewSessions = user?.role === 'ceo' || user?.role === 'manager';
+    const canViewSessions = user?.role === 'ceo';
     const [sidebarTab, setSidebarTab] = useState(canSubmitStock ? 'recent' : 'sessions');
     const [restockHistory, setRestockHistory] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);

@@ -45,6 +45,11 @@ const NAV_ICONS = {
       <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
     </svg>
   ),
+  failover: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" />
+    </svg>
+  ),
   collectPayments: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" />
@@ -157,6 +162,7 @@ export default function Layout() {
     { path: '/product-management', label: 'Product Management', iconKey: 'manageProducts' },
     { path: '/tools', label: 'Tool Checkout', iconKey: 'tools' },
     { path: '/tools/manage', label: 'Tool Tracking', iconKey: 'tools' },
+    { path: '/failover', label: 'Emergency Failover', iconKey: 'failover' },
     { path: '/users', label: 'User Management', iconKey: 'users' },
     { path: '/activity', label: 'Activity Log', iconKey: 'activity' },
   ];

@@ -34,6 +34,7 @@ const DebtManagementPage  = lazy(() => import('./pages/DebtManagementPage'));
 const DebtOrderDetailPage = lazy(() => import('./pages/DebtOrderDetailPage'));
 const ToolCheckoutPage    = lazy(() => import('./pages/ToolCheckoutPage'));
 const ManagerToolsPage    = lazy(() => import('./pages/ManagerToolsPage'));
+const FailoverPage        = lazy(() => import('./pages/FailoverPage'));
 const UserManagementPage  = lazy(() => import('./pages/UserManagementPage'));
 const ActivityLogPage     = lazy(() => import('./pages/ActivityLogPage'));
 
@@ -111,6 +112,7 @@ function App() {
                     <Route path="/invoice/review"      element={<InvoiceReviewPage />} />
                     <Route path="/tools"               element={<ToolCheckoutPage />} />
                     <Route path="/tools/manage"        element={<ManagerToolsPage />} />
+                    <Route path="/failover"            element={<FailoverPage />} />
                     <Route path="/users"               element={<UserManagementPage />} />
                     <Route path="/activity"             element={<ActivityLogPage />} />
                   </Route>
