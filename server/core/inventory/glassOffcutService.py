@@ -51,7 +51,7 @@ All glass-cut lines belonging to one OrderItem are packed jointly, not one line 
 time (see resolve_glass_cut_lines/_pack_rect_multi): when a source gets opened, every
 other line's still-unmet pieces are also considered for its leftover space, so two
 different cut sizes can end up sharing one sheet if they happen to nest together — not
-just multiple identical copies of the same size (_grid_arrangement). A candidate's
+just multiple identical copies of the same size (_grid_arrangements). A candidate's
 score always maximizes total pieces placed per source first, since splitting pieces
 off one at a time (or opening a needless second sheet when the first still has usable
 room) fragments material into more, smaller, worse-shaped remainders than packing them
@@ -103,38 +103,70 @@ def _cut_dims_to_mm(l: float, w: float, unit: str) -> tuple:
 
 # ── Geometry ───────────────────────────────────────────────────────────────────
 
-def _grid_arrangement(src_w: float, src_h: float, piece_w: float, piece_h: float, needed: int) -> Optional[dict]:
+def _grid_arrangements(src_w: float, src_h: float, piece_w: float, piece_h: float, needed: int, max_shapes: int = 4) -> list:
     """
-    How many copies of (piece_w x piece_h) fit in (src_w x src_h) as one axis-aligned
-    grid sharing a single guillotine split, up to `needed`. Shelf-packs left-to-right,
-    then top-to-bottom, using as many pieces as fit per row before starting a new row.
-    Always maximizes pieces-per-source (up to `needed`) rather than exploring smaller
-    grids — packing more identical pieces into one source in one operation directly
-    produces fewer, larger remainders than resolving them one at a time would.
-    Returns None if not even one piece fits.
+    Every worthwhile way to lay out k copies of (piece_w x piece_h) inside
+    (src_w x src_h) as ONE axis-aligned grid sharing a single guillotine split,
+    where k = as many as fit, up to `needed`. Returns a list of arrangements
+    (possibly empty if not even one piece fits), each
+    {"k", "cols", "rows", "grid_w", "grid_h", "positions"}.
+
+    k is always maximized — packing more identical pieces into one source in one
+    operation directly produces fewer, larger remainders than resolving them one
+    at a time would — but the SHAPE of that block is not. The same k pieces can
+    be arranged as a wide row, a tall column, or anything between (k=2 -> 2x1 or
+    1x2; k=4 -> 4x1, 2x2, 1x4), and those footprints leave completely different
+    leftovers: a 2x1 row of 678x1070 panes on a 1650x2140 sheet occupies
+    1356x1070 and strands two awkward offcuts, while the 1x2 column occupies
+    678x2140 — using the sheet's full height exactly — and leaves ONE clean
+    972x2140 strip that another order line's panes still fit in. This used to
+    emit only the widest arrangement (shelf-pack left-to-right, fill each row
+    before starting a new one), so that column layout was never even offered as
+    a candidate and joint packing lost sheets it didn't need to. Choosing
+    between the shapes is _pack_rect_multi's job, which evaluates what each one
+    actually leads to rather than guessing locally.
+
+    Capped at `max_shapes` (evenly sampled across the wide -> tall ordering, so
+    the extremes are always kept) to bound the search's branching factor.
     """
     if piece_w <= 1e-6 or piece_h <= 1e-6:
-        return None
+        return []
     tol = 1e-6  # absorbs unit-conversion float noise (e.g. 3ft -> 914.39997075mm)
     max_cols = int((src_w + tol) // piece_w)
     max_rows = int((src_h + tol) // piece_h)
     capacity = max_cols * max_rows
     if capacity < 1:
-        return None
+        return []
 
     k = min(capacity, needed)
-    cols = min(k, max_cols)
-    rows = -(-k // cols)  # ceil division, guaranteed <= max_rows since k <= capacity
+    shapes, seen = [], set()
+    for rows in range(1, min(max_rows, k) + 1):
+        cols = -(-k // rows)  # narrowest grid that still holds k in `rows` rows
+        if cols > max_cols:
+            continue
+        rows_eff = -(-k // cols)  # ...and drop any trailing row that ends up empty
+        if (cols, rows_eff) in seen:
+            continue
+        seen.add((cols, rows_eff))
+        shapes.append((cols, rows_eff))
 
-    positions = []
-    remaining = k
-    for r in range(rows):
-        row_count = min(cols, remaining)
-        for c in range(row_count):
-            positions.append((c * piece_w, r * piece_h))
-        remaining -= row_count
+    if len(shapes) > max_shapes >= 2:
+        step = (len(shapes) - 1) / (max_shapes - 1)
+        shapes = [shapes[round(i * step)] for i in range(max_shapes)]
 
-    return {"k": k, "grid_w": cols * piece_w, "grid_h": rows * piece_h, "positions": positions}
+    arrangements = []
+    for cols, rows in shapes:
+        positions, remaining = [], k
+        for r in range(rows):
+            row_count = min(cols, remaining)
+            for c in range(row_count):
+                positions.append((c * piece_w, r * piece_h))
+            remaining -= row_count
+        arrangements.append({
+            "k": k, "cols": cols, "rows": rows,
+            "grid_w": cols * piece_w, "grid_h": rows * piece_h, "positions": positions,
+        })
+    return arrangements
 
 
 def _orientations(w: float, h: float, allow_rotation: bool):
@@ -181,22 +213,19 @@ def half_sheet_piece_dims_mm(variant: Optional[Variant], half_side: str) -> tupl
 # Multiple tie-break heuristics are tried per resolution (see resolve_glass_cut_lines)
 # and the best FULL result is kept — dedicated nesting tools get better results
 # mainly through this kind of breadth-of-search (many strategies, keep the best),
-# not one fundamentally cleverer algorithm. Each strategy only varies two decision
+# not one fundamentally cleverer algorithm. Each strategy biases two decision
 # points inside _pack_rect_multi: which pending need to try first at a level, and
 # which guillotine split direction to take.
 #
-# Known gap, tried and reverted (see git history / conversation record): a
-# "grab one unit at a time, re-evaluate the whole pool between placements"
-# variant was tried to let two copies of the same shape land in different
-# orientations (needed for layouts where e.g. one pane lies flat and its twin
-# stands rotated in a column to free space for a different line). It didn't
-# find that layout even with the tie-break flipped both ways, because the
-# choice is fundamentally a lookahead problem — a locally-greedy rule, however
-# it's tie-broken, can't see that the SECOND placement should differ from the
-# first. Real fix would need bounded backtracking/branching search, which is a
-# materially different (and costlier) approach than this portfolio-of-greedy-
-# heuristics one; not implemented since the two attempted variants added ~35%
-# latency for zero measured benefit.
+# These are now only the ORDER in which candidate layouts get explored, not the
+# decision itself: _pack_rect_multi searches the top few and keeps whichever one
+# is best once its whole subtree is packed. That was the missing half — the
+# earlier purely-greedy version couldn't see layouts where the first line's panes
+# have to be stacked in a tall column (rather than the locally-obvious wide row)
+# so a DIFFERENT line's panes still fit beside them, because "does the rest of
+# the pool still fit afterwards?" is information that only exists one level
+# deeper. Two greedy variants were tried against that case and both lost a sheet
+# on it before the search was added; see _pack_rect_multi/_grid_arrangements.
 
 def _need_key_area(need: dict) -> tuple:
     w, h = need["piece_w"], need["piece_h"]
@@ -260,110 +289,176 @@ STRATEGIES = [
 
 # ── Recursive packing ────────────────────────────────────────────────────────
 
-def _remainder_fragment_count(src_w: float, src_h: float, grid_w: float, grid_h: float, strategy: dict) -> int:
-    """How many non-degenerate remainder rectangles (0, 1, or 2) result from
-    placing a grid_w x grid_h occupied block in a src_w x src_h source, using
-    the strategy's preferred split direction — e.g. when one of the piece's
-    own sides matches the source's exactly, one split rect is zero-area and
-    only ONE real remainder is left, vs. two real remainders when neither
-    side matches. Used to prefer whichever orientation of a piece leaves the
-    source less fragmented, not just whichever happens to have a larger
-    placed-width value (see _pack_rect_multi)."""
-    eps = 1e-6
-    rect_a_h, rect_b_h = _layout_remainder_rects(src_w, src_h, grid_w, grid_h, "horizontal")
-    rect_a_v, rect_b_v = _layout_remainder_rects(src_w, src_h, grid_w, grid_h, "vertical")
-    rect_a, rect_b = (rect_a_h, rect_b_h) if strategy["prefer_horizontal"](rect_a_h, rect_b_h, rect_a_v, rect_b_v) else (rect_a_v, rect_b_v)
-    return sum(1 for r in (rect_a, rect_b) if r["width"] > eps and r["height"] > eps)
+BRANCH_WIDTH = 3  # how many candidate layouts get fully explored per level
+PACK_NODE_BUDGET = 600  # total branch expansions allowed per source packed (see _pack_rect_multi)
+PACK_MAX_DEPTH = 6  # nested guillotine levels
 
 
-def _pack_rect_multi(w: float, h: float, needs: list, allow_rotation: bool, strategy: dict = DEFAULT_STRATEGY, depth: int = 0, max_depth: int = 5) -> dict:
+def _pack_result_key(result: dict, min_usable: float) -> tuple:
+    """Ranks two FINISHED layouts of the same source (lower is better) — this is
+    what the search maximizes, as opposed to the local heuristics that only
+    decide what order to try things in. In priority order:
+
+      1. most pieces placed — a source that swallows one more pane is worth more
+         than any leftover shape, since the alternative is opening another sheet;
+      2. most placed area (a piece from a bigger line beats a token small one);
+      3. least true scrap — leftovers with a side under this variant's
+         min_usable are dead material, so the search actively avoids producing
+         them rather than only counting rectangles;
+      4. fewest usable leftovers, then
+      5. largest single usable leftover (and the rest of the size profile) —
+         one big sellable offcut beats the same area shattered into slivers.
     """
-    Greedily packs pieces from a POOL of possibly-different pending needs (each
+    placed = result["placed"]
+    placed_area = sum(c["width"] * c["height"] for c in placed)
+    usable, scrap_area = [], 0.0
+    for r in result["remainders"]:
+        area = r["width"] * r["height"]
+        if min(r["width"], r["height"]) >= min_usable:
+            usable.append(area)
+        else:
+            scrap_area += area
+    usable.sort(reverse=True)
+    return (
+        -len(placed), -placed_area, scrap_area,
+        len(usable), -(usable[0] if usable else 0.0), tuple(-a for a in usable),
+    )
+
+
+def _pack_rect_multi(w: float, h: float, needs: list, allow_rotation: bool, strategy: dict = DEFAULT_STRATEGY,
+                     min_usable: float = 0.0, depth: int = 0, max_depth: int = PACK_MAX_DEPTH,
+                     _budget: Optional[dict] = None, _memo: Optional[dict] = None) -> dict:
+    """
+    Packs pieces from a POOL of possibly-different pending needs (each
     {"line_idx", "piece_w", "piece_h", "remaining"}) into (w x h) — not just one
-    shape. At each level: try needs in the order `strategy["need_key"]` ranks
-    them, use the first one that actually fits (so a smaller pending need still
-    gets a chance when the top-ranked one doesn't fit anymore), place as many of
-    it as fit, guillotine-split (direction chosen by `strategy["prefer_horizontal"]`),
-    then recurse into the leftover with the SAME shared pool (updated) — so the
-    next level reconsiders every other still-unmet need, including different
-    shapes. This is what lets two different order lines share one sheet-opening
-    operation when their pieces happen to nest together, instead of each line
-    only ever getting to reuse whatever a fully-independent earlier line left.
+    shape — with a bounded LOOKAHEAD search rather than a single greedy pass.
+
+    At each level it enumerates real candidate layouts: every pending need (in
+    the order `strategy["need_key"]` ranks them) x both orientations x every
+    grid shape that holds the same number of pieces (_grid_arrangements) x both
+    guillotine split directions. The top BRANCH_WIDTH of those (ordered by the
+    local heuristics — most pieces, the strategy's preferred need and split,
+    fewest leftover fragments) are each recursed into fully, with the SAME
+    shared pool, and whichever one turns out best once its whole subtree is
+    packed wins (_pack_result_key). So a layout is judged by what it LEADS TO,
+    not by how it looks at the moment it is chosen.
+
+    That lookahead is the fix for the class of miss this engine used to have:
+    two different order lines whose panes only both fit if the FIRST line's
+    panes are stacked as a tall column instead of the locally-obvious wide row.
+    No local tie-break can see that — the previous greedy version was tried with
+    the tie-break flipped both ways and still lost a sheet on it, because the
+    information needed ("does the other line still fit afterwards?") only exists
+    one level deeper. Cost is kept bounded, since this runs inline in the POS
+    checkout path, by three things: BRANCH_WIDTH caps the fan-out, a shared
+    PACK_NODE_BUDGET caps total expansions per source (past it the search
+    degrades gracefully to the old greedy first-branch behavior instead of
+    failing), and identical (rect, remaining-pool, depth) states are memoized —
+    which they very often are, since sibling leftovers repeat.
 
     Returns {"placed": [{"line_idx","x","y","width","height","rotated"}, ...],
     "remainders": [{width,height,x,y}, ...]} — coordinates local to (w, h).
-    Does not mutate the input `needs` list. Bounded by max_depth (a safety cap,
-    not expected to bind for realistic order sizes).
+    Does not mutate the input `needs` list. `min_usable` (this variant's minimum
+    sellable dimension) lets the search tell dead slivers from real leftovers;
+    0.0 keeps every remainder "usable", which is the pre-existing behavior.
     """
     eps = 1e-6
+    if _budget is None:
+        _budget = {"nodes": PACK_NODE_BUDGET}
+    if _memo is None:
+        _memo = {}
+
     active = [n for n in needs if n["remaining"] > 0]
     if not active or w <= eps or h <= eps or depth >= max_depth:
         remainders = [{"width": w, "height": h, "x": 0.0, "y": 0.0}] if w > eps and h > eps else []
         return {"placed": [], "remainders": remainders}
 
-    # Try needs in the strategy's ranked order; use the first that actually fits
-    # here — ties within one need broken by grid area, then how many remainder
-    # fragments that orientation leaves (fewer is better — an orientation that
-    # happens to make one of the piece's own sides match the source exactly
-    # leaves ONE clean leftover instead of splitting it into two), then the
-    # orientation's own width value as a final tiebreak, never by which one
-    # _orientations happened to yield first (keeps results independent of
-    # which of L/W a cashier typed).
+    memo_key = (
+        round(w, 4), round(h, 4), depth,
+        tuple(sorted((n["line_idx"], n["remaining"]) for n in active)),
+    )
+    if memo_key in _memo:
+        return _memo[memo_key]
+
+    # ── Enumerate candidate layouts for this rectangle ───────────────────────
     active.sort(key=strategy["need_key"])
-    chosen, chosen_need = None, None
-    for need in active:
-        best = None
+    prefer_horizontal = strategy["prefer_horizontal"]
+    fit_w, fit_h = w + eps, h + eps
+    branches = []
+    for rank, need in enumerate(active):
         for ow, oh, rotated in _orientations(need["piece_w"], need["piece_h"], allow_rotation):
-            arrangement = _grid_arrangement(w, h, ow, oh, need["remaining"])
-            if not arrangement:
-                continue
-            frag_count = _remainder_fragment_count(w, h, arrangement["grid_w"], arrangement["grid_h"], strategy)
-            key = (arrangement["k"], arrangement["grid_w"] * arrangement["grid_h"], -frag_count, ow)
-            if best is None or key > best["_key"]:
-                arrangement.update(ow=ow, oh=oh, rotated=rotated, _key=key)
-                best = arrangement
-        if best is not None:
-            chosen, chosen_need = best, need
-            break
+            if ow > fit_w or oh > fit_h:
+                continue  # cheap reject before building any arrangement at all
+            for arr in _grid_arrangements(w, h, ow, oh, need["remaining"]):
+                grid_w, grid_h = arr["grid_w"], arr["grid_h"]
+                rect_a_h, rect_b_h = _layout_remainder_rects(w, h, grid_w, grid_h, "horizontal")
+                rect_a_v, rect_b_v = _layout_remainder_rects(w, h, grid_w, grid_h, "vertical")
+                prefers_h = prefer_horizontal(rect_a_h, rect_b_h, rect_a_v, rect_b_v)
+                # When the block matches one of the source's own sides exactly, one
+                # split rect is zero-area and BOTH directions describe the same
+                # physical cut — don't pay for it twice. Comparing the heights/widths
+                # the two layouts differ by is enough to spot that.
+                degenerate = w - grid_w <= eps or h - grid_h <= eps
+                splits = (("horizontal", (rect_a_h, rect_b_h)),) if degenerate else (
+                    ("horizontal", (rect_a_h, rect_b_h)), ("vertical", (rect_a_v, rect_b_v)),
+                )
+                for split, pair in splits:
+                    rects = [r for r in pair if r["width"] > eps and r["height"] > eps]
+                    order_key = (
+                        -arr["k"],                                          # most pieces first
+                        rank,                                               # then this strategy's preferred need
+                        len(rects),                                         # then the least fragmented footprint
+                        -(grid_w * grid_h),
+                        0 if (split == "horizontal") == prefers_h else 1,   # then its preferred split direction
+                        -ow, -arr["cols"],                                  # deterministic, never input-order dependent
+                    )
+                    branches.append((order_key, need, arr, ow, oh, rotated, rects))
 
-    if chosen is None:
+    if not branches:
         return {"placed": [], "remainders": [{"width": w, "height": h, "x": 0.0, "y": 0.0}]}
+    if len(branches) > 1:
+        branches.sort(key=lambda b: b[0])
 
-    placed = [
-        {"line_idx": chosen_need["line_idx"], "x": px, "y": py, "width": chosen["ow"], "height": chosen["oh"], "rotated": chosen["rotated"]}
-        for (px, py) in chosen["positions"]
-    ]
-    grid_w, grid_h = chosen["grid_w"], chosen["grid_h"]
+    # ── Explore the best few, keep whichever subtree actually turns out best ──
+    best, best_key = None, None
+    for order_key, need, arr, ow, oh, rotated, rects in branches[:BRANCH_WIDTH]:
+        if best is not None and _budget["nodes"] <= 0:
+            break  # out of search budget — degrade to the first (greedy) branch
+        _budget["nodes"] -= 1
 
-    rect_a_h, rect_b_h = _layout_remainder_rects(w, h, grid_w, grid_h, "horizontal")
-    rect_a_v, rect_b_v = _layout_remainder_rects(w, h, grid_w, grid_h, "vertical")
-    rect_a, rect_b = (rect_a_h, rect_b_h) if strategy["prefer_horizontal"](rect_a_h, rect_b_h, rect_a_v, rect_b_v) else (rect_a_v, rect_b_v)
+        all_placed = [
+            {"line_idx": need["line_idx"], "x": px, "y": py, "width": ow, "height": oh, "rotated": rotated}
+            for (px, py) in arr["positions"]
+        ]
+        next_needs = [
+            {**n, "remaining": n["remaining"] - arr["k"]} if n["line_idx"] == need["line_idx"] else {**n}
+            for n in needs
+        ]
 
-    next_needs = [
-        {**n, "remaining": n["remaining"] - chosen["k"]} if n is chosen_need else n
-        for n in needs
-    ]
-
-    all_placed = list(placed)
-    all_remainders = []
-    for rect in sorted((rect_a, rect_b), key=lambda r: -(r["width"] * r["height"])):
-        if rect["width"] <= eps or rect["height"] <= eps:
-            continue
-        sub = _pack_rect_multi(rect["width"], rect["height"], next_needs, allow_rotation, strategy, depth + 1, max_depth)
-        for c in sub["placed"]:
-            all_placed.append({**c, "x": c["x"] + rect["x"], "y": c["y"] + rect["y"]})
-        for r in sub["remainders"]:
-            all_remainders.append({**r, "x": r["x"] + rect["x"], "y": r["y"] + rect["y"]})
-        if sub["placed"]:
-            consumed_by_line = {}
+        all_remainders = []
+        for rect in sorted(rects, key=lambda r: -(r["width"] * r["height"])):
+            sub = _pack_rect_multi(rect["width"], rect["height"], next_needs, allow_rotation, strategy,
+                                   min_usable, depth + 1, max_depth, _budget, _memo)
             for c in sub["placed"]:
-                consumed_by_line[c["line_idx"]] = consumed_by_line.get(c["line_idx"], 0) + 1
-            next_needs = [
-                {**n, "remaining": n["remaining"] - consumed_by_line.get(n["line_idx"], 0)}
-                for n in next_needs
-            ]
+                all_placed.append({**c, "x": c["x"] + rect["x"], "y": c["y"] + rect["y"]})
+            for r in sub["remainders"]:
+                all_remainders.append({**r, "x": r["x"] + rect["x"], "y": r["y"] + rect["y"]})
+            if sub["placed"]:
+                consumed_by_line = {}
+                for c in sub["placed"]:
+                    consumed_by_line[c["line_idx"]] = consumed_by_line.get(c["line_idx"], 0) + 1
+                next_needs = [
+                    {**n, "remaining": n["remaining"] - consumed_by_line.get(n["line_idx"], 0)}
+                    for n in next_needs
+                ]
 
-    return {"placed": all_placed, "remainders": all_remainders}
+        result = {"placed": all_placed, "remainders": all_remainders}
+        result_key = _pack_result_key(result, min_usable)
+        if best_key is None or result_key < best_key:
+            best, best_key = result, result_key
+
+    _memo[memo_key] = best
+    return best
 
 
 # ── Candidate generation ────────────────────────────────────────────────────────
@@ -384,6 +479,7 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
     """
     candidates = []
     allow_rotation = variant.allow_rotation if variant else True
+    min_usable = (variant.min_usable if variant else None) or 0.0  # lets the packer score dead slivers apart from real leftovers
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
 
@@ -398,7 +494,7 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
     offcuts = db.exec(stmt).all()
 
     for oc in offcuts:
-        pack = _pack_rect_multi(oc.width, oc.height, needs, allow_rotation, strategy)
+        pack = _pack_rect_multi(oc.width, oc.height, needs, allow_rotation, strategy, min_usable)
         if not pack["placed"]:
             continue
         candidates.append({
@@ -409,7 +505,7 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
         })
 
     if full_w > 0 and full_h > 0:
-        pack = _pack_rect_multi(full_w, full_h, needs, allow_rotation, strategy)
+        pack = _pack_rect_multi(full_w, full_h, needs, allow_rotation, strategy, min_usable)
         if pack["placed"]:
             candidates.append({
                 "source_kind": "sheet", "source_id": None,
@@ -606,14 +702,32 @@ def _creates_big_waste(candidate: dict) -> bool:
     the source was for this cut). Feeds _fulfill_pool's redirect-to-a-closer-
     offcut decision alongside (not instead of) the existing sellability/
     popular-range worth-protecting checks; _pick_with_redirect only acts on
-    it when a closer alternative actually exists."""
+    it when a closer alternative actually exists.
+
+    Measured against BOTH ways the placed block could sit in the source (as
+    placed, and transposed), and only counts as wasteful if neither fits
+    comfortably. "Was this source needlessly big for this cut?" is a property of
+    the two rectangles, not of which way the packer happened to turn the piece —
+    a 300x400 block in a 450x850 offcut is the same physical snugness as a
+    400x300 one, so it must not flip the source-selection decision. (Same
+    L/W-order-independence rule the need ranking and orientation tie-breaks
+    already follow — see _need_key_longest_side.)"""
     if not candidate["placed"]:
         return False
+    tol = 1e-6
     used_w = max(pc["x"] + pc["width"] for pc in candidate["placed"])
     used_h = max(pc["y"] + pc["height"] for pc in candidate["placed"])
-    excess_w = candidate["source_w"] - used_w
-    excess_h = candidate["source_h"] - used_h
-    return excess_w > SNUB_WASTE_WIDTH_MM or excess_h > SNUB_WASTE_HEIGHT_MM
+    fits = [
+        (candidate["source_w"] - bw, candidate["source_h"] - bh)
+        for bw, bh in ((used_w, used_h), (used_h, used_w))
+        if bw <= candidate["source_w"] + tol and bh <= candidate["source_h"] + tol
+    ]
+    if not fits:  # defensive: shouldn't happen for a block the packer actually placed
+        fits = [(candidate["source_w"] - used_w, candidate["source_h"] - used_h)]
+    return all(
+        excess_w > SNUB_WASTE_WIDTH_MM or excess_h > SNUB_WASTE_HEIGHT_MM
+        for excess_w, excess_h in fits
+    )
 
 
 def _score_candidate(candidate: dict, variant: Optional[Variant], now: datetime) -> float:
@@ -796,7 +910,7 @@ def _layout_remainder_rects(src_w: float, src_h: float, grid_w: float, grid_h: f
     """The two ways to guillotine-cut a grid_w x grid_h occupied block (positioned
     at (0, 0)) out of a src_w x src_h rectangle, each leaving up to two positioned
     remainders (may be zero-area on one side — callers filter those out). The
-    occupied block may hold 1+ pieces (see _grid_arrangement/_pack_rect)."""
+    occupied block may hold 1+ pieces (see _grid_arrangements/_pack_rect_multi)."""
     if split == "horizontal":
         rect_a = {"x": 0.0, "y": grid_h, "width": src_w, "height": src_h - grid_h}
         rect_b = {"x": grid_w, "y": 0.0, "width": src_w - grid_w, "height": grid_h}

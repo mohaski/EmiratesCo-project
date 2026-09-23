@@ -1334,6 +1334,52 @@ def test_33_correct_offcut_flags_missed_cut_on_joint_sibling_line(db, p, v):
     print("PASS")
 
 
+def test_34_lookahead_stacks_a_column_so_a_second_line_still_fits(db, p, v):
+    print("\n--- Test 34: Lookahead picks a tall column over a wide row so BOTH lines fit one sheet ---")
+    _clear_offcuts(db, p)
+    # NOTE the sheet is 1650 wide x 2140 tall here, not the 2140x1650 the other
+    # tests use — this layout only exists in that orientation, and _get_full_dims
+    # reads it straight off Variant.length x Variant.width.
+    v.length = 1650.0
+    v.width = 2140.0
+    v.stock_quantity = 20
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+
+    # Reported from a real cut preview: two lines of 2 panes each, on a
+    # 1650x2140 sheet. They only ALL fit if line 1's panes are stacked as a
+    # 678-wide column (2 x 1070 = 2140, the sheet's full height exactly),
+    # leaving one clean 972x2140 strip that line 2's 685-wide column fits in.
+    # Every locally-greedy rule instead lays line 1 as a 1356x1070 row (or a
+    # 1070-wide column) — both strand leftovers too narrow for line 2, costing
+    # a whole second sheet. Only evaluating what each footprint LEADS TO finds
+    # it; see _grid_arrangements/_pack_rect_multi.
+    lines = [_mk_line(1070, 678, qty=2), _mk_line(1065, 685, qty=2)]
+    gos.resolve_glass_cut_lines(db, p, v, lines)
+    db.commit()
+
+    events = [e for line in lines for e in line["offcut_sources"]]
+    owning = [e for e in events if e.get("owns_consumption", True)]
+    total_cuts = sum(len(e["cuts"]) for e in events)
+    print(f"Sources opened: {len(owning)} for {total_cuts} pieces")
+    for e in owning:
+        print(f"  {e['source']} {e['offcut_width']}x{e['offcut_height']} -> {[(r['width'], r['height'], r['status']) for r in e['remainders_created']]}")
+
+    assert total_cuts == 4, f"Expected all 4 pieces placed, got {total_cuts}"
+    assert len(owning) == 1, f"All 4 pieces fit ONE sheet — expected 1 source, got {len(owning)}"
+    assert owning[0]["source"] == "sheet"
+    assert all(e["group_id"] == owning[0]["group_id"] for e in events), "Both lines should share the one consumption group"
+
+    v.length = 2440.0
+    v.width = 1830.0
+    db.add(v)
+    db.commit()
+    _clear_offcuts(db, p)
+    print("PASS")
+
+
+
 def run():
     engine = create_engine(DATABASE_URL)
     with Session(engine) as db:
@@ -1380,6 +1426,7 @@ def run():
             ("test_31_small_tier_consolidates_before_splitting", lambda: test_31_small_tier_consolidates_before_splitting(db, p, v)),
             ("test_32_snubs_big_waste_even_when_consolidating_makes_less_total_scrap", lambda: test_32_snubs_big_waste_even_when_consolidating_makes_less_total_scrap(db, p, v)),
             ("test_33_correct_offcut_flags_missed_cut_on_joint_sibling_line", lambda: test_33_correct_offcut_flags_missed_cut_on_joint_sibling_line(db, p, v)),
+            ("test_34_lookahead_stacks_a_column_so_a_second_line_still_fits", lambda: test_34_lookahead_stacks_a_column_so_a_second_line_still_fits(db, p, v)),
         ]:
             try:
                 fn()
