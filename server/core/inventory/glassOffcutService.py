@@ -78,7 +78,7 @@ from entities.products import Product
 from entities.variants import Variant
 from entities.orderItems import OrderItem
 from entities.orders import Order
-from core.inventory.poolKey import compute_pool_key
+from core.inventory.poolKey import compute_pool_key, safe_delete_offcut
 from loggiing import logger
 
 
@@ -785,7 +785,7 @@ def _remove_glass_offcut(db: Session, product: Product, variant: Optional[Varian
     if not existing:
         return False
     if existing.quantity <= 1:
-        db.delete(existing)
+        safe_delete_offcut(db, existing)
     else:
         existing.quantity -= 1
         db.add(existing)
@@ -847,7 +847,7 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
                 }
         locked.quantity -= 1
         if locked.quantity == 0:
-            db.delete(locked)
+            safe_delete_offcut(db, locked)
         else:
             db.add(locked)
     else:
@@ -1268,7 +1268,7 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
             _restore_sheet_stock(db, product, variant, 1)
             for row in found_rows:
                 if row.quantity <= 1:
-                    db.delete(row)
+                    safe_delete_offcut(db, row)
                 else:
                     row.quantity -= 1
                     db.add(row)

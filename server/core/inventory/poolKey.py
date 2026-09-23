@@ -39,6 +39,8 @@ from sqlmodel import Session, select
 from entities.attributes import AttributeClass
 from entities.products import Product
 from entities.variants import Variant
+from entities.offcuts import Offcut
+from entities.stockInputSession import StockInputSessionItem
 
 _SIZE_ATTRIBUTE_KEYS = {"Dimensions"}
 
@@ -105,3 +107,32 @@ def pool_sibling_variants(db: Session, variant: Variant, pool_key: Optional[str]
         )
     ).all()
     return [v for v in candidates if pool_key_from_attributes(v.attributes, attribute_types, pool_ignored) == pool_key]
+
+
+def safe_delete_offcut(db: Session, offcut: Offcut) -> None:
+    """Deletes a fully-consumed Offcut row, first detaching any Stock Control
+    ("stock input session") lines that reference it via created_offcut_id —
+    otherwise the DELETE hits that column's foreign key (ON DELETE NO ACTION)
+    and raises an uncaught IntegrityError the moment a cut fully consumes an
+    offcut that was originally entered through a stock-input session, which is
+    the common case for anything recorded via bulk offcut entry rather than
+    left over from a previous cut.
+
+    Same fix already applied ad hoc in stockSessions/service.py's
+    delete_stock_input_session_offcut ("Null the FK before deleting the row it
+    points to") — centralized here since every 1D (inventoryService.py) and 2D
+    (glassOffcutService.py) offcut-consumption/restore path that fully
+    depletes an offcut needs the same guard, not just the CEO manual-delete
+    endpoint.
+
+    The FK is left null rather than cascading the delete: the referencing
+    stock-input line is a historical audit record of what was entered, which
+    should survive even after the physical offcut it created has since been
+    fully cut up and no longer exists as a distinct row.
+    """
+    for item in db.exec(
+        select(StockInputSessionItem).where(StockInputSessionItem.created_offcut_id == offcut.offcutId)
+    ).all():
+        item.created_offcut_id = None
+        db.add(item)
+    db.delete(offcut)

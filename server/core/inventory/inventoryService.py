@@ -7,7 +7,7 @@ from entities.offcuts import Offcut
 from entities.orderItems import OrderItem
 from entities.orders import Order
 from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines, half_sheet_piece_dims_mm
-from core.inventory.poolKey import load_attribute_types, pool_key_from_attributes, compute_pool_key, pool_sibling_variants
+from core.inventory.poolKey import load_attribute_types, pool_key_from_attributes, compute_pool_key, pool_sibling_variants, safe_delete_offcut
 from loggiing import logger
 
 
@@ -404,7 +404,7 @@ def _take_loose_pcs(db: Session, product: Product, pool_key: str, pieces: int) -
     existing.length -= taken
     offcut_id = existing.offcutId
     if existing.length <= 0:
-        db.delete(existing)
+        safe_delete_offcut(db, existing)
     else:
         db.add(existing)
     return taken, offcut_id
@@ -418,7 +418,7 @@ def _remove_loose_pcs(db: Session, product: Product, pool_key: str, pieces: int)
         return
     existing.length = max(0, existing.length - pieces)
     if existing.length <= 0:
-        db.delete(existing)
+        safe_delete_offcut(db, existing)
     else:
         db.add(existing)
 
@@ -645,7 +645,7 @@ def _fulfill_one_cut_via_best_fit(
         best_offcut.quantity -= 1
         remainder = round(oc_len - required_length, 4)
         if best_offcut.quantity == 0:
-            db.delete(best_offcut)
+            safe_delete_offcut(db, best_offcut)
         else:
             db.add(best_offcut)
 
@@ -893,7 +893,7 @@ def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] 
     if not existing:
         return False
     if existing.quantity <= 1:
-        db.delete(existing)
+        safe_delete_offcut(db, existing)
     else:
         existing.quantity -= 1
         db.add(existing)
@@ -1012,7 +1012,7 @@ def _consume_offcut_sources(
         remainder = round(locked.length - length_used, 4)
         locked.quantity -= 1
         if locked.quantity == 0:
-            db.delete(locked)
+            safe_delete_offcut(db, locked)
         else:
             db.add(locked)
 

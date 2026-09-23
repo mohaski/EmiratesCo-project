@@ -184,7 +184,10 @@
       "Bash(\"/c/Program Files/PostgreSQL/17/bin/psql.exe\" -h localhost -U postgres -d emiratesco_database_failovertest -c \"UPDATE failover_marker SET label = 'B-TO-A-REVERSE-TEST';\")",
       "Bash(\"../.venv/Scripts/python.exe\" /tmp/push_b_to_a.py)",
       "Bash(\"/c/Program Files/PostgreSQL/17/bin/psql.exe\" -h localhost -U postgres -d emiratesco_database_failoversource -c \"SELECT * FROM failover_marker;\")",
-      "Bash(curl -s http://127.0.0.1:8000/health -w \"\\\\nSTATUS:%{http_code}\\\\n\")"
+      "Bash(curl -s http://127.0.0.1:8000/health -w \"\\\\nSTATUS:%{http_code}\\\\n\")",
+      "Bash(curl -s -m 8 -w \"\\\\nSTATUS:%{http_code}\\\\n\" https://win-gmid3q8uuhg.tail821c76.ts.net/health)",
+      "Bash(curl -s -m 8 -w \"\\\\nSTATUS:%{http_code}\\\\n\" -H \"X-Failover-Secret: _efp7sBwIj-qox719AoCqtI2eoRWHCFFjVtSlS6Iqg4\" https://win-gmid3q8uuhg.tail821c76.ts.net/failover/ping)",
+      "Bash(curl -s -m 5 -w \"\\\\nSTATUS:%{http_code}\\\\n\" -H \"X-Failover-Secret: _efp7sBwIj-qox719AoCqtI2eoRWHCFFjVtSlS6Iqg4\" http://127.0.0.1:8000/failover/ping)"
     ],
     "additionalDirectories": [
       "C:\\Users\\mohas\\AppData\\Local\\Temp"
