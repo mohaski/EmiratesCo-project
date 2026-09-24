@@ -25,6 +25,22 @@ class Product(SQLModel, table=True):
     track_offcuts: bool = Field(default=False)
     alarm_quantity: Optional[int] = Field(default=0)
 
+    # How sub-pack (piece / metre) sales of this product deduct stock.
+    #   'counted'        — Variant.unit_quantity is an EXACT pieces-per-pack figure.
+    #                      stock_quantity is in PIECES; piece sales pool across pack
+    #                      sizes and auto-open sealed boxes, with the exact remainder
+    #                      kept in a loose pool (inventoryService
+    #                      ._deduct_packaged_stock_pooled). The original behaviour.
+    #   'open_container' — a pack's real contents vary or are unknowable (rubber rolls
+    #                      run long/short, a "box" of screws is sold by weight), so
+    #                      nothing below the pack is counted. stock_quantity is in
+    #                      whole PACKS; a manager explicitly opens one (entities/
+    #                      openContainers.py) and piece/metre sales are recorded
+    #                      against that open pack without decrementing any quantity.
+    # Only meaningful for track_offcuts=False products — a bar/sheet product cuts
+    # from tracked offcuts and never goes near either path.
+    unit_stock_mode: str = Field(default="counted")
+
     # Measurement unit used to label this product's dimensions & per-unit pricing (e.g. "ft", "mm", "pcs")
     unit: str = Field(default="ft")
     

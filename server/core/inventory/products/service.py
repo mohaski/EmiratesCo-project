@@ -9,6 +9,7 @@ from db.database import get_session
 from core.userManagement.authService import get_current_user
 from loggiing import logger
 from utils import require_role
+from core.inventory.openContainers.service import convert_product_stock_mode
 
 
 def create_product(
@@ -57,6 +58,7 @@ def create_product(
             track_offcuts=product_data.trackOffcuts,
             alarm_quantity=product_data.alarm_quantity,
             unit=product_data.unit,
+            unit_stock_mode=product_data.unit_stock_mode,
 
             applicable_attributes=product_data.applicable_attributes,
             has_dimensions=product_data.has_dimensions,
@@ -146,6 +148,25 @@ def update_product(
             raise HTTPException(status_code=404, detail="Product not found")
 
         update_dict = update_data.dict(exclude_unset=True)
+
+        # unit_stock_mode is not a plain field write: the two modes keep
+        # stock_quantity in DIFFERENT units (pieces vs whole packs), so
+        # switching has to convert every variant's existing figure or every
+        # stock number for this product silently changes meaning. Handled
+        # before the generic loop, and skipped by it.
+        new_mode = update_dict.pop('unit_stock_mode', None)
+        if new_mode and new_mode not in ('counted', 'open_container'):
+            raise HTTPException(status_code=400, detail=f"Unknown stock mode '{new_mode}'")
+        if new_mode and new_mode != (product.unit_stock_mode or 'counted'):
+            if new_mode == 'open_container' and product.track_offcuts:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Open-container tracking is for accessories only — this product cuts "
+                           "from tracked offcuts, which already measures what's left.",
+                )
+            convert_product_stock_mode(product, new_mode, db, current_user)
+            product.unit_stock_mode = new_mode
+
         # Map camelCase field names to entity column names
         field_map = {'trackOffcuts': 'track_offcuts'}
         for key, value in update_dict.items():
@@ -156,6 +177,12 @@ def update_product(
         db.refresh(product)
         
         return model.ProductUpdateResponse(message="Product updated", id=product.productId)
+    except HTTPException:
+        # Deliberate 4xx from the validation above (e.g. an invalid stock-mode
+        # switch) -- must not be reshaped into a 500 by the catch-all below,
+        # or the UI shows "server error" instead of the actual reason.
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Update Product Error: {e}", exc_info=True)

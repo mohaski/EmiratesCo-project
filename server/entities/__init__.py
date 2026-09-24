@@ -7,6 +7,7 @@ from .invoices import Invoice      # Must be before Order (Order has FK → invo
 from .orders import Order
 from .orderItems import OrderItem
 from .offcuts import Offcut
+from .openContainers import OpenContainer
 from .payments import Payment
 from .credits import Credit
 from .messages import Message, MessageRecipient
@@ -26,6 +27,7 @@ __all__ = [
     "Order",
     "OrderItem",
     "Offcut",
+    "OpenContainer",
     "Payment",
     "Credit",
     "Message",

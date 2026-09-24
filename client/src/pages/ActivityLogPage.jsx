@@ -8,6 +8,7 @@ const PAGE_SIZE = 50;
 const ENTITY_TYPES = [
     'order', 'order_status', 'order_cancellation', 'restock', 'stock_batch',
     'stock_batch_correction', 'manual_offcut', 'offcut_correction', 'profile_offcut_correction',
+    'open_container',
 ];
 
 const fieldStyle = {

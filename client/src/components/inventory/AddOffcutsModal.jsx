@@ -77,7 +77,7 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
             background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(10px)',
         }} onClick={onClose}>
             <div onClick={e => e.stopPropagation()} style={{
-                width: '100%', maxWidth: '560px', maxHeight: '88vh',
+                width: '100%', maxWidth: '560px', maxHeight: 'min(88vh, calc(100dvh - 2rem))',
                 background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
                 border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1.5rem', overflow: 'hidden',
                 boxShadow: '0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(6,182,212,0.1)',
@@ -136,19 +136,19 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
                             const invalid = !isRowValid(row);
                             return (
                                 <div key={idx} style={{
-                                    display: 'flex', alignItems: 'center', gap: '0.625rem', flexWrap: 'wrap',
-                                    padding: '0.75rem 1rem', borderRadius: '0.875rem',
+                                    display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap',
+                                    padding: '0.75rem', borderRadius: '0.875rem',
                                     background: 'rgba(255,255,255,0.03)', border: `1px solid ${invalid && (row.width || row.height || row.length) ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)'}`,
                                 }}>
                                     {hasDimensions ? (
                                         <>
                                             <input type="number" step="1" min="0" placeholder="width mm" value={row.width}
                                                 onChange={e => updateRow(idx, 'width', e.target.value)}
-                                                style={{ ...rowInput, width: '90px' }} />
+                                                style={{ ...rowInput, flex: '1 1 72px', minWidth: 0, boxSizing: 'border-box' }} />
                                             <span style={{ color: '#475569' }}>×</span>
                                             <input type="number" step="1" min="0" placeholder="height mm" value={row.height}
                                                 onChange={e => updateRow(idx, 'height', e.target.value)}
-                                                style={{ ...rowInput, width: '90px' }} />
+                                                style={{ ...rowInput, flex: '1 1 72px', minWidth: 0, boxSizing: 'border-box' }} />
                                         </>
                                     ) : (
                                         <div style={{ position: 'relative', flex: 1 }}>
@@ -160,7 +160,7 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
                                     <span style={{ color: '#475569', fontSize: '0.72rem' }}>qty</span>
                                     <input type="number" step="1" min="1" placeholder="1" value={row.quantity}
                                         onChange={e => updateRow(idx, 'quantity', e.target.value)}
-                                        style={{ ...rowInput, width: '56px', flexShrink: 0 }} />
+                                        style={{ ...rowInput, width: '60px', flexShrink: 0, boxSizing: 'border-box' }} />
                                     <button type="button" onClick={() => removeRow(idx)} disabled={rows.length === 1} style={{
                                         background: 'none', border: 'none', color: rows.length === 1 ? '#334155' : '#64748b',
                                         cursor: rows.length === 1 ? 'not-allowed' : 'pointer', fontSize: '0.9rem', flexShrink: 0, marginLeft: 'auto',
@@ -178,13 +178,13 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
                 </div>
 
                 {/* Footer */}
-                <div className="modal-footer-pad" style={{ padding: '1.125rem 2rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', gap: '0.75rem', flexShrink: 0 }}>
+                <div className="modal-footer-pad" style={{ padding: '1.125rem 2rem', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', gap: '0.75rem', flexShrink: 0, flexWrap: 'wrap' }}>
                     <button onClick={onClose} style={{
-                        flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.08)',
+                        flex: '1 1 130px', padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.08)',
                         background: 'transparent', color: '#64748b', fontWeight: 700, cursor: 'pointer', fontSize: '0.875rem',
                     }}>Cancel</button>
                     <button onClick={handleSubmit} disabled={!canSubmit} style={{
-                        flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: 'none', cursor: canSubmit ? 'pointer' : 'not-allowed',
+                        flex: '1 1 160px', padding: '0.875rem', borderRadius: '0.875rem', border: 'none', cursor: canSubmit ? 'pointer' : 'not-allowed',
                         background: canSubmit ? 'linear-gradient(135deg, #06b6d4, #3b82f6)' : 'rgba(255,255,255,0.06)',
                         color: canSubmit ? '#fff' : '#334155', fontWeight: 800, fontSize: '0.875rem',
                         boxShadow: canSubmit ? '0 4px 16px rgba(6,182,212,0.3)' : 'none', transition: 'all 0.2s',

@@ -4,6 +4,7 @@ from typing import Optional
 from entities.products import Product
 from entities.variants import Variant
 from entities.offcuts import Offcut
+from entities.openContainers import OpenContainer
 from entities.orderItems import OrderItem
 from entities.orders import Order
 from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines, half_sheet_piece_dims_mm
@@ -207,22 +208,34 @@ def _process_line_items(
             _deduct_simple_stock(db, product, variant, qty)
 
         elif l_type == "accessory-pcs":
-            # Piece sale: qty is already a piece count. A piece doesn't care
-            # which sealed box it came from, so this draws from the whole
-            # pool — already-loose pieces first (a shared leftover pool, plus
-            # any inherently unpackaged sibling variant), only opening a
-            # sealed box (smallest pack size first) if that's not enough. See
-            # _deduct_packaged_stock_pooled / core/inventory/poolKey.py.
-            _deduct_packaged_stock_pooled(db, product, variant, qty, pool_key, line)
+            if is_open_container_mode(product):
+                # Sub-pack sale of a product whose pack contents vary (metres
+                # off a rubber roll, screws out of a box bought by weight):
+                # tally it against the pack a manager has open, deducting
+                # nothing — the pack already left stock when it was opened.
+                # See the open-container section for why there's no quantity
+                # to check here. float() because a metre sale is legitimately
+                # fractional even though today's UI only sends whole numbers.
+                _dispense_from_open_container(
+                    db, product, variant, float(line.get("qty", qty) or 0), pool_key, line
+                )
+            else:
+                # Piece sale: qty is already a piece count. A piece doesn't care
+                # which sealed box it came from, so this draws from the whole
+                # pool — already-loose pieces first (a shared leftover pool, plus
+                # any inherently unpackaged sibling variant), only opening a
+                # sealed box (smallest pack size first) if that's not enough. See
+                # _deduct_packaged_stock_pooled / core/inventory/poolKey.py.
+                _deduct_packaged_stock_pooled(db, product, variant, qty, pool_key, line)
 
         elif "unit" in l_type:
             # Pack/box sale: the customer receives actual sealed boxes of
             # THIS variant's own pack size, so unlike a piece sale this never
             # substitutes a different pack size or draws from the loose pool
-            # — it's a plain deduction, just expressed in pieces (this
-            # variant's own pack size, 1 for an unpackaged variant).
-            pieces_per_unit = (variant.unit_quantity if variant else None) or 1
-            _deduct_simple_stock(db, product, variant, qty * pieces_per_unit)
+            # — it's a plain deduction, just expressed in whatever unit
+            # stock_quantity is kept in for this product's mode (pieces when
+            # counted, whole packs when open_container).
+            _deduct_simple_stock(db, product, variant, qty * _pieces_per_pack_unit(product, variant))
 
         else:
             logger.warning(f"Unknown line item type '{l_type}'; performing simple deduction.")
@@ -577,6 +590,147 @@ def _restore_packaged_stock_pooled(
     db.add(product_locked)
 
 
+# ── Open-container dispensing (Product.unit_stock_mode == 'open_container') ──
+#
+# For accessories whose pack contents vary or can't be counted at all — rubber
+# rolls that run long or short, a "box" of screws bought by weight — the
+# counted model above is built on a number that doesn't exist. Its
+# unit_quantity is a nominal figure, so its loose pool drifts from the floor in
+# both directions: it blocks real sales ("short by N pieces" while a half-full
+# roll is sitting there) and permits phantom ones after the roll is empty.
+#
+# So this mode tracks only what can honestly be counted — whole SEALED packs,
+# in Variant.stock_quantity — and tracks NOTHING below that level. A manager
+# physically breaks a pack open (core/inventory/openContainers/service.py),
+# which is when it leaves stock; sub-pack sales then merely tally units against
+# that open pack. They never decrement a quantity and never create an offcut,
+# because there is no honest figure for what remains inside.
+#
+# Two consequences worth stating outright, since they're the whole point:
+#   - a sub-pack sale can never fail for "insufficient stock" — only for
+#     "nothing is open". Running out is a physical fact a manager reports by
+#     closing the container, not something the system can infer.
+#   - OpenContainer.units_sold is telemetry, never a gate. Its worth is
+#     historical: the yield of finished containers is the only real evidence of
+#     what a pack of this variant actually holds.
+
+
+def is_open_container_mode(product: Product) -> bool:
+    """Whether this product's sub-pack sales dispense from a manager-opened
+    pack rather than the counted piece pool. Never true for a track_offcuts
+    product — those cut from tracked offcuts and reach neither path."""
+    return (
+        product is not None
+        and not product.track_offcuts
+        and getattr(product, "unit_stock_mode", "counted") == "open_container"
+    )
+
+
+def _pieces_per_pack_unit(product: Product, variant: Optional[Variant]) -> float:
+    """The multiplier taking a whole-pack sale quantity to the units
+    stock_quantity is kept in. In 'counted' mode stock_quantity is pieces, so
+    selling 2 boxes of 1000 deducts 2000; in 'open_container' mode it's already
+    whole packs, so the pack size (a nominal label there) must NOT be applied."""
+    if is_open_container_mode(product):
+        return 1.0
+    return (variant.unit_quantity if variant else None) or 1.0
+
+
+def find_open_container(
+    db: Session,
+    product: Product,
+    pool_key: str,
+    for_update: bool = False,
+) -> Optional[OpenContainer]:
+    """The pack currently open for this pool, oldest first — FIFO, so opening a
+    second pack early doesn't strand the first half-used one. None if nothing
+    is open, which is what blocks a sub-pack sale."""
+    stmt = (
+        select(OpenContainer)
+        .where(
+            OpenContainer.product_id == product.productId,
+            OpenContainer.pool_key == pool_key,
+            OpenContainer.status == "open",
+        )
+        .order_by(OpenContainer.opened_at, OpenContainer.id)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return db.exec(stmt).first()
+
+
+def _dispense_from_open_container(
+    db: Session,
+    product: Product,
+    variant: Optional[Variant],
+    qty_units: float,
+    pool_key: str,
+    line_item_dict: Optional[dict] = None,
+) -> None:
+    """Record a sub-pack sale against the open pack. Deliberately touches no
+    stock_quantity and creates no Offcut — see this section's header."""
+    container = find_open_container(db, product, pool_key, for_update=True)
+    if not container:
+        name = (variant.name if variant else None) or product.name
+        raise ValueError(
+            f"No open pack for '{name}'. A manager must open one "
+            f"(Inventory > Open Stock) before selling it in {product.unit or 'units'}."
+        )
+    container.units_sold = (container.units_sold or 0.0) + float(qty_units)
+    db.add(container)
+
+    if line_item_dict is not None:
+        line_item_dict["stock_sources"] = [{
+            "source": "open_container",
+            "container_id": container.id,
+            "stock_used": float(qty_units),
+        }]
+
+
+def _restore_open_container_dispense(
+    db: Session,
+    product: Product,
+    variant: Optional[Variant],
+    qty_units: float,
+    line_item_dict: Optional[dict] = None,
+    pool_key: Optional[str] = None,
+) -> None:
+    """Reverses _dispense_from_open_container by rolling back the tally on the
+    exact container the sale drew from, even if it has since been closed — the
+    tally is that pack's yield record, and a refunded sale was never part of it.
+    A finished container is NOT reopened: whether the pack is physically empty
+    is a fact about the floor that a refund says nothing about.
+
+    A line with no open_container source was sold BEFORE this product was
+    switched to open-container tracking, so it came out of the counted piece
+    pool. Its quantity is in pieces, but stock_quantity now counts whole packs,
+    and the mode switch already re-expressed the stock it was deducted from — so
+    there is no arithmetic that restores it correctly. Nothing is restored: a
+    500-piece line put back into a pack-denominated field would invent 500 packs
+    of phantom stock and cause real overselling, whereas understating stock is
+    visible, harmless and fixed by an ordinary stock adjustment. Logged loudly
+    so the shortfall can be corrected deliberately.
+    """
+    sources = [
+        s for s in ((line_item_dict or {}).get("stock_sources") or [])
+        if s.get("source") == "open_container"
+    ]
+    if not sources:
+        logger.warning(
+            f"restore_stock: product {product.productId} ('{product.name}') is now open-container "
+            f"tracked, but this line ({qty_units} unit(s)) was sold under the counted model. "
+            "Stock left untouched — adjust manually if this pack should go back on the shelf."
+        )
+        return
+
+    for s in sources:
+        container = db.get(OpenContainer, s.get("container_id"))
+        if not container:
+            continue  # manually deleted since; nothing left to correct
+        container.units_sold = max(0.0, (container.units_sold or 0.0) - float(s.get("stock_used", 0)))
+        db.add(container)
+
+
 # ── Offcut best-fit algorithm ─────────────────────────────────────────────────
 
 def _is_scrap_1d(length: float, variant: Optional[Variant]) -> bool:
@@ -860,14 +1014,18 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
                             _upsert_offcut(db, product, variant, cut_len, pool_key=pool_key, status=status)
 
         elif l_type == "accessory-pcs":
-            _restore_packaged_stock_pooled(db, product, variant, qty, line, pool_key)
+            if is_open_container_mode(product):
+                _restore_open_container_dispense(
+                    db, product, variant, float(line.get("qty", qty) or 0), line, pool_key
+                )
+            else:
+                _restore_packaged_stock_pooled(db, product, variant, qty, line, pool_key)
 
         elif "roll" in l_type or "meter" in l_type:
             _restore_simple_stock(db, product, variant, qty)
 
         elif "unit" in l_type:
-            pieces_per_unit = (variant.unit_quantity if variant else None) or 1
-            _restore_simple_stock(db, product, variant, qty * pieces_per_unit)
+            _restore_simple_stock(db, product, variant, qty * _pieces_per_pack_unit(product, variant))
 
         else:
             _restore_simple_stock(db, product, variant, qty)

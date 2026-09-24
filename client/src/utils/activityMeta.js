@@ -12,6 +12,7 @@ export const ACTIVITY_META = {
     manual_offcut: { icon: '✂️', color: '#06b6d4', label: 'Offcut added' },
     offcut_correction: { icon: '✂️', color: '#f59e0b', label: 'Offcut corrected' },
     profile_offcut_correction: { icon: '✂️', color: '#f59e0b', label: 'Profile offcut corrected' },
+    open_container: { icon: '📦', color: '#fbbf24', label: 'Pack opened/closed' },
 };
 
 export const DEFAULT_ACTIVITY_META = { icon: '🔧', color: '#a855f7', label: 'Activity' };
@@ -24,6 +25,18 @@ export const activityMeta = (entityType) => ACTIVITY_META[entityType] || DEFAULT
  * inspects the session's actual lines and picks a badge that matches; every
  * other entity_type just falls back to the static activityMeta lookup. */
 export const activityMetaForItem = (item) => {
+    // open_container covers four very different acts (opening a pack, finishing
+    // it, undoing a premature close, or returning one opened by mistake) — the
+    // action, not the entity_type, is what a CEO actually needs to see.
+    if (item.entity_type === 'open_container') {
+        switch (item.action) {
+            case 'open': return { icon: '📦', color: '#4ade80', label: 'Pack opened' };
+            case 'close': return { icon: '✅', color: '#94a3b8', label: 'Pack finished' };
+            case 'cancel': return { icon: '↩️', color: '#f59e0b', label: 'Pack returned to stock' };
+            case 'reopen': return { icon: '🔄', color: '#f59e0b', label: 'Pack reopened' };
+            default: break;
+        }
+    }
     if (item.entity_type === 'stock_batch') {
         const lines = item.after_snapshot?.lines || [];
         const hasRestock = lines.some(l => l.type === 'restock');
@@ -90,6 +103,27 @@ export const summarizeActivity = (item) => {
         case 'offcut_correction':
         case 'profile_offcut_correction':
             return `Cutting event corrected on item #${after.item_id ?? '?'}, line ${(after.line_idx ?? 0) + 1}`;
+        case 'open_container': {
+            // Packs are the one stock event with no quantity to diff — what
+            // matters is what the pack was labelled, what came out of it, and
+            // whether anyone measured it. See openContainers/service._audit.
+            const name = [after.product_name, after.variant_name].filter(Boolean).join(' · ');
+            const suffix = name ? ` · ${name}` : '';
+            const unit = after.unit || '';
+            switch (item.action) {
+                case 'open':
+                    return `Opened 1 pack${after.nominal_quantity ? ` (labelled ${after.nominal_quantity}${unit})` : ''}${suffix}`;
+                case 'close':
+                    return `Finished after ${after.units_sold ?? 0}${unit} sold`
+                        + `${after.actual_quantity != null ? `, measured ${after.actual_quantity}${unit}` : ''}${suffix}`;
+                case 'cancel':
+                    return `Opened in error — pack returned to stock${suffix}`;
+                case 'reopen':
+                    return `Reopened — was closed early${suffix}`;
+                default:
+                    return name || null;
+            }
+        }
         default:
             return null;
     }

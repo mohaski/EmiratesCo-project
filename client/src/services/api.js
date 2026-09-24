@@ -530,6 +530,60 @@ export const StockSessionService = {
     },
 };
 
+export const OpenContainerService = {
+    // status: 'open' (default) | 'finished' | '' for all
+    list: async (status = 'open', productId = null) => {
+        const params = new URLSearchParams();
+        params.set('status', status ?? '');
+        if (productId) params.set('product_id', productId);
+        const response = await api.get(`/open-containers/?${params.toString()}`);
+        return response.data;
+    },
+    // Variants of open-container products that still have a sealed pack to break open.
+    listOpenable: async () => {
+        const response = await api.get('/open-containers/openable');
+        return response.data;
+    },
+    // Break open exactly one sealed pack -- this is when it leaves stock.
+    open: async (productId, variantId, notes = null) => {
+        const response = await api.post(`/open-containers/products/${productId}`, { variant_id: variantId, notes });
+        return response.data;
+    },
+    // The pack is physically empty. Nothing returns to stock (it left at open time).
+    close: async (containerId, { actualQuantity = null, notes = null } = {}) => {
+        const response = await api.post(`/open-containers/${containerId}/close`, {
+            actual_quantity: actualQuantity, notes,
+        });
+        return response.data;
+    },
+    reopen: async (containerId) => {
+        const response = await api.post(`/open-containers/${containerId}/reopen`);
+        return response.data;
+    },
+    // Opened in error -- returns the pack to sealed stock. Rejected by the
+    // backend once anything has been dispensed from it.
+    cancel: async (containerId) => {
+        const response = await api.delete(`/open-containers/${containerId}`);
+        return response.data;
+    },
+    // What packs of this variant have actually yielded, vs. what they claim to hold.
+    yieldHistory: async (variantId) => {
+        const response = await api.get(`/open-containers/yield/${variantId}`);
+        return response.data;
+    },
+    // CEO/admin only -- per-variant rollup of every pack ever opened.
+    utilization: async (productId = null) => {
+        const q = productId ? `?product_id=${productId}` : '';
+        const response = await api.get(`/open-containers/utilization${q}`);
+        return response.data;
+    },
+    // CEO/admin only -- the sales that drew from one specific pack.
+    usage: async (containerId) => {
+        const response = await api.get(`/open-containers/${containerId}/usage`);
+        return response.data;
+    },
+};
+
 export const FailoverService = {
     /** This machine's identity, peer reachability, last sync timestamps, and history. */
     getStatus: async () => {
@@ -556,6 +610,7 @@ api.messagingService = MessagingService;
 api.settingsService = SettingsService;
 api.toolService = ToolService;
 api.stockSessionService = StockSessionService;
+api.openContainerService = OpenContainerService;
 api.failoverService = FailoverService;
 
 export default api;

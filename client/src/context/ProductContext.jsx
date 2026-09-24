@@ -2,6 +2,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../services/api';
 import { wsEvents } from '../utils/wsEvents';
+import { computePoolKey } from '../utils/poolKey';
 import { useAuth } from './AuthContext';
 
 const ProductContext = createContext();
@@ -20,6 +21,12 @@ export const ProductProvider = ({ children }) => {
     const [categories, setCategories] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    // Packs currently broken open for dispensing, for products whose stock mode
+    // is 'open_container'. Loaded alongside products (and refreshed by the same
+    // 'products_updated' event) because the sales screen has to know whether a
+    // sub-pack sale is possible at all -- with nothing open there is no pack to
+    // sell out of. See server/entities/openContainers.py.
+    const [openContainers, setOpenContainers] = useState([]);
 
     // --- Helpers ---
     const mapCategories = (raw) => raw.map(c => ({
@@ -96,6 +103,11 @@ export const ProductProvider = ({ children }) => {
                 priceHalf: priceHalf,
                 priceFoot: priceFoot,
                 trackOffcuts: p.trackOffcuts || p.track_offcuts || false,
+                // 'counted' | 'open_container' -- when 'open_container', this
+                // product's `stock` counts whole SEALED packs and nothing below
+                // them is tracked; sub-pack sales need a manager-opened pack.
+                // See server/entities/openContainers.py.
+                unitStockMode: p.unit_stock_mode || 'counted',
                 unit,
                 stock: totalStock,
                 image: p.image_url || 'https://placehold.co/300x200/CCCCCC/FFFFFF?text=Product',
@@ -113,9 +125,12 @@ export const ProductProvider = ({ children }) => {
     const initializeData = useCallback(async () => {
         try {
             setLoading(true);
-            const [rawCats, rawProds] = await Promise.all([
+            const [rawCats, rawProds, rawOpen] = await Promise.all([
                 api.productService.getAllCategories(),
-                api.productService.getAll()
+                api.productService.getAll(),
+                // Non-fatal: an older backend without this endpoint, or a
+                // transient failure, must not take the whole product list down.
+                api.openContainerService.list('open').catch(() => []),
             ]);
 
             const mappedCats = mapCategories(rawCats);
@@ -123,6 +138,7 @@ export const ProductProvider = ({ children }) => {
 
             const mappedProds = mapProducts(rawProds, mappedCats);
             setProducts(mappedProds);
+            setOpenContainers(rawOpen || []);
             setError(null);
         } catch (err) {
             console.error("Failed to fetch product data", err);
@@ -134,13 +150,17 @@ export const ProductProvider = ({ children }) => {
 
     const refreshProducts = useCallback(async () => {
         try {
-            const raw = await api.productService.getAll();
+            const [raw, rawOpen] = await Promise.all([
+                api.productService.getAll(),
+                api.openContainerService.list('open').catch(() => []),
+            ]);
             // Pull fresh categories inside the setter to avoid stale closure
             setCategories(currentCats => {
                 const mapped = mapProducts(raw, currentCats);
                 setProducts(mapped);
                 return currentCats;
             });
+            setOpenContainers(rawOpen || []);
         } catch (err) {
             console.error("Failed to refresh products", err);
         }
@@ -191,6 +211,7 @@ export const ProductProvider = ({ children }) => {
                 category_id: dbCategoryId || 1,
                 sub_category: productData.subCategory,
                 trackOffcuts: productData.trackOffcuts || false,
+                unit_stock_mode: productData.unitStockMode || 'counted',
                 unit: productData.unit || 'ft',
                 applicable_attributes: productData.applicableAttributes || [],
                 has_dimensions: !!productData.hasDimensions,
@@ -241,6 +262,13 @@ export const ProductProvider = ({ children }) => {
                 trackOffcuts: updatedProduct.trackOffcuts,
                 unit: updatedProduct.unit,
             };
+            // Omitted entirely when the caller doesn't set it, so a caller that
+            // only wanted to rename can't disturb it. When present and actually
+            // different, the backend re-expresses every variant's stock between
+            // pieces and whole packs (products/service.py update_product); when
+            // present and unchanged it is a no-op, so echoing the current value
+            // back (as EditProductModal does) is safe.
+            if (updatedProduct.unitStockMode) payload.unit_stock_mode = updatedProduct.unitStockMode;
             if (updatedProduct.applicableAttributes) payload.applicable_attributes = updatedProduct.applicableAttributes;
             if (updatedProduct.defaultAttributes) payload.default_attributes = updatedProduct.defaultAttributes;
             if (updatedProduct.poolIgnoredAttributes !== undefined) payload.pool_ignored_attributes = updatedProduct.poolIgnoredAttributes;
@@ -355,6 +383,18 @@ export const ProductProvider = ({ children }) => {
         }
     }, [refreshProducts]);
 
+    // Whether a pack is currently broken open for `variant`'s pool, i.e. whether
+    // a sub-pack (pieces/metres) sale of it is possible at all. Matches the
+    // backend's lookup in inventoryService.find_open_container: same product,
+    // same pool key (utils/poolKey.js mirrors the server's rule).
+    const hasOpenPack = useCallback((product, variant, attributeTypesMap = {}) => {
+        if (!product || product.unitStockMode !== 'open_container') return true;
+        const poolKey = computePoolKey(
+            variant?.attributes, attributeTypesMap, product.poolIgnoredAttributes ?? null
+        );
+        return openContainers.some(c => c.product_id === product.id && c.pool_key === poolKey);
+    }, [openContainers]);
+
     const value = useMemo(() => ({
         products,
         categories,
@@ -370,8 +410,10 @@ export const ProductProvider = ({ children }) => {
         addProductOffcuts,
         updateProductVariant,
         deleteProductVariant,
+        openContainers,
+        hasOpenPack,
         refreshProducts: initializeData
-    }), [products, categories, loading, error, addProduct, deleteProduct, updateProduct, addCategory, addSubCategory, addProductVariant, addProductVariants, addProductOffcuts, updateProductVariant, deleteProductVariant, initializeData]);
+    }), [products, categories, loading, error, openContainers, hasOpenPack, addProduct, deleteProduct, updateProduct, addCategory, addSubCategory, addProductVariant, addProductVariants, addProductOffcuts, updateProductVariant, deleteProductVariant, initializeData]);
 
     return (
         <ProductContext.Provider value={value}>

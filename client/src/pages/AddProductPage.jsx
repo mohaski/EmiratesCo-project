@@ -56,7 +56,10 @@ export function AddProductTab() {
     const [newProductData, setNewProductData] = useState({
         name: '', itemCode: '', category: '', subCategory: '',
         image: null, applicableAttributes: ['Color'],
-        trackOffcuts: false, unit: 'ft',
+        // 'counted' = the pack size is exact and pieces are tracked;
+        // 'open_container' = the pack's contents vary or can't be counted, so
+        // only whole packs are tracked and a manager opens one to sell units.
+        trackOffcuts: false, unit: 'ft', unitStockMode: 'counted',
     });
     const [hasDimensions, setHasDimensions] = useState(false);
     const [dimensionValues, setDimensionValues] = useState([]); // [{ length, width }]
@@ -81,7 +84,7 @@ export function AddProductTab() {
 
     // For category === 'accessories': explicit choice between length-tracked (cut/offcuts,
     // e.g. rubber rolls) and count-tracked (sold as Box/Pcs, e.g. screws) items.
-    const [accessoryTrackingType, setAccessoryTrackingType] = useState(null); // 'length' | 'count' | null
+    const [accessoryTrackingType, setAccessoryTrackingType] = useState(null); // 'length' | 'count' | 'openpack' | null
 
     // Per-product values for "custom" attribute classes (e.g. Unit: Box / Pcs, or "1000pcs") —
     // entered per product instead of picked from a shared preset list. Keyed by attribute class
@@ -136,9 +139,17 @@ export function AddProductTab() {
     const currentCategory = mode === 'new' ? newProductData.category : (selectedExistingProduct?.category || '');
     const currentHasDimensions = mode === 'new' ? hasDimensions : !!(selectedExistingProduct?.hasDimensions);
     const currentTrackOffcuts = mode === 'new' ? newProductData.trackOffcuts : !!(selectedExistingProduct?.trackOffcuts);
+    // 'counted' | 'open_container' — see entities/products.py. Drives whether the
+    // Stock field below means pieces or whole packs.
+    const currentUnitStockMode = mode === 'new'
+        ? (newProductData.unitStockMode || 'counted')
+        : (selectedExistingProduct?.unitStockMode || 'counted');
     const currentAccessoryTrackingType = mode === 'new'
         ? accessoryTrackingType
-        : (currentCategory === 'accessories' ? (currentTrackOffcuts ? 'length' : 'count') : null);
+        : (currentCategory === 'accessories'
+            ? (currentTrackOffcuts ? 'length'
+                : (selectedExistingProduct?.unitStockMode === 'open_container' ? 'openpack' : 'count'))
+            : null);
 
     // Attributes that actually drive variant generation. For accessories, a built-in (list-type)
     // "Length" is excluded in favor of the free-form numeric field below — but a user-created
@@ -205,9 +216,13 @@ export function AddProductTab() {
         const fields = ['stock', 'priceFull'];
         if (currentTrackOffcuts) {
             fields.push('priceHalf', 'priceUnit');
-        } else if (currentCategory === 'accessories' && currentAccessoryTrackingType === 'count') {
+        } else if (currentCategory === 'accessories'
+                   && (currentAccessoryTrackingType === 'count' || currentAccessoryTrackingType === 'openpack')) {
             // Count-tracked accessories (Box/Pcs) still need a per-piece price, even though
             // they're not cut-to-length, so Price (Unit) isn't gated behind Track Offcuts here.
+            // Open-pack ones need it for the same reason and more urgently: without a
+            // per-unit price the sales screen won't offer the unit sale at all
+            // (AccessoryCalculator's canSellPcs), which is the only way they're sold.
             fields.push('priceUnit');
         }
         // Length-tracked accessories always need a per-variant length. If "Length" is itself a
@@ -305,7 +320,12 @@ export function AddProductTab() {
         // (trackOffcuts) variants and unpackaged ones are already in their own
         // natural unit (factor 1) — see the same rule applied to restock in
         // InventoryPage.jsx / ManageVariantsModal.jsx.
-        const packFactor = !currentTrackOffcuts && unitQuantity ? unitQuantity : 1;
+        // ...except for an open-pack product, whose stock_quantity IS whole packs —
+        // the entered number is already in the right unit, and multiplying by the
+        // (nominal, unreliable) pack size would inflate it. Same exemption as in
+        // InventoryPage.jsx / ManageVariantsModal.jsx.
+        const packFactor = (!currentTrackOffcuts && currentUnitStockMode !== 'open_container' && unitQuantity)
+            ? unitQuantity : 1;
         return {
             id: `v-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             name: generationKeys.length > 0 ? name : '',
@@ -377,7 +397,7 @@ export function AddProductTab() {
         setAccessoryTrackingType(null);
         // Sub-Category is independent — picking a Category never auto-selects one, so the user
         // always has to choose it deliberately.
-        setNewProductData(prev => ({ ...prev, category: cat, subCategory: '', applicableAttributes: defaults, trackOffcuts: false }));
+        setNewProductData(prev => ({ ...prev, category: cat, subCategory: '', applicableAttributes: defaults, trackOffcuts: false, unitStockMode: 'counted' }));
         setMatrixSelections({});
         setMatrixValues({});
     };
@@ -404,7 +424,11 @@ export function AddProductTab() {
 
     const handleMatrixValueChange = (variantName, field, value) => {
         setMatrixValues(prev => ({ ...prev, [variantName]: { ...(prev[variantName] || {}), [field]: value } }));
-        if (mode === 'new' && field === 'length' && newProductData.category === 'accessories') {
+        // Typing a per-variant length implies offcut tracking -- but NOT for an
+        // open-pack accessory, where a length is at most a nominal label and the
+        // whole point is that remainders aren't tracked.
+        if (mode === 'new' && field === 'length' && newProductData.category === 'accessories'
+            && accessoryTrackingType !== 'openpack') {
             const hasLength = !!value && value.trim() !== '';
             setNewProductData(prev => prev.trackOffcuts !== hasLength ? { ...prev, trackOffcuts: hasLength } : prev);
         }
@@ -585,7 +609,8 @@ export function AddProductTab() {
                 try {
                     await addProduct(finalProduct);
                     alert(`Product Created: ${newProductData.name}\n${variants.length} Variant(s) Generated.`);
-                    setNewProductData({ name: '', itemCode: '', category: '', subCategory: '', image: null, applicableAttributes: ['Color'], trackOffcuts: false, unit: 'ft' });
+                    setNewProductData({ name: '', itemCode: '', category: '', subCategory: '', image: null, applicableAttributes: ['Color'], trackOffcuts: false, unit: 'ft', unitStockMode: 'counted' });
+                    setAccessoryTrackingType(null);
                     setHasDimensions(false);
                     setMinUsable('2'); setAllowRotation(true); setPopularSizeRanges([]); setPopularRangeInput({ min_w: '', max_w: '', min_h: '', max_h: '' });
                     setMatrixSelections({}); setMatrixValues({}); setDimensionValues([]); setDimensionInput({ length: '', width: '', unit: '' });
@@ -712,14 +737,19 @@ export function AddProductTab() {
                                             {newProductData.category === 'accessories' ? (
                                                 <div style={{ paddingTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                                                     <label style={{ ...labelStyle, marginBottom: '0.5rem' }}>Tracked By</label>
-                                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                                         {[
-                                                            { val: 'length', icon: '📏', label: 'Length', hint: 'Cut to size — offcuts tracked (e.g. rubber roll)' },
-                                                            { val: 'count', icon: '🔢', label: 'Count', hint: 'Sold as Box / Pcs / units (e.g. screws)' },
+                                                            { val: 'length', icon: '📏', label: 'Length', hint: 'Cut to size — offcuts tracked. Only if every bar/roll is the SAME known length.' },
+                                                            { val: 'count', icon: '🔢', label: 'Exact Count', hint: 'A pack holds a known, exact number (e.g. sealed box of 1000 screws).' },
+                                                            { val: 'openpack', icon: '📦', label: 'Open Pack', hint: "Pack contents vary or can't be counted (roll lengths differ, box sold by kg)." },
                                                         ].map(opt => (
                                                             <button key={opt.val} type="button" onClick={() => {
                                                                 setAccessoryTrackingType(opt.val);
-                                                                setNewProductData(prev => ({ ...prev, trackOffcuts: opt.val === 'length' }));
+                                                                setNewProductData(prev => ({
+                                                                    ...prev,
+                                                                    trackOffcuts: opt.val === 'length',
+                                                                    unitStockMode: opt.val === 'openpack' ? 'open_container' : 'counted',
+                                                                }));
                                                             }} style={{
                                                                 flex: 1, padding: '0.625rem 0.75rem', borderRadius: '0.75rem', textAlign: 'left', cursor: 'pointer',
                                                                 border: `1px solid ${accessoryTrackingType === opt.val ? 'rgba(59,130,246,0.5)' : 'rgba(255,255,255,0.1)'}`,
@@ -736,6 +766,17 @@ export function AddProductTab() {
                                                     )}
                                                     {accessoryTrackingType === 'count' && (
                                                         <p style={{ fontSize: '0.65rem', color: '#475569', margin: '0.5rem 0 0' }}>Add a custom attribute (e.g. "Unit": Box / Pcs) below to distinguish sale units.</p>
+                                                    )}
+                                                    {accessoryTrackingType === 'openpack' && (
+                                                        <div style={{ marginTop: '0.5rem', padding: '0.625rem 0.75rem', borderRadius: '0.625rem', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)' }}>
+                                                            <p style={{ fontSize: '0.65rem', color: '#fbbf24', margin: 0, fontWeight: 700 }}>Stock will be counted in whole packs.</p>
+                                                            <p style={{ fontSize: '0.62rem', color: '#94a3b8', margin: '0.35rem 0 0', lineHeight: 1.55 }}>
+                                                                Enter stock as a number of rolls/boxes, not pieces. Nothing inside an opened pack is tracked,
+                                                                so a manager must open one (Stock Control → Open Stock) before it can be sold in {newProductData.unit || 'units'}.
+                                                                Still add a custom "Unit" attribute below with the pack's labelled size (e.g. "100m") — it is used
+                                                                for pricing and display only, and never treated as an exact quantity.
+                                                            </p>
+                                                        </div>
                                                     )}
                                                 </div>
                                             ) : (

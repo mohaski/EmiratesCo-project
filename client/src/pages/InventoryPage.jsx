@@ -6,6 +6,7 @@ import api from '../services/api';
 import AddStockModal from '../components/inventory/AddStockModal';
 import AddOffcutsModal from '../components/inventory/AddOffcutsModal';
 import StockSessionDetailModal from '../components/inventory/StockSessionDetailModal';
+import OpenStockModal from '../components/inventory/OpenStockModal';
 import { getCategoryAccent, hexToRgba, getProfileColorHex } from '../utils/colors';
 
 const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Brown', 'Grey', 'Matt Black'];
@@ -28,6 +29,10 @@ export default function InventoryPage() {
     const { user } = useAuth();
     const windowWidth = useWindowWidth();
     const isMobile = windowWidth < 768;
+    // On phones the page scrolls as one column: nesting the product list and the
+    // sidebar in their own fixed-height scrollers left each only a few rows tall.
+    const paneOverflow = isMobile ? 'visible' : 'hidden';
+    const paneScroll = isMobile ? 'visible' : 'auto';
     const showToast = useToast();
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('ke-profile');
@@ -52,6 +57,10 @@ export default function InventoryPage() {
     // CEO oversight: show every product's per-variant stock, not just the aggregate total.
     const canViewVariantBreakdown = user?.role === 'ceo';
     const canViewSessions = user?.role === 'ceo';
+    // Opening/closing a pack is a claim about the physical floor, so it matches
+    // the backend's own restriction in openContainers/controller.py.
+    const canManageOpenStock = ['manager', 'ceo', 'admin'].includes(user?.role);
+    const [openStockPanel, setOpenStockPanel] = useState(false);
     const [sidebarTab, setSidebarTab] = useState(canSubmitStock ? 'recent' : 'sessions');
     const [restockHistory, setRestockHistory] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -104,7 +113,10 @@ export default function InventoryPage() {
                     // here in the variant's own pack unit (e.g. boxes) instead, matching what
                     // a manager actually thinks in. Bar/sheet (trackOffcuts) variants and
                     // unpackaged ones are already in their own natural unit (factor 1).
-                    const factor = !p.trackOffcuts && v.unitQuantity ? v.unitQuantity : 1;
+                    // ...except in open-container mode, where `stock` is ALREADY
+                    // whole packs, so dividing again would under-report it.
+                    const factor = (!p.trackOffcuts && p.unitStockMode !== 'open_container' && v.unitQuantity)
+                        ? v.unitQuantity : 1;
                     const label = v.name || Object.values(v.attributes).join(' - ');
                     stockMap[label] = (v.stock || 0) / factor;
                     // Out-of-stock always alerts, even with no CEO-configured threshold (0 = unset);
@@ -146,7 +158,14 @@ export default function InventoryPage() {
     // How many pieces make up one of this variant's own pack units (e.g. 500 for
     // "500pcs") — 1 for an unpackaged variant or a bar/sheet (trackOffcuts) product,
     // matching the same rule the inventory mapping above and addLineToCart use.
-    const packagedFactor = !selectedProduct?.trackOffcuts && selectedRawVariant?.unitQuantity ? selectedRawVariant.unitQuantity : 1;
+    // An open-container product's stock is already counted in whole packs, and
+    // nothing below a pack is tracked at all, so a restock is always "N packs":
+    // no pack-size conversion, and no loose-pieces option to offer.
+    const packagedFactor = (
+        !selectedProduct?.trackOffcuts
+        && selectedProduct?.unitStockMode !== 'open_container'
+        && selectedRawVariant?.unitQuantity
+    ) ? selectedRawVariant.unitQuantity : 1;
     const canAddPcs = packagedFactor > 1;
     const effectiveRestockUnit = canAddPcs ? restockUnit : 'box';
 
@@ -174,7 +193,11 @@ export default function InventoryPage() {
             // loose delivery that doesn't fill a whole box) — the conversion factor
             // to pieces is captured now and sent alongside, since stock_quantity is
             // tracked in pieces server-side.
-            const boxFactor = !original.trackOffcuts && targetVariant.unitQuantity ? targetVariant.unitQuantity : 1;
+            // Open-container products are the exception: their stock_quantity is
+            // already whole packs and nothing below a pack is tracked, so there
+            // is no conversion to apply and no pcs mode to fall into.
+            const boxFactor = (!original.trackOffcuts && original.unitStockMode !== 'open_container' && targetVariant.unitQuantity)
+                ? targetVariant.unitQuantity : 1;
             const unit = boxFactor > 1 && restockUnit === 'pcs' ? 'pcs' : 'box';
             const factor = unit === 'pcs' ? 1 : boxFactor;
             const enteredUnit = unit === 'pcs' ? 'pcs' : (boxFactor > 1 ? selectedVariant : null);
@@ -254,7 +277,7 @@ export default function InventoryPage() {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--color-bg)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: isMobile ? 'auto' : '100%', minHeight: '100%', background: 'var(--color-bg)', overflow: paneOverflow }}>
 
             {/* Header */}
             <header style={{
@@ -263,43 +286,50 @@ export default function InventoryPage() {
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, flexWrap: 'wrap', gap: '0.75rem',
                 position: 'sticky', top: 0, zIndex: 20,
             }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '0.75rem' : '1rem', minWidth: 0, flex: '1 1 auto' }}>
                     <div style={{
-                        width: '40px', height: '40px', borderRadius: '10px',
+                        width: isMobile ? '34px' : '40px', height: isMobile ? '34px' : '40px', flexShrink: 0, borderRadius: '10px',
                         background: 'linear-gradient(135deg, rgba(59,130,246,0.2), rgba(6,182,212,0.15))',
                         border: '1px solid rgba(59,130,246,0.3)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem',
                     }}>📦</div>
-                    <div>
-                        <h1 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Stock Control</h1>
-                        <p style={{ fontSize: '0.72rem', color: '#475569', margin: 0, fontWeight: 500 }}>Manage inventory & restock items</p>
+                    <div style={{ minWidth: 0 }}>
+                        <h1 style={{ fontSize: isMobile ? '1rem' : '1.125rem', fontWeight: 800, color: '#f1f5f9', margin: 0, whiteSpace: 'nowrap' }}>Stock Control</h1>
+                        <p style={{ fontSize: '0.72rem', color: '#475569', margin: 0, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Manage inventory & restock items</p>
                     </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '0.75rem' : '1.25rem', flexShrink: 0 }}>
+                    <div className="sm-hide" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 8px rgba(34,197,94,0.7)' }} />
                         <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: 600 }}>System Online</span>
                     </div>
-                    <div style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.08)' }} />
+                    <div className="sm-hide" style={{ width: '1px', height: '16px', background: 'rgba(255,255,255,0.08)' }} />
+                    {canManageOpenStock && (
+                        <button onClick={() => setOpenStockPanel(true)} style={{
+                            padding: '0.4rem 0.75rem', borderRadius: '0.5rem', cursor: 'pointer',
+                            border: '1px solid rgba(251,191,36,0.35)', background: 'rgba(251,191,36,0.12)',
+                            color: '#fbbf24', fontWeight: 700, fontSize: '0.72rem', whiteSpace: 'nowrap',
+                        }}>✂️ Open Stock</button>
+                    )}
                     <span style={{ fontSize: '0.72rem', color: '#475569' }}>
                         Cart: <span style={{ color: '#f1f5f9', fontWeight: 700 }}>{cartItems.length}</span>
                     </span>
                 </div>
             </header>
 
-            <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: 'hidden' }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: paneOverflow, minHeight: 0 }}>
                 {/* Main content */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: isMobile ? '220px' : 'auto' }}>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: paneOverflow, minWidth: 0, minHeight: 0 }}>
                     {/* Filters */}
                     <div style={{ padding: 'clamp(1rem, 4vw, 1.25rem) clamp(1rem, 5vw, 2rem) 0.75rem', flexShrink: 0, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                         {/* Category tabs */}
-                        <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '0.75rem', padding: '4px', width: 'fit-content', maxWidth: '100%', overflowX: 'auto', marginBottom: '0.75rem' }} className="scrollbar-hide">
+                        <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '0.75rem', padding: '4px', width: 'fit-content', maxWidth: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch', marginBottom: '0.75rem' }} className="scrollbar-hide">
                             {CATEGORIES.map(cat => (
                                 <button key={cat.id} onClick={() => handleCategoryChange(cat.id)} style={{
-                                    padding: '0.5rem 1.25rem', borderRadius: '0.5rem', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                                    padding: isMobile ? '0.5rem 0.875rem' : '0.5rem 1.25rem', borderRadius: '0.5rem', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
                                     background: filterCategory === cat.id ? 'linear-gradient(135deg, #3b82f6, #06b6d4)' : 'transparent',
                                     color: filterCategory === cat.id ? '#fff' : '#64748b',
-                                    fontWeight: 700, fontSize: '0.8rem', transition: 'all 0.2s',
+                                    fontWeight: 700, fontSize: isMobile ? '0.75rem' : '0.8rem', transition: 'all 0.2s',
                                 }}>{cat.label}</button>
                             ))}
                         </div>
@@ -336,7 +366,7 @@ export default function InventoryPage() {
                     </div>
 
                     {/* Product list */}
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '1rem clamp(1rem, 5vw, 2rem)' }} className="custom-scrollbar">
+                    <div style={{ flex: 1, minHeight: 0, overflowY: paneScroll, padding: '1rem clamp(1rem, 5vw, 2rem)' }} className="custom-scrollbar">
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                             {filteredInventory.map(item => {
                                 const total = getTotalStock(item);
@@ -346,7 +376,7 @@ export default function InventoryPage() {
                                 return (
                                     <div key={item.id} style={{
                                         display: 'flex', flexDirection: 'column', gap: '0.75rem',
-                                        padding: '1rem 1.25rem',
+                                        padding: isMobile ? '0.875rem 1rem' : '1rem 1.25rem',
                                         background: 'linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))',
                                         border: '1px solid rgba(255,255,255,0.08)',
                                         borderRadius: '0.875rem', transition: 'all 0.2s',
@@ -354,13 +384,16 @@ export default function InventoryPage() {
                                     onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(59,130,246,0.25)'; e.currentTarget.style.background = 'linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03))'; }}
                                     onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; e.currentTarget.style.background = 'linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))'; }}
                                     >
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: '1 1 200px', minWidth: 0 }}>
-                                            <div className="product-tile" style={{ width: '52px', height: '52px', flexShrink: 0, borderRadius: '10px', background: hexToRgba(accent, 0.1), border: `1px solid ${hexToRgba(accent, 0.25)}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: isMobile ? '0.75rem' : '1rem', flexWrap: 'wrap' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? '0.75rem' : '1rem', flex: '1 1 200px', minWidth: 0 }}>
+                                            <div className="product-tile" style={{ width: isMobile ? '42px' : '52px', height: isMobile ? '42px' : '52px', flexShrink: 0, borderRadius: '10px', background: hexToRgba(accent, 0.1), border: `1px solid ${hexToRgba(accent, 0.25)}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                                 <span style={{ position: 'relative', zIndex: 1, fontSize: '1.1rem', fontWeight: 800, color: accent }}>{initial}</span>
                                             </div>
                                             <div style={{ minWidth: 0 }}>
-                                                <h3 style={{ fontSize: '0.9rem', fontWeight: 800, color: '#e2e8f0', margin: '0 0 0.25rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</h3>
+                                                <h3 style={{
+                                                    fontSize: '0.9rem', fontWeight: 800, color: '#e2e8f0', margin: '0 0 0.25rem', overflow: 'hidden',
+                                                    textOverflow: 'ellipsis', whiteSpace: isMobile ? 'normal' : 'nowrap', lineHeight: 1.25, overflowWrap: 'anywhere',
+                                                }}>{item.name}</h3>
                                                 <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', alignItems: 'center' }}>
                                                     <span style={{ fontSize: '0.65rem', fontWeight: 700, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: '#64748b', borderRadius: '4px', padding: '1px 7px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                                                         {CATEGORIES.find(c => c.id === item.category)?.label}
@@ -374,16 +407,19 @@ export default function InventoryPage() {
                                             </div>
                                         </div>
 
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
-                                            <div style={{ textAlign: 'right' }}>
+                                        <div style={{
+                                            display: 'flex', alignItems: 'center', gap: isMobile ? '0.625rem' : '1.5rem', flexWrap: 'wrap',
+                                            width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'space-between' : 'flex-end',
+                                        }}>
+                                            <div style={{ textAlign: isMobile ? 'left' : 'right', flexShrink: 0 }}>
                                                 <div style={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '2px' }}>Total Stock</div>
-                                                <div style={{ fontSize: '1.5rem', fontWeight: 900, color: '#f1f5f9', fontFamily: 'var(--font-mono)', letterSpacing: '-0.02em' }}>{total}</div>
+                                                <div style={{ fontSize: isMobile ? '1.25rem' : '1.5rem', fontWeight: 900, color: '#f1f5f9', fontFamily: 'var(--font-mono)', letterSpacing: '-0.02em' }}>{total}</div>
                                             </div>
                                             {canAddOffcuts && item.trackOffcuts && item.variants?.length > 0 && (
                                                 <button onClick={() => setOffcutsProduct(item)} style={{
-                                                    padding: '0.625rem 1.125rem', borderRadius: '0.75rem', border: '1px solid rgba(6,182,212,0.3)', cursor: 'pointer',
-                                                    background: 'rgba(6,182,212,0.1)',
-                                                    color: '#22d3ee', fontWeight: 800, fontSize: '0.8rem', transition: 'all 0.2s',
+                                                    padding: isMobile ? '0.5rem 0.875rem' : '0.625rem 1.125rem', borderRadius: '0.75rem', border: '1px solid rgba(6,182,212,0.3)', cursor: 'pointer',
+                                                    background: 'rgba(6,182,212,0.1)', flex: isMobile ? '1 1 120px' : '0 0 auto', whiteSpace: 'nowrap',
+                                                    color: '#22d3ee', fontWeight: 800, fontSize: isMobile ? '0.75rem' : '0.8rem', transition: 'all 0.2s',
                                                 }}
                                                 onMouseEnter={e => { e.currentTarget.style.background = 'rgba(6,182,212,0.18)'; }}
                                                 onMouseLeave={e => { e.currentTarget.style.background = 'rgba(6,182,212,0.1)'; }}
@@ -391,9 +427,10 @@ export default function InventoryPage() {
                                             )}
                                             {canSubmitStock && (
                                                 <button onClick={() => handleAddStockClick(item)} style={{
-                                                    padding: '0.625rem 1.25rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
+                                                    padding: isMobile ? '0.5rem 0.875rem' : '0.625rem 1.25rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
                                                     background: 'linear-gradient(135deg, #3b82f6, #06b6d4)',
-                                                    color: '#fff', fontWeight: 800, fontSize: '0.8rem',
+                                                    flex: isMobile ? '1 1 110px' : '0 0 auto', whiteSpace: 'nowrap',
+                                                    color: '#fff', fontWeight: 800, fontSize: isMobile ? '0.75rem' : '0.8rem',
                                                     boxShadow: '0 4px 16px rgba(59,130,246,0.3)', transition: 'all 0.2s',
                                                 }}
                                                 onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 20px rgba(59,130,246,0.4)'; }}
@@ -407,7 +444,7 @@ export default function InventoryPage() {
                                             <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#334155', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.4rem' }}>
                                                 Stock by Variant
                                             </div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))', gap: '0.4rem' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(148px, 100%), 1fr))', gap: '0.4rem' }}>
                                                 {Object.entries(item.stockVariants).map(([variantLabel, qty]) => {
                                                     const isLow = !!item.stockVariantAlarms?.[variantLabel];
                                                     const isOut = qty <= 0;
@@ -458,19 +495,19 @@ export default function InventoryPage() {
 
                 {/* Right sidebar */}
                 <div style={{
-                    width: isMobile ? '100%' : '300px', flexShrink: 0,
+                    width: isMobile ? '100%' : 'clamp(280px, 24vw, 340px)', flexShrink: 0,
                     borderLeft: isMobile ? 'none' : '1px solid rgba(255,255,255,0.07)',
                     borderTop: isMobile ? '1px solid rgba(255,255,255,0.07)' : 'none',
                     background: 'rgba(0,0,0,0.2)',
                     display: 'flex', flexDirection: 'column',
-                    padding: '1.25rem',
-                    maxHeight: isMobile ? '48vh' : 'none',
+                    padding: isMobile ? '1rem' : '1.25rem',
+                    overflow: paneOverflow, minHeight: 0,
                 }}>
                     {/* Tab toggle */}
                     <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '0.625rem', padding: '3px', marginBottom: '1rem' }}>
                         {canSubmitStock && (
                             <button onClick={() => setSidebarTab('recent')} style={{
-                                flex: 1, padding: '0.375rem 0', borderRadius: '0.4rem', border: 'none', cursor: 'pointer',
+                                flex: 1, minWidth: 0, padding: '0.375rem 0.25rem', borderRadius: '0.4rem', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
                                 background: sidebarTab === 'recent' ? 'rgba(255,255,255,0.09)' : 'transparent',
                                 color: sidebarTab === 'recent' ? '#e2e8f0' : '#475569',
                                 fontWeight: 700, fontSize: '0.72rem', transition: 'all 0.15s',
@@ -478,7 +515,7 @@ export default function InventoryPage() {
                         )}
                         {canViewSessions && (
                             <button onClick={() => setSidebarTab('sessions')} style={{
-                                flex: 1, padding: '0.375rem 0', borderRadius: '0.4rem', border: 'none', cursor: 'pointer',
+                                flex: 1, minWidth: 0, padding: '0.375rem 0.25rem', borderRadius: '0.4rem', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
                                 background: sidebarTab === 'sessions' ? 'rgba(59,130,246,0.15)' : 'transparent',
                                 color: sidebarTab === 'sessions' ? '#60a5fa' : '#475569',
                                 fontWeight: 700, fontSize: '0.72rem', transition: 'all 0.15s',
@@ -486,7 +523,7 @@ export default function InventoryPage() {
                         )}
                         {canViewHistory && (
                             <button onClick={() => setSidebarTab('history')} style={{
-                                flex: 1, padding: '0.375rem 0', borderRadius: '0.4rem', border: 'none', cursor: 'pointer',
+                                flex: 1, minWidth: 0, padding: '0.375rem 0.25rem', borderRadius: '0.4rem', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
                                 background: sidebarTab === 'history' ? 'rgba(59,130,246,0.15)' : 'transparent',
                                 color: sidebarTab === 'history' ? '#60a5fa' : '#475569',
                                 fontWeight: 700, fontSize: '0.72rem', transition: 'all 0.15s',
@@ -495,8 +532,8 @@ export default function InventoryPage() {
                     </div>
 
                     {sidebarTab === 'recent' ? (
-                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
+                        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: paneOverflow }}>
+                            <div style={{ flex: 1, minHeight: 0, overflowY: paneScroll, display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
                                 {cartItems.length === 0 ? (
                                     <p style={{ fontSize: '0.78rem', color: '#334155', textAlign: 'center', marginTop: '2rem', fontStyle: 'italic' }}>No lines added yet</p>
                                 ) : cartItems.map(item => (
@@ -542,7 +579,7 @@ export default function InventoryPage() {
                             }}>{finalizing ? 'Finalizing…' : `Finalize Session ${cartItems.length > 0 ? `(${cartItems.length})` : ''}`}</button>
                         </div>
                     ) : sidebarTab === 'sessions' ? (
-                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: 'hidden' }}>
+                        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: paneOverflow }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
                                 <span style={{ fontSize: '0.65rem', color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                                     {sessions.length} sessions
@@ -557,7 +594,7 @@ export default function InventoryPage() {
                             ) : sessions.length === 0 ? (
                                 <p style={{ fontSize: '0.78rem', color: '#334155', textAlign: 'center', marginTop: '2rem', fontStyle: 'italic' }}>No stock sessions yet</p>
                             ) : (
-                                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
+                                <div style={{ flex: 1, minHeight: 0, overflowY: paneScroll, display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
                                     {sessions.map(s => {
                                         const date = new Date(s.created_at);
                                         return (
@@ -572,7 +609,7 @@ export default function InventoryPage() {
                                                         background: 'rgba(59,130,246,0.1)', borderRadius: '100px', padding: '1px 7px',
                                                     }}>{s.item_count} line{s.item_count === 1 ? '' : 's'}</span>
                                                 </div>
-                                                <div style={{ fontSize: '0.65rem', color: '#64748b', display: 'flex', justifyContent: 'space-between' }}>
+                                                <div style={{ fontSize: '0.65rem', color: '#64748b', display: 'flex', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
                                                     <span>{s.created_by}</span>
                                                     <span style={{ fontFamily: 'var(--font-mono)' }}>{date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                                 </div>
@@ -583,7 +620,7 @@ export default function InventoryPage() {
                             )}
                         </div>
                     ) : (
-                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: 'hidden' }}>
+                        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '0.5rem', overflow: paneOverflow }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
                                 <span style={{ fontSize: '0.65rem', color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                                     {restockHistory.length} entries
@@ -598,7 +635,7 @@ export default function InventoryPage() {
                             ) : restockHistory.length === 0 ? (
                                 <p style={{ fontSize: '0.78rem', color: '#334155', textAlign: 'center', marginTop: '2rem', fontStyle: 'italic' }}>No restock records yet</p>
                             ) : (
-                                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
+                                <div style={{ flex: 1, minHeight: 0, overflowY: paneScroll, display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
                                     {restockHistory.map(h => {
                                         const isAdd = h.qty_added > 0;
                                         const date = new Date(h.added_at);
@@ -609,7 +646,7 @@ export default function InventoryPage() {
                                                 border: `1px solid ${isAdd ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
                                             }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.375rem' }}>
-                                                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#e2e8f0', flex: 1, marginRight: '0.5rem', lineHeight: 1.3 }}>
+                                                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#e2e8f0', flex: 1, minWidth: 0, marginRight: '0.5rem', lineHeight: 1.3, overflowWrap: 'anywhere' }}>
                                                         {h.product_name}{h.variant_name ? ` · ${h.variant_name}` : ''}
                                                     </span>
                                                     <span style={{
@@ -621,7 +658,7 @@ export default function InventoryPage() {
                                                         {isAdd ? '+' : ''}{h.qty_added}
                                                     </span>
                                                 </div>
-                                                <div style={{ fontSize: '0.65rem', color: '#64748b', display: 'flex', justifyContent: 'space-between' }}>
+                                                <div style={{ fontSize: '0.65rem', color: '#64748b', display: 'flex', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
                                                     <span>{h.stock_before} → {h.stock_after}</span>
                                                     <span style={{ color: '#475569' }}>{h.added_by}</span>
                                                 </div>
@@ -655,6 +692,7 @@ export default function InventoryPage() {
                 isOpen={!!openSession} onClose={() => setOpenSession(null)}
                 session={openSession} onCorrected={() => openSessionDetail(openSession.id)}
             />
+            {openStockPanel && <OpenStockModal onClose={() => setOpenStockPanel(false)} />}
         </div>
     );
 }

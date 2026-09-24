@@ -109,7 +109,12 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     // below is entered in the variant's own pack unit (e.g. boxes), same as
     // before, so convert to pieces before sending. Bar/sheet (trackOffcuts) and
     // unpackaged variants are already in their own natural unit (factor 1).
-    const packFactor = v => (!product.trackOffcuts && v.unitQuantity ? v.unitQuantity : 1);
+    // An open-container product is exempt: its stock is already counted in whole
+    // packs, so an adjustment of "2" means two packs and needs no conversion.
+    const packFactor = v => (
+        (!product.trackOffcuts && product.unitStockMode !== 'open_container' && v.unitQuantity)
+            ? v.unitQuantity : 1
+    );
 
     const handleSaveEdit = async originalVariant => {
         setSaving(true);

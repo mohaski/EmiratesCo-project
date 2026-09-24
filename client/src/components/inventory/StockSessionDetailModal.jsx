@@ -98,7 +98,7 @@ export default function StockSessionDetailModal({ isOpen, onClose, session, onCo
             background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(10px)',
         }} onClick={onClose}>
             <div onClick={e => e.stopPropagation()} style={{
-                width: '100%', maxWidth: '640px', maxHeight: '88vh',
+                width: '100%', maxWidth: '640px', maxHeight: 'min(88vh, calc(100dvh - 2rem))',
                 background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
                 border: '1px solid rgba(255,255,255,0.1)', borderRadius: '1.5rem', overflow: 'hidden',
                 boxShadow: '0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(59,130,246,0.1)',
@@ -131,11 +131,11 @@ export default function StockSessionDetailModal({ isOpen, onClose, session, onCo
                             const isEditing = editingItemId === item.id;
                             return (
                                 <div key={item.id} style={{
-                                    padding: '0.875rem 1rem', borderRadius: '0.875rem',
+                                    padding: '0.875rem', borderRadius: '0.875rem',
                                     background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
                                 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                        <div style={{ minWidth: 0 }}>
+                                        <div style={{ minWidth: 0, flex: '1 1 150px', overflowWrap: 'anywhere' }}>
                                             <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#e2e8f0' }}>
                                                 {item.product_name}{item.variant_name ? ` · ${item.variant_name}` : ''}
                                             </div>
@@ -209,7 +209,7 @@ export default function StockSessionDetailModal({ isOpen, onClose, session, onCo
                                                 )}
                                             </div>
                                         ) : isEditing ? (
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexShrink: 0 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', flexShrink: 0, flexWrap: 'wrap' }}>
                                                 <input type="number" step="0.01" min="0" autoFocus value={editValue}
                                                     onChange={e => setEditValue(e.target.value)}
                                                     style={{ ...rowInput, width: '80px' }} />

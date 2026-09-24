@@ -909,3 +909,15 @@ input, select, textarea {
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+/* ── Stock Control: oversized numeric fields ── */
+/* The global mobile rule above forces every input to 16px to stop iOS zooming
+   on focus. That only matters for fonts *under* 16px, so opt the big restock
+   quantity display back out of it. */
+@media (max-width: 767px) {
+  .qty-input-lg {
+    font-size: 2rem !important;
+    padding-left: 3rem !important;
+    padding-right: 3rem !important;
+  }
+}

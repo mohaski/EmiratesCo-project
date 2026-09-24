@@ -5,7 +5,7 @@ import { useAttributes } from '../../context/AttributeContext';
 export default function EditProductModal({ isOpen, onClose, product }) {
     const { updateProduct } = useProducts();
     const { attributeClasses } = useAttributes();
-    const [form, setForm] = useState({ name: '', trackOffcuts: false, unit: 'ft' });
+    const [form, setForm] = useState({ name: '', trackOffcuts: false, unit: 'ft', unitStockMode: 'counted' });
     // { [attributeKey]: boolean } — whether that attribute is ignored when pooling
     // offcuts/stock across variants (see core/inventory/poolKey.py). Lets the CEO
     // fix a pooling choice that was missed/wrong when the product or attribute was
@@ -30,6 +30,7 @@ export default function EditProductModal({ isOpen, onClose, product }) {
             name: product.name || '',
             trackOffcuts: product.trackOffcuts || false,
             unit: product.unit || 'ft',
+            unitStockMode: product.unitStockMode || 'counted',
         });
         // Seed each toggle from the product's explicit pool_ignored_attributes if it
         // has one, otherwise from the automatic rule (Dimensions + custom-typed
@@ -48,7 +49,25 @@ export default function EditProductModal({ isOpen, onClose, product }) {
     const handleSave = () => {
         if (!product) return;
         const poolIgnoredAttributes = poolableKeys.filter(k => poolIgnored[k]);
-        const payload = { ...product, name: form.name, trackOffcuts: form.trackOffcuts, unit: form.unit, poolIgnoredAttributes };
+        const payload = {
+            ...product, name: form.name, trackOffcuts: form.trackOffcuts, unit: form.unit,
+            unitStockMode: form.unitStockMode, poolIgnoredAttributes,
+        };
+        // Changing this re-expresses every variant's stock between pieces and
+        // whole packs server-side (products/service.py update_product), so it is
+        // worth one explicit confirmation -- the numbers on screen will change.
+        if ((product.unitStockMode || 'counted') !== form.unitStockMode) {
+            const toPacks = form.unitStockMode === 'open_container';
+            const ok = window.confirm(
+                (toPacks
+                    ? 'Switch to open-pack tracking?\n\nStock for this product will be converted from pieces to WHOLE PACKS, '
+                      + 'and any leftover pieces become an already-open pack. From then on, selling in units needs a manager to open one.'
+                    : 'Switch back to exact-count tracking?\n\nStock will be converted from whole packs back to pieces using the labelled pack size, '
+                      + 'and anything currently open will be closed. That pack size is an estimate, so the resulting piece count is approximate.')
+                + '\n\nContinue?'
+            );
+            if (!ok) return;
+        }
         updateProduct(payload);
         onClose();
     };
@@ -120,6 +139,27 @@ export default function EditProductModal({ isOpen, onClose, product }) {
                             <div style={{ fontSize: '0.68rem', color: '#64748b' }}>Enable best-fit cut & offcut remainder logic</div>
                         </div>
                     </div>
+
+                    {!form.trackOffcuts && (
+                        <div>
+                            <label style={labelStyle}>Unit Stock Tracking</label>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {[
+                                    { val: 'counted', title: 'Exact count per pack', hint: 'A pack holds a known, exact number. Stock is tracked in pieces.' },
+                                    { val: 'open_container', title: 'Open pack (varies)', hint: "Pack contents vary or can't be counted. Stock is tracked in whole packs; a manager opens one to sell units." },
+                                ].map(opt => (
+                                    <div key={opt.val} onClick={() => set('unitStockMode', opt.val)} style={{
+                                        padding: '0.625rem 0.75rem', borderRadius: '0.625rem', cursor: 'pointer', transition: 'all 0.15s',
+                                        background: form.unitStockMode === opt.val ? 'rgba(59,130,246,0.12)' : 'rgba(255,255,255,0.03)',
+                                        border: `1px solid ${form.unitStockMode === opt.val ? 'rgba(59,130,246,0.45)' : 'rgba(255,255,255,0.07)'}`,
+                                    }}>
+                                        <div style={{ fontSize: '0.78rem', fontWeight: 700, color: form.unitStockMode === opt.val ? '#60a5fa' : '#94a3b8' }}>{opt.title}</div>
+                                        <div style={{ fontSize: '0.64rem', color: '#475569', marginTop: '2px', lineHeight: 1.5 }}>{opt.hint}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     {poolableKeys.length > 0 && (
                         <div>

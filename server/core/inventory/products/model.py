@@ -112,6 +112,10 @@ class ProductCreate(BaseModel):
     trackOffcuts: bool = False
     alarm_quantity: int = 0
     unit: str = "ft"
+    # 'counted' | 'open_container' -- see entities/products.py. Only meaningful
+    # for trackOffcuts=False accessories: 'open_container' stops counting
+    # anything below a whole pack, because the pack's real contents vary.
+    unit_stock_mode: str = "counted"
 
     applicable_attributes: List[str] = []
     has_dimensions: bool = False
@@ -138,6 +142,10 @@ class ProductUpdateRequest(BaseModel):
     trackOffcuts: Optional[bool] = None
     alarm_quantity: Optional[int] = None
     unit: Optional[str] = None
+    # 'counted' | 'open_container' -- see entities/products.py. Only meaningful
+    # for trackOffcuts=False accessories: 'open_container' stops counting
+    # anything below a whole pack, because the pack's real contents vary.
+    unit_stock_mode: Optional[str] = None
 
     applicable_attributes: Optional[List[str]] = None
     has_dimensions: Optional[bool] = None
@@ -165,6 +173,7 @@ class ProductResponse(BaseModel):
 
     track_offcuts: bool = False
     unit: str = "ft"
+    unit_stock_mode: str = "counted"
 
     applicable_attributes: List[str] = []
     has_dimensions: bool = False

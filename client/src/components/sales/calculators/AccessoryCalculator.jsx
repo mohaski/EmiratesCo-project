@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import { useAttributes } from '../../../context/AttributeContext';
+import { useProducts } from '../../../context/ProductContext';
 import { poolSiblings } from '../../../utils/poolKey';
 
 const inputStyle = {
@@ -14,6 +15,14 @@ const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', let
 const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const hasVariants = product.variants && product.variants.length > 0;
     const { attributeClasses } = useAttributes();
+    const { hasOpenPack } = useProducts();
+    // When true, this product's `stock` counts whole SEALED packs and nothing
+    // inside an opened one is tracked -- a pack's real contents vary too much
+    // to count (rubber rolls run long or short, screw boxes are bought by
+    // weight). A sub-pack sale therefore isn't limited by a quantity at all;
+    // it's limited by whether a manager has a pack open. See
+    // server/entities/openContainers.py.
+    const openContainerMode = product.unitStockMode === 'open_container';
     const attributeTypesMap = useMemo(() => {
         const m = {};
         attributeClasses.forEach(c => { m[c.name] = c.type; });
@@ -140,8 +149,19 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                 if (effectiveSaleUnit === 'pcs') {
                     const price = activeItem.priceUnit || 0;
                     total = qty * price;
-                    const availablePcs = pooledPieces;
-                    if (qty > availablePcs) { finalError = `Only ${availablePcs} pcs available`; isValid = false; }
+                    if (openContainerMode) {
+                        // No quantity to check: what's left inside an opened
+                        // pack is deliberately untracked, so the only thing that
+                        // can block this sale is nothing being open. Matches the
+                        // backend's one check in _dispense_from_open_container.
+                        if (!hasOpenPack(product, hasVariants ? selectedVariant : null, attributeTypesMap)) {
+                            finalError = `No open ${product.unit === 'pcs' ? 'box' : 'pack'} — a manager must open one first`;
+                            isValid = false;
+                        }
+                    } else {
+                        const availablePcs = pooledPieces;
+                        if (qty > availablePcs) { finalError = `Only ${availablePcs} pcs available`; isValid = false; }
+                    }
                     lineItems.push({ type: 'accessory-pcs', label: 'Pieces', qty, rate: price, total, meta: { unit: 'pcs', unitQuantity: activeItem.unitQuantity } });
                 } else {
                     // Box/pack sale: the customer gets actual sealed boxes of THIS
@@ -153,7 +173,11 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                     // docstring for why a piece sale is different.
                     const price = activeItem.price || activeItem.priceFull || 0;
                     total = qty * price;
-                    const availableOwnUnit = stock / (activeItem.unitQuantity || 1);
+                    // In open-container mode `stock` already counts whole packs,
+                    // so dividing by the (nominal, unreliable) pack size would
+                    // wrongly shrink what's available -- see the backend's
+                    // matching _pieces_per_pack_unit.
+                    const availableOwnUnit = openContainerMode ? stock : stock / (activeItem.unitQuantity || 1);
                     // "boxes" only when this variant is actually packaged (a real box of N
                     // pcs, canSellPcs) — an unpackaged variant's own unit (e.g. "pcs") is the
                     // whole sale unit, not a box, same distinction the price label below makes.
@@ -165,7 +189,7 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
             onUpdate(total, { lineItems, attributes: attributesDetail, qty, salesMode, saleUnit: effectiveSaleUnit, selectedRoll, variantId: activeItem.variantId || activeItem.id, isValid, warning: finalError });
         }
         setError(finalError);
-    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, saleUnit, selectedRoll, hasRollOption, onUpdate, attributeTypesMap]);
+    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, saleUnit, selectedRoll, hasRollOption, onUpdate, attributeTypesMap, openContainerMode, hasOpenPack]);
 
     const handleVariantSelect = (key, val) => setSelections(prev => ({ ...prev, [key]: val }));
     const activeItem = selectedVariant || product;
@@ -179,6 +203,7 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
         ? [selectedVariant, ...poolSiblings(product.variants, selectedVariant, attributeTypesMap, product.poolIgnoredAttributes)]
         : [activeItem];
     const displayPooledPieces = displayPoolMembers.reduce((sum, v) => sum + (v.stock || 0), 0);
+    const packIsOpen = openContainerMode && hasOpenPack(product, hasVariants ? selectedVariant : null, attributeTypesMap);
 
     const chipBtn = (active) => ({
         padding: '0.3rem 0.875rem', borderRadius: '100px', fontSize: '0.72rem', fontWeight: 700,
@@ -278,9 +303,20 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                             ? `KSH${activeItem.priceUnit || 0} per pc`
                             : `KSH${activeItem.price || activeItem.priceFull || 0} per ${canSellPcs ? 'box' : (activeItem.unit || 'unit')}`}
                     </p>
-                    {canSellPcs && (
+                    {canSellPcs && !openContainerMode && (
                         <p style={{ fontSize: '0.68rem', color: '#475569', marginTop: '0.25rem' }}>
                             1 Box = {activeItem.unitQuantity} pcs · {displayPooledPieces.toLocaleString()} pcs available
+                        </p>
+                    )}
+                    {openContainerMode && (
+                        /* Deliberately NOT a piece count: in this mode nothing
+                           below a pack is tracked, so any figure here would be
+                           a guess presented as fact. Show only what is known --
+                           sealed packs on the shelf, and whether one is open. */
+                        <p style={{ fontSize: '0.68rem', color: '#475569', marginTop: '0.25rem' }}>
+                            {(activeItem.stock || 0).toLocaleString()} sealed {activeItem.unitQuantity > 1 ? 'pack(s)' : 'unit(s)'} · {packIsOpen
+                                ? <span style={{ color: '#4ade80', fontWeight: 700 }}>1 open for {product.unit || 'units'}</span>
+                                : <span style={{ color: '#fbbf24', fontWeight: 700 }}>none open</span>}
                         </p>
                     )}
                     {hasRollOption && <p style={{ fontSize: '0.68rem', color: '#475569', marginTop: '0.25rem' }}>Roll Length: {product.rollLength}m</p>}

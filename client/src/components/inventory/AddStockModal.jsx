@@ -24,7 +24,7 @@ const AddStockModal = ({
             background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(10px)',
         }}>
             <div style={{
-                width: '100%', maxWidth: '480px', maxHeight: 'min(680px, 90vh)',
+                width: '100%', maxWidth: '480px', maxHeight: 'min(680px, calc(100dvh - 2rem))',
                 background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
                 border: '1px solid rgba(255,255,255,0.1)',
                 borderRadius: '1.5rem', overflow: 'hidden',
@@ -94,7 +94,8 @@ const AddStockModal = ({
                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                             }}>−</button>
                             <input type="number" autoFocus placeholder="0" value={stockToAdd} onChange={e => onStockChange(e.target.value)} onKeyDown={e => e.key === 'Enter' && onConfirm()}
-                                style={{ ...darkInput, width: '100%', textAlign: 'center', fontSize: '2.5rem', fontWeight: 900, padding: '1rem 3.5rem', boxSizing: 'border-box' }}
+                                className="qty-input-lg"
+                                style={{ ...darkInput, width: '100%', textAlign: 'center', fontSize: '2.5rem', fontWeight: 900, padding: '1rem 3.25rem', boxSizing: 'border-box' }}
                                 onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
                                 onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
                             />
@@ -120,16 +121,16 @@ const AddStockModal = ({
                 </div>
 
                 {/* Footer */}
-                <div className="modal-footer-pad" style={{ padding: '0 2rem 1.5rem', display: 'flex', gap: '0.75rem', flexShrink: 0 }}>
+                <div className="modal-footer-pad" style={{ padding: '0 2rem 1.5rem', display: 'flex', gap: '0.75rem', flexShrink: 0, flexWrap: 'wrap' }}>
                     <button onClick={onClose} style={{
-                        flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.08)',
+                        flex: '1 1 130px', padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.08)',
                         background: 'transparent', color: '#64748b', fontWeight: 700, cursor: 'pointer', transition: 'all 0.15s', fontSize: '0.875rem',
                     }}
                     onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
                     onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                     >Cancel</button>
                     <button onClick={onConfirm} disabled={!stockToAdd || parseInt(stockToAdd) <= 0} style={{
-                        flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: 'none', cursor: 'pointer',
+                        flex: '1 1 160px', padding: '0.875rem', borderRadius: '0.875rem', border: 'none', cursor: 'pointer',
                         background: !stockToAdd || parseInt(stockToAdd) <= 0 ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
                         color: !stockToAdd || parseInt(stockToAdd) <= 0 ? '#334155' : '#fff',
                         fontWeight: 800, fontSize: '0.875rem',

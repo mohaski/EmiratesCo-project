@@ -18,6 +18,7 @@ from core.ordering.controller import router as ordering_router
 from core.inventory.products.controller import router as products_router
 from core.inventory.attributes.controller import router as attributes_router
 from core.inventory.stockSessions.controller import router as stock_sessions_router
+from core.inventory.openContainers.controller import router as open_containers_router
 from core.financials.controller import router as financials_router
 from core.userManagement.controller import router as users_router
 from core.messaging.controller import router as messaging_router
@@ -111,6 +112,7 @@ app.include_router(invoices_router)
 app.include_router(products_router)
 app.include_router(attributes_router)
 app.include_router(stock_sessions_router)
+app.include_router(open_containers_router)
 app.include_router(financials_router)
 app.include_router(users_router)
 app.include_router(messaging_router)
