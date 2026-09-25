@@ -269,6 +269,11 @@ export const ProductProvider = ({ children }) => {
             // present and unchanged it is a no-op, so echoing the current value
             // back (as EditProductModal does) is safe.
             if (updatedProduct.unitStockMode) payload.unit_stock_mode = updatedProduct.unitStockMode;
+            // Same omit-unless-set rule: callers that spread an existing product
+            // (EditProductModal, ManageVariantsModal) echo the current value back,
+            // which the backend treats as a no-op, while a caller that never
+            // touches it leaves the product's sub-category alone.
+            if (updatedProduct.subCategory !== undefined) payload.sub_category = updatedProduct.subCategory;
             if (updatedProduct.applicableAttributes) payload.applicable_attributes = updatedProduct.applicableAttributes;
             if (updatedProduct.defaultAttributes) payload.default_attributes = updatedProduct.defaultAttributes;
             if (updatedProduct.poolIgnoredAttributes !== undefined) payload.pool_ignored_attributes = updatedProduct.poolIgnoredAttributes;

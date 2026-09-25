@@ -219,9 +219,13 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     // Same conversion factors the backend uses (glassOffcutService.py's
     // MM_PER_FOOT/MM_PER_INCH) — mm is the canonical unit sheet/offcut sizes
     // are always stored in, regardless of what unit a cut was entered in.
+    // Converted values are floored to whole mm (1ft -> 304mm), matching
+    // _cut_dims_to_mm() exactly; sub-mm precision is meaningless on a cutting
+    // table, and the two must agree or this fit check would accept cuts the
+    // resolver then rejects (or vice versa).
     const MM_PER_FOOT = 304.79999025;
     const MM_PER_INCH = 25.4;
-    const toMm = (val, u) => u === 'ft' ? val * MM_PER_FOOT : u === 'inch' ? val * MM_PER_INCH : val;
+    const toMm = (val, u) => u === 'ft' ? Math.floor(val * MM_PER_FOOT) : u === 'inch' ? Math.floor(val * MM_PER_INCH) : val;
 
     // Live validation as the cashier types — doesn't wait for "Add" to be clicked.
     useEffect(() => {

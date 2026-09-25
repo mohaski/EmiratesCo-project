@@ -67,6 +67,7 @@ only the cashier's cut input (in ft/inch/mm, from GlassCalculator's per-cut unit
 needs converting, into mm, before comparison.
 """
 
+import math
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -90,14 +91,22 @@ MM_PER_INCH = 25.4
 
 def _cut_dims_to_mm(l: float, w: float, unit: str) -> tuple:
     """Converts a cashier-entered cut (in ft/inch/mm) into millimeters — the
-    canonical unit sheet/offcut dimensions are always stored in. No rounding is
-    applied here: the half-foot rounding in GlassCalculator.jsx's getArea() is a
-    square-foot PRICING convention only, unrelated to the actual physical size of
-    the piece being cut and tracked in inventory."""
+    canonical unit sheet/offcut dimensions are always stored in.
+
+    Converted values are floored to whole millimeters: 1ft becomes 304mm, not
+    304.79999025mm. Sub-millimeter precision is meaningless on a glass cutting
+    table, and carrying it made every derived offcut inherit a fractional tail
+    that showed up all over the UI. Flooring (rather than rounding) keeps the
+    piece no larger than what was asked for, so a cut that fits its source on
+    paper still fits it in practice. Must stay identical to GlassCalculator.jsx's
+    toMm(), or the cashier's live fit check and this resolver would disagree.
+
+    This is unrelated to the half-foot rounding in GlassCalculator.jsx's
+    getArea(), which is a square-foot PRICING convention only."""
     if unit == "ft":
-        return l * MM_PER_FOOT, w * MM_PER_FOOT
+        return float(math.floor(l * MM_PER_FOOT)), float(math.floor(w * MM_PER_FOOT))
     if unit == "inch":
-        return l * MM_PER_INCH, w * MM_PER_INCH
+        return float(math.floor(l * MM_PER_INCH)), float(math.floor(w * MM_PER_INCH))
     return float(l), float(w)  # 'mm' (default/native)
 
 

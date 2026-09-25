@@ -257,8 +257,9 @@ def test_7_unit_conversion(db, p, v):
     db.refresh(v)
     stock_before = v.stock_quantity
 
-    # 500mm x 300mm offcut. A cashier cut of "1ft x 0.5ft" (~304.8mm x 152.4mm)
-    # should match against it after mm conversion, not be compared as raw "1x0.5".
+    # 500mm x 300mm offcut. A cashier cut of "1ft x 0.5ft" (304mm x 152mm, floored
+    # to whole mm) should match against it after mm conversion, not be compared as
+    # raw "1x0.5".
     db.add(Offcut(product_id=p.productId, variant_id=v.variantId, width=500.0, height=300.0, length=0.0, quantity=1, status="available"))
     db.commit()
 
@@ -269,9 +270,12 @@ def test_7_unit_conversion(db, p, v):
     db.refresh(v)
 
     src = line["offcut_sources"][0]
-    print(f"Source: {src} (cuts[0].width/height should be ~304.8/~152.4mm, not 1/0.5)")
+    print(f"Source: {src} (cuts[0].width/height should be 304/152mm, not 1/0.5)")
     assert src["source"] == "offcut", f"Expected the ft-denominated cut to match the mm offcut, got {src['source']}"
-    assert abs(src["cuts"][0]["width"] - 304.79999025) < 0.01
+    # Floored to whole mm, not 304.79999025/152.39999512 — see _cut_dims_to_mm.
+    # Compared as an unordered pair since the packer is free to rotate the piece.
+    cut = src["cuts"][0]
+    assert sorted((cut["width"], cut["height"])) == [152.0, 304.0], cut
     assert v.stock_quantity == stock_before
     print("PASS")
 

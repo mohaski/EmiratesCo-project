@@ -3,9 +3,9 @@ import { useProducts } from '../../context/ProductContext';
 import { useAttributes } from '../../context/AttributeContext';
 
 export default function EditProductModal({ isOpen, onClose, product }) {
-    const { updateProduct } = useProducts();
+    const { updateProduct, categories } = useProducts();
     const { attributeClasses } = useAttributes();
-    const [form, setForm] = useState({ name: '', trackOffcuts: false, unit: 'ft', unitStockMode: 'counted' });
+    const [form, setForm] = useState({ name: '', subCategory: '', trackOffcuts: false, unit: 'ft', unitStockMode: 'counted' });
     // { [attributeKey]: boolean } — whether that attribute is ignored when pooling
     // offcuts/stock across variants (see core/inventory/poolKey.py). Lets the CEO
     // fix a pooling choice that was missed/wrong when the product or attribute was
@@ -18,6 +18,21 @@ export default function EditProductModal({ isOpen, onClose, product }) {
         return m;
     }, [attributeClasses]);
 
+    // The sub-categories offered are the ones belonging to this product's OWN
+    // category — a product can be re-filed within its category here, but moving it
+    // to a different category is not something this modal does. A stored
+    // sub_category that no longer exists in the category (renamed/removed in
+    // ConfigModal since) is appended as its raw slug, so opening this modal and
+    // saving can't silently erase a value it simply couldn't display.
+    const subCategoryOptions = useMemo(() => {
+        const opts = categories.find(c => c.id === product?.category)?.subCategories || [];
+        const current = product?.subCategory;
+        if (current && !opts.some(o => o.id === current)) {
+            return [...opts, { id: current, label: `${current} (no longer listed)` }];
+        }
+        return opts;
+    }, [categories, product]);
+
     // Every attribute that actually participates in pooling for this product —
     // its own applicable attributes, plus the built-in "Dimensions" (glass sheets).
     const poolableKeys = useMemo(() => (
@@ -28,6 +43,7 @@ export default function EditProductModal({ isOpen, onClose, product }) {
         if (!product) return;
         setForm({
             name: product.name || '',
+            subCategory: product.subCategory || '',
             trackOffcuts: product.trackOffcuts || false,
             unit: product.unit || 'ft',
             unitStockMode: product.unitStockMode || 'counted',
@@ -52,6 +68,10 @@ export default function EditProductModal({ isOpen, onClose, product }) {
         const payload = {
             ...product, name: form.name, trackOffcuts: form.trackOffcuts, unit: form.unit,
             unitStockMode: form.unitStockMode, poolIgnoredAttributes,
+            // '' is the "not filed under any sub-category" choice — sent as null so
+            // the column is cleared rather than set to an empty string, which the
+            // sales/inventory sub-category filters treat as a real, unmatchable value.
+            subCategory: form.subCategory || null,
         };
         // Changing this re-expresses every variant's stock between pieces and
         // whole packs server-side (products/service.py update_product), so it is
@@ -108,6 +128,23 @@ export default function EditProductModal({ isOpen, onClose, product }) {
                             onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
                             onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
                         />
+                    </div>
+
+                    <div>
+                        <label style={labelStyle}>Sub-Category</label>
+                        <select value={form.subCategory} onChange={e => set('subCategory', e.target.value)}
+                            style={inputStyle}
+                            onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
+                            onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}
+                        >
+                            <option value="">None</option>
+                            {subCategoryOptions.map(sub => <option key={sub.id} value={sub.id}>{sub.label}</option>)}
+                        </select>
+                        {subCategoryOptions.length === 0 && (
+                            <p style={{ fontSize: '0.66rem', color: '#64748b', margin: '0.4rem 0 0' }}>
+                                This category has no sub-categories yet — add one from Add Product → Configure.
+                            </p>
+                        )}
                     </div>
 
                     <div>
