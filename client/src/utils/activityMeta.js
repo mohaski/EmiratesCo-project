@@ -11,6 +11,7 @@ export const ACTIVITY_META = {
     stock_batch_correction: { icon: '✏️', color: '#f59e0b', label: 'Stock line corrected' },
     manual_offcut: { icon: '✂️', color: '#06b6d4', label: 'Offcut added' },
     offcut_correction: { icon: '✂️', color: '#f59e0b', label: 'Offcut corrected' },
+    offcut_admin: { icon: '✂️', color: '#f59e0b', label: 'Offcut pool edited' },
     profile_offcut_correction: { icon: '✂️', color: '#f59e0b', label: 'Profile offcut corrected' },
     open_container: { icon: '📦', color: '#fbbf24', label: 'Pack opened/closed' },
 };
@@ -25,6 +26,12 @@ export const activityMeta = (entityType) => ACTIVITY_META[entityType] || DEFAULT
  * inspects the session's actual lines and picks a badge that matches; every
  * other entity_type just falls back to the static activityMeta lookup. */
 export const activityMetaForItem = (item) => {
+    // The CEO's Offcut Management page writes both its corrections and its batch
+    // deletions under one entity_type — a size fix and a write-off are very
+    // different events to a CEO scanning the log, so split them by action.
+    if (item.entity_type === 'offcut_admin' && item.action === 'delete') {
+        return { icon: '🗑️', color: '#ef4444', label: 'Offcuts deleted' };
+    }
     // open_container covers four very different acts (opening a pack, finishing
     // it, undoing a premature close, or returning one opened by mistake) — the
     // action, not the entity_type, is what a CEO actually needs to see.
@@ -103,6 +110,19 @@ export const summarizeActivity = (item) => {
         case 'offcut_correction':
         case 'profile_offcut_correction':
             return `Cutting event corrected on item #${after.item_id ?? '?'}, line ${(after.line_idx ?? 0) + 1}`;
+        case 'offcut_admin': {
+            // Both shapes of offcut live in one table — 2D (glass) rows carry
+            // width x height, 1D (bar/profile) rows a single length.
+            const size = (o) => (o?.width != null ? `${o.width}×${o.height}mm` : `${o?.length ?? '?'}`);
+            if (item.action === 'delete') {
+                const list = before.offcuts || [];
+                const preview = list.slice(0, 2).map(o => `${o.product_name ?? '?'} ${size(o)} ×${o.quantity}`).join(', ');
+                const rest = list.length > 2 ? ` +${list.length - 2} more` : '';
+                return `${after.deleted ?? list.length} offcut row${(after.deleted ?? list.length) === 1 ? '' : 's'} deleted${preview ? `: ${preview}${rest}` : ''}`;
+            }
+            return `${after.product_name ?? 'Offcut'} #${after.offcut_id ?? '?'}: `
+                + `${size(before)} ×${before.quantity ?? '?'} → ${size(after)} ×${after.quantity ?? '?'}`;
+        }
         case 'open_container': {
             // Packs are the one stock event with no quantity to diff — what
             // matters is what the pack was labelled, what came out of it, and

@@ -164,6 +164,51 @@ def get_restock_history(
     """Restock audit log — accessible to manager, ceo, and admin."""
     return service.get_restock_history(db, skip, limit, product_id)
 
+# ---------------------------------------------------------------------------
+# Offcut Management (CEO-only oversight of the whole offcut pool)
+#
+# Declared ahead of the /{product_id}/offcuts routes below so "offcuts" is never
+# matched as a product_id path param — same reason /restock-history sits above.
+# ---------------------------------------------------------------------------
+
+@router.get("/offcuts/all", response_model=List[model.OffcutAdminRow])
+def get_all_offcuts(
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Every offcut in the system, for the CEO's Offcut Management screen —
+    scrap included, and identified by product/variant rather than scoped to a
+    pool. Unfiltered: that screen groups by category/sub-category client-side."""
+    return service.list_all_offcuts(db, current_user)
+
+
+@router.patch("/offcuts/{offcut_id}", response_model=model.OffcutAdminRow)
+async def update_offcut(
+    offcut_id: int,
+    payload: model.OffcutAdminUpdate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """CEO-only correction of one offcut's size and/or piece count."""
+    result = service.update_offcut_admin(offcut_id, payload, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
+
+@router.post("/offcuts/bulk-delete", response_model=model.OffcutBulkDeleteResponse)
+async def bulk_delete_offcuts(
+    payload: model.OffcutBulkDeleteRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """CEO-only removal of offcut rows whose pieces no longer exist."""
+    result = service.bulk_delete_offcuts(payload.offcut_ids, db, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
+
 @router.get("/{product_id}/offcuts", response_model=List[model.OffcutResponse])
 def get_product_offcuts(
     product_id: int,

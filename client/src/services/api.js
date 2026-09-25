@@ -213,6 +213,28 @@ export const ProductService = {
         return response.data;
     },
     /**
+     * CEO-only: every offcut in the system (scrap included), each carrying its
+     * product/variant identity — backs the Offcut Management page, which groups
+     * them by category/sub-category itself. Unlike getOffcuts this isn't scoped
+     * to a pool and isn't for picking from.
+     */
+    getAllOffcuts: async () => {
+        const response = await api.get('/products/offcuts/all');
+        return response.data;
+    },
+    /** CEO-only: correct one offcut's size and/or piece count. Only the fields
+     * passed are changed — { length } for 1D products, { width, height } for 2D. */
+    updateOffcut: async (offcutId, changes) => {
+        const response = await api.patch(`/products/offcuts/${offcutId}`, changes);
+        return response.data;
+    },
+    /** CEO-only: permanently delete offcut rows whose pieces no longer exist.
+     * All-or-nothing — a stale id rejects the whole batch. */
+    bulkDeleteOffcuts: async (offcutIds) => {
+        const response = await api.post('/products/offcuts/bulk-delete', { offcut_ids: offcutIds });
+        return response.data;
+    },
+    /**
      * Dry-run preview of how the 2D glass offcut engine would fulfil a set of
      * cuts — same scoring/batching as a real sale, nothing is persisted.
      * cuts: [{ l, w, qty, u }]. Returns { groups, optimization } — groups is one

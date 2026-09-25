@@ -666,6 +666,245 @@ def add_offcuts_bulk(
     return created
 
 
+def _variant_label(variant) -> Optional[str]:
+    """Same display name the client builds for a variant everywhere else —
+    explicit name override if set, otherwise its attribute values joined."""
+    if variant is None:
+        return None
+    if variant.name:
+        return variant.name
+    values = [str(v) for v in (variant.attributes or {}).values() if v not in (None, "")]
+    return " - ".join(values) or None
+
+
+def list_all_offcuts(
+    db: Session,
+    current_user=None,
+) -> List["model.OffcutAdminRow"]:
+    """CEO-only: every offcut row in the system, across all products that track
+    offcuts, for the Offcut Management screen. Unlike get_offcuts_for_product
+    (which feeds the pickers and therefore only ever shows usable pieces of one
+    pool) this is an oversight view: scrap rows are included, nothing is scoped
+    to a pool, and each row carries its product/variant identity so the CEO can
+    tell two same-sized pieces of different products apart.
+
+    Returns the whole pool unfiltered — the screen organizes it by category and
+    sub-category the same way Manage Products does, which means the client needs
+    every row up front to know which products have anything to show.
+
+    Products with track_offcuts=False can't have offcuts at all, so filtering on
+    it costs nothing and guarantees the listing never shows a stale row left
+    behind by a product that has since been switched to another stock mode."""
+    from entities.offcuts import Offcut
+
+    require_role(["ceo"], current_user)
+
+    stmt = (
+        select(Offcut, Product, Variant)
+        .join(Product, col(Offcut.product_id) == col(Product.productId))
+        .join(Variant, col(Offcut.variant_id) == col(Variant.variantId), isouter=True)
+        .where(Product.track_offcuts == True)  # noqa: E712 - SQLAlchemy needs ==, not `is`
+        .order_by(col(Product.name), col(Offcut.offcutId).desc())
+    )
+
+    return [
+        model.OffcutAdminRow(
+            offcutId=offcut.offcutId,
+            product_id=product.productId,
+            product_name=product.name,
+            unit=product.unit,
+            has_dimensions=product.has_dimensions,
+            variant_id=offcut.variant_id,
+            variant_label=_variant_label(variant),
+            length=offcut.length,
+            width=offcut.width,
+            height=offcut.height,
+            quantity=offcut.quantity,
+            status=offcut.status,
+            source_item_id=offcut.source_item_id,
+            created_at=offcut.created_at,
+        )
+        for offcut, product, variant in db.exec(stmt).all()
+    ]
+
+
+def update_offcut_admin(
+    offcut_id: int,
+    payload: "model.OffcutAdminUpdate",
+    db: Session,
+    current_user=None,
+):
+    """CEO-only: correct one offcut's measured size and/or piece count — for when
+    the physical piece doesn't match what the system recorded (a mis-measured
+    manual entry, or a cutting job whose remainder was recorded before someone
+    trimmed it further).
+
+    Deliberately does NOT re-evaluate available/scrap status against the
+    variant's min_usable: a CEO fixing a measurement shouldn't silently have the
+    piece dropped out of (or pulled into) the pickable pool as a side effect.
+    Use the bulk delete for a piece that no longer exists at all.
+
+    pool_key is likewise left alone — it's derived from the variant's non-size
+    attributes (see core/inventory/poolKey.py), and none of those change here."""
+    from entities.offcuts import Offcut
+
+    require_role(["ceo"], current_user)
+
+    offcut = db.get(Offcut, offcut_id)
+    if not offcut:
+        raise HTTPException(status_code=404, detail="Offcut not found")
+    product = db.get(Product, offcut.product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    before_snapshot = {
+        "offcut_id": offcut.offcutId,
+        "product_name": product.name,
+        "length": offcut.length,
+        "width": offcut.width,
+        "height": offcut.height,
+        "quantity": offcut.quantity,
+    }
+
+    if payload.quantity is not None:
+        if payload.quantity < 1:
+            raise HTTPException(status_code=400, detail="Quantity must be at least 1 - delete the offcut instead")
+        offcut.quantity = payload.quantity
+
+    if product.has_dimensions:
+        if payload.length:
+            raise HTTPException(status_code=400, detail="This product measures offcuts as width x height, not length")
+        if payload.width is not None or payload.height is not None:
+            new_width = payload.width if payload.width is not None else offcut.width
+            new_height = payload.height if payload.height is not None else offcut.height
+            if not new_width or not new_height or new_width <= 0 or new_height <= 0:
+                raise HTTPException(status_code=400, detail="Width and height must both be greater than 0")
+            offcut.width = new_width
+            offcut.height = new_height
+    else:
+        if payload.width is not None or payload.height is not None:
+            raise HTTPException(status_code=400, detail="This product measures offcuts as a length, not width x height")
+        if payload.length is not None:
+            if payload.length <= 0:
+                raise HTTPException(status_code=400, detail="Length must be greater than 0")
+            offcut.length = payload.length
+
+    db.add(offcut)
+
+    if current_user is not None:
+        from entities.editHistory import EditHistory
+        from uuid import UUID
+        db.add(EditHistory(
+            entity_type="offcut_admin",
+            entity_id=offcut.offcutId,
+            edited_by=UUID(current_user.userId),
+            action="edit",
+            before_snapshot=before_snapshot,
+            after_snapshot={
+                "offcut_id": offcut.offcutId,
+                "product_name": product.name,
+                "length": offcut.length,
+                "width": offcut.width,
+                "height": offcut.height,
+                "quantity": offcut.quantity,
+            },
+            notes=current_user.username,
+        ))
+
+    db.commit()
+    db.refresh(offcut)
+
+    variant = db.get(Variant, offcut.variant_id) if offcut.variant_id is not None else None
+    return model.OffcutAdminRow(
+        offcutId=offcut.offcutId,
+        product_id=product.productId,
+        product_name=product.name,
+        unit=product.unit,
+        has_dimensions=product.has_dimensions,
+        variant_id=offcut.variant_id,
+        variant_label=_variant_label(variant),
+        length=offcut.length,
+        width=offcut.width,
+        height=offcut.height,
+        quantity=offcut.quantity,
+        status=offcut.status,
+        source_item_id=offcut.source_item_id,
+        created_at=offcut.created_at,
+    )
+
+
+def bulk_delete_offcuts(
+    offcut_ids: List[int],
+    db: Session,
+    current_user=None,
+) -> "model.OffcutBulkDeleteResponse":
+    """CEO-only: permanently remove offcut rows for pieces that no longer exist
+    physically (scrapped, lost, or entered by mistake). Goes through
+    safe_delete_offcut so a piece originally recorded via a stock-input session
+    detaches that session line's created_offcut_id first — the audit record of
+    what was entered survives, the pool row doesn't.
+
+    All-or-nothing: an id that has since disappeared fails the whole request
+    rather than silently deleting part of a selection, so a stale list can't end
+    up half-applied without the CEO knowing which half."""
+    from entities.offcuts import Offcut
+    from core.inventory.poolKey import safe_delete_offcut
+
+    require_role(["ceo"], current_user)
+
+    if not offcut_ids:
+        raise HTTPException(status_code=400, detail="Select at least one offcut to delete")
+
+    unique_ids = list(dict.fromkeys(offcut_ids))
+    offcuts = []
+    for offcut_id in unique_ids:
+        offcut = db.get(Offcut, offcut_id)
+        if not offcut:
+            raise HTTPException(status_code=404, detail=f"Offcut {offcut_id} no longer exists - refresh and try again")
+        offcuts.append(offcut)
+
+    try:
+        deleted_snapshot = []
+        for offcut in offcuts:
+            product = db.get(Product, offcut.product_id)
+            deleted_snapshot.append({
+                "offcut_id": offcut.offcutId,
+                "product_name": product.name if product else None,
+                "length": offcut.length,
+                "width": offcut.width,
+                "height": offcut.height,
+                "quantity": offcut.quantity,
+                "status": offcut.status,
+            })
+            safe_delete_offcut(db, offcut)
+
+        if current_user is not None:
+            from entities.editHistory import EditHistory
+            from uuid import UUID
+            db.add(EditHistory(
+                entity_type="offcut_admin",
+                # No single offcut owns a batch delete — anchor it to the first
+                # one removed; the full list lives in the snapshot either way.
+                entity_id=unique_ids[0],
+                edited_by=UUID(current_user.userId),
+                action="delete",
+                before_snapshot={"offcuts": deleted_snapshot},
+                after_snapshot={"deleted": len(deleted_snapshot), "offcut_ids": unique_ids},
+                notes=current_user.username,
+            ))
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Bulk Delete Offcuts Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete the selected offcuts")
+
+    return model.OffcutBulkDeleteResponse(deleted=len(unique_ids), offcut_ids=unique_ids)
+
+
 def _consolidate_preview_events(all_events: List[dict], pre_existing_offcut_ids: set) -> List[dict]:
     """
     Merges consumption events that represent the same physical sheet/offcut, for

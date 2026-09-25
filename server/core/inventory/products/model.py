@@ -225,6 +225,50 @@ class OffcutCreate(BaseModel):
     quantity: int = 1
 
 
+class OffcutAdminRow(BaseModel):
+    """One row of the CEO-only "Offcut Management" listing — an Offcut joined with
+    enough of its product/variant to be identifiable and editable without the
+    client having to cross-reference the product catalogue. `unit` and
+    `has_dimensions` come from the product and tell the client which size fields
+    are meaningful (length for 1D bars/profiles, width x height mm for 2D glass)."""
+    offcutId: int
+    product_id: int
+    product_name: str
+    unit: str
+    has_dimensions: bool
+    variant_id: Optional[int] = None
+    variant_label: Optional[str] = None
+    length: float
+    width: Optional[float] = None
+    height: Optional[float] = None
+    quantity: int
+    status: str
+    source_item_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class OffcutAdminUpdate(BaseModel):
+    """CEO correction of a single offcut row's measured size and/or piece count.
+    Every field is optional — only what's sent is changed. Which size fields are
+    accepted depends on the product (see OffcutAdminRow)."""
+    length: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    quantity: Optional[int] = None
+
+
+class OffcutBulkDeleteRequest(BaseModel):
+    offcut_ids: List[int]
+
+
+class OffcutBulkDeleteResponse(BaseModel):
+    deleted: int
+    offcut_ids: List[int]
+
+
 class GlassCutPreviewCut(BaseModel):
     l: float
     w: float

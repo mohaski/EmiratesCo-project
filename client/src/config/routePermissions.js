@@ -16,6 +16,10 @@ export const ROUTE_ROLES = {
     '/debt-management':     ['ceo', 'manager', 'admin'],
     '/debt-management/order': ['ceo', 'manager', 'admin'],
     '/inventory':           ['cashier', 'manager', 'ceo'],
+    // CEO-only oversight of the whole offcut pool (view/edit/batch-delete) —
+    // managers add offcuts from Stock Control, but only the CEO corrects or
+    // removes what's already in the pool.
+    '/offcuts':             ['ceo'],
     '/product-management':  ['admin', 'ceo'],
     // Manager gets everything (checkout, return, loans, catalog) as tabs on one page — see '/tools/manage'.
     // CEO also gets this page, for the CEO-only "Item Conditions" tab (ManagerToolsPage gates it by role).

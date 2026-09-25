@@ -34,6 +34,12 @@ const NAV_ICONS = {
       <polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" />
     </svg>
   ),
+  offcuts: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" />
+      <line x1="20" y1="4" x2="8.12" y2="15.88" /><line x1="14.47" y1="14.48" x2="20" y2="20" /><line x1="8.12" y1="8.12" x2="12" y2="12" />
+    </svg>
+  ),
   manageProducts: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
@@ -159,6 +165,7 @@ export default function Layout() {
     { path: '/collect-payments', label: 'Collect Debt', iconKey: 'collectPayments' },
     { path: '/debt-management', label: 'Debt Management', iconKey: 'dues' },
     { path: '/inventory', label: 'Stock Control', iconKey: 'inventory' },
+    { path: '/offcuts', label: 'Offcut Management', iconKey: 'offcuts' },
     { path: '/product-management', label: 'Product Management', iconKey: 'manageProducts' },
     { path: '/tools', label: 'Tool Checkout', iconKey: 'tools' },
     { path: '/tools/manage', label: 'Tool Tracking', iconKey: 'tools' },

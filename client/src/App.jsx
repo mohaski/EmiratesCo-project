@@ -23,6 +23,7 @@ const CheckoutPage        = lazy(() => import('./pages/CheckoutPage'));
 const ReceiptPage         = lazy(() => import('./pages/ReceiptPage'));
 const DashboardPage       = lazy(() => import('./pages/DashboardPage'));
 const InventoryPage       = lazy(() => import('./pages/InventoryPage'));
+const OffcutManagementPage = lazy(() => import('./pages/OffcutManagementPage'));
 const ProductManagementPage = lazy(() => import('./pages/ProductManagementPage'));
 const RoleSelectionPage   = lazy(() => import('./pages/RoleSelectionPage'));
 const InvoiceGenPage      = lazy(() => import('./pages/InvoiceGenPage'));
@@ -102,6 +103,7 @@ function App() {
                     <Route path="/"                    element={<DashboardPage />} />
                     <Route path="/sales"               element={<SalesDashboard />} />
                     <Route path="/inventory"           element={<InventoryPage />} />
+                    <Route path="/offcuts"             element={<OffcutManagementPage />} />
                     <Route path="/product-management"  element={<ProductManagementPage />} />
                     <Route path="/orders"              element={<OrdersPage />} />
                     <Route path="/orders/review"       element={<OrderSummaryPage />} />
