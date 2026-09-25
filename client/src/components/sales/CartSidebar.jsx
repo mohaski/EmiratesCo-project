@@ -75,8 +75,14 @@ const CartItem = memo(({ item, index, onEdit, onRemove }) => {
             {item.details?.lineItems?.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '4px' }}>
                     {item.details.lineItems.map((li, i) => (
-                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>
-                            <span style={{ color: '#475569' }}>{li.label} <span style={{ color: '#334155' }}>×{li.qty}</span></span>
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem', fontFamily: 'var(--font-mono)', fontSize: '0.65rem' }}>
+                            {/* The quantity is what gets cut or counted at the bench, so
+                                it reads louder than its label rather than dimmer — the
+                                old styling made the number the faintest thing on the row. */}
+                            <span style={{ color: '#64748b' }}>
+                                <span style={{ color: '#e2e8f0', fontWeight: 800, fontSize: '0.85rem' }}>{li.qty}</span>
+                                {' '}{li.label}
+                            </span>
                             <span style={{ color: '#60a5fa', fontWeight: 700 }}>KSH{(li.total || 0).toFixed(0)}</span>
                         </div>
                     ))}

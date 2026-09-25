@@ -70,6 +70,24 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     // Dimensioned products (e.g. glass sheets) are always cut & priced by square footage,
     // regardless of what unit their dimensions are recorded in — see GlassCalculator.
     const unitPriceLabel = product.hasDimensions ? 'ft²' : unit;
+    // Whether this product is sold in sub-units as well as whole ones, and so
+    // needs a per-unit price alongside its whole-pack price.
+    //
+    // An open-container product always is: selling out of an opened roll/box is
+    // the entire reason for the mode, so the per-unit price is required and does
+    // not depend on the pack carrying a stated size. Nothing below a pack is
+    // tracked there (see server/entities/openContainers.py), so there is no pack
+    // size to consult and none is needed.
+    //
+    // A counted packaged accessory qualifies via its stated pack size instead —
+    // that figure is exact there, and is what a piece sale divides against.
+    //
+    // Previously this was gated on trackOffcuts alone, so a packaged accessory's
+    // per-unit price could be set at creation and never corrected, and an
+    // open-container product's could not be reached at all.
+    const sellsPerUnit = product.trackOffcuts
+        || product.unitStockMode === 'open_container'
+        || variants.some(v => (v.unitQuantity || 0) > 1);
     const getVariantId = v => v.name || Object.values(v.attributes).join(' - ');
     // Only attributes with more than one actual value are worth a default picker —
     // a single-value attribute has nothing to choose between. "Color" is excluded for
@@ -82,8 +100,12 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     });
 
     const priceFields = [
-        { label: 'Full Price', key: 'price' },
-        ...(product.trackOffcuts ? [{ label: 'Half Price', key: 'priceHalf' }, { label: `Price / ${unitPriceLabel}`, key: 'priceUnit' }] : []),
+        // "Full" here means one whole sale unit — a bar, a sheet, or one sealed
+        // box/roll for a packaged accessory.
+        { label: product.trackOffcuts ? 'Full Price' : 'Whole Pack Price', key: 'price' },
+        // Half only exists for cut-to-length products (there is no "half a box").
+        ...(product.trackOffcuts ? [{ label: 'Half Price', key: 'priceHalf' }] : []),
+        ...(sellsPerUnit ? [{ label: `Price / ${unitPriceLabel}`, key: 'priceUnit' }] : []),
     ];
 
     const handleEditClick = v => {
@@ -513,9 +535,22 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                                         Half: {variant.priceHalf}
                                                                     </span>
                                                                 )}
-                                                                {product.trackOffcuts && variant.priceUnit > 0 && (
+                                                                {sellsPerUnit && variant.priceUnit > 0 && (
                                                                     <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', fontWeight: 600, background: 'rgba(234,179,8,0.08)', border: '1px solid rgba(234,179,8,0.18)', borderRadius: '5px', padding: '2px 8px', color: '#facc15' }}>
                                                                         /{unitPriceLabel}: {variant.priceUnit}
+                                                                    </span>
+                                                                )}
+                                                                {/* A price this product is actually sold at, left unset, silently
+                                                                    removes that whole way of selling it at the till — worth naming
+                                                                    here rather than leaving as an absent chip nobody notices. */}
+                                                                {sellsPerUnit && !(variant.priceUnit > 0) && (
+                                                                    <span style={{ fontSize: '0.68rem', fontWeight: 700, background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '5px', padding: '2px 8px', color: '#fbbf24' }}>
+                                                                        No /{unitPriceLabel} price
+                                                                    </span>
+                                                                )}
+                                                                {!(variant.price > 0 || variant.priceFull > 0) && (
+                                                                    <span style={{ fontSize: '0.68rem', fontWeight: 700, background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: '5px', padding: '2px 8px', color: '#fbbf24' }}>
+                                                                        No {product.trackOffcuts ? 'full' : 'whole pack'} price
                                                                     </span>
                                                                 )}
                                                                 <span style={{ fontSize: '0.68rem', fontFamily: 'var(--font-mono)', fontWeight: 600, background: isLowStock ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.08)', border: `1px solid ${isLowStock ? 'rgba(239,68,68,0.25)' : 'rgba(34,197,94,0.16)'}`, borderRadius: '5px', padding: '2px 8px', color: isLowStock ? '#f87171' : '#4ade80' }}>
