@@ -15,9 +15,17 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
         setDetails(newDetails);
     }, []);
 
+    // Attributes the calculator refuses to default (glass thickness) and the
+    // cashier hasn't picked yet.
+    const missingAttributes = details?.missingAttributes || [];
+
     const handleAdd = () => {
         const isStockValid = details?.isValid !== false;
         if (source === 'sales' && !isStockValid) return;
+        // Unlike the stock check, an unpicked required attribute (thickness)
+        // blocks invoices too: the wrong thickness on a quote becomes the wrong
+        // sheet on the cutting table.
+        if (missingAttributes.length > 0) return;
         if (total <= 0) return;
         onAddToOrder({ id: product.id, name: product.name, category: product.category, totalPrice: total, details });
         onClose();
@@ -29,7 +37,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
     const isGlass = isGlassCategory(product.category);
     const isAccessory = isAccessoryCategory(product.category);
     const isDynamic = !!product.variants;
-    const canProceed = total > 0 && (source !== 'sales' || details?.isValid !== false);
+    const canProceed = total > 0 && missingAttributes.length === 0 && (source !== 'sales' || details?.isValid !== false);
 
     const categoryColor = isProfile ? '#a855f7' : isGlass ? '#06b6d4' : isAccessory ? '#22c55e' : '#3b82f6';
     const matchedColorHex = isProfile ? getProfileColorHex(color) : null;
@@ -110,6 +118,12 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                             KSH<span style={{ color: '#60a5fa' }}>{total.toLocaleString()}</span>
                         </p>
                     </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    {missingAttributes.length > 0 && (
+                        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#fb923c' }}>
+                            Select {missingAttributes.join(' & ')} first
+                        </span>
+                    )}
                     <button onClick={handleAdd} disabled={!canProceed} style={{
                         padding: '0.875rem 2rem', borderRadius: '0.875rem', border: 'none', cursor: canProceed ? 'pointer' : 'not-allowed',
                         background: canProceed ? `linear-gradient(135deg, ${categoryColor}, ${isProfile ? '#06b6d4' : isGlass ? '#3b82f6' : isAccessory ? '#16a34a' : '#06b6d4'})` : 'rgba(255,255,255,0.06)',
@@ -122,6 +136,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                     >
                         {source === 'invoice' ? '+ Add to Invoice' : '+ Add to Order'}
                     </button>
+                    </div>
                 </div>
             </div>
         </div>

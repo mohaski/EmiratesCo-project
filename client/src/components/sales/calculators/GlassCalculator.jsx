@@ -10,6 +10,12 @@ const inputStyle = {
     fontFamily: 'var(--font-mono)', transition: 'border-color 0.2s',
 };
 
+// Attributes the cashier must pick by hand — never defaulted, never
+// auto-resolved. A sheet cut to the wrong thickness can't be un-cut, and the
+// loss is the whole sheet, so inheriting whichever variant happened to sort
+// first is not an acceptable default. Every other attribute still defaults.
+const isRequiredKey = key => /thick/i.test(key);
+
 const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
     const extraAttributes = useMemo(() => {
@@ -53,6 +59,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         if (initialDetails?.extras) return initialDetails.extras;
         const defaults = {};
         Object.keys(extraAttributes).forEach(key => {
+            if (isRequiredKey(key)) return; // left unset on purpose — must be chosen
             const def = product.defaultAttributes?.[key];
             defaults[key] = (def && extraAttributes[key]?.includes(def)) ? def : extraAttributes[key]?.[0];
         });
@@ -99,17 +106,40 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             let changed = false;
             Object.keys(extraAttributes).forEach(key => {
                 const validOptions = optionsForKey[key] || [];
-                if (!next[key] || !validOptions.includes(next[key])) {
-                    const def = product.defaultAttributes?.[key];
-                    next[key] = (def && validOptions.includes(def)) ? def : validOptions[0];
-                    changed = true;
+                if (next[key] && validOptions.includes(next[key])) return;
+                if (isRequiredKey(key)) {
+                    // Don't substitute a replacement when another selection
+                    // invalidates this one — clear it so the gate re-arms and
+                    // the thickness gets re-confirmed rather than swapped
+                    // underneath the cashier.
+                    if (next[key] !== undefined) { delete next[key]; changed = true; }
+                    return;
                 }
+                const def = product.defaultAttributes?.[key];
+                next[key] = (def && validOptions.includes(def)) ? def : validOptions[0];
+                changed = true;
             });
             return changed ? next : prev;
         });
     }, [optionsForKey, extraAttributes, product.defaultAttributes]);
 
+    const missingRequired = useMemo(
+        () => Object.keys(extraAttributes)
+            .filter(isRequiredKey)
+            .filter(key => extraSelections[key] === undefined || extraSelections[key] === ''),
+        [extraAttributes, extraSelections]
+    );
+
     const pricing = useMemo(() => {
+        // Until every required attribute is chosen there is no single variant to
+        // price against, and falling back to the first match would quote — and
+        // then cut — a thickness nobody picked. Zeroed prices also keep the
+        // running total at 0, so the footer's Add button stays dead.
+        if (missingRequired.length > 0) return {
+            priceFull: 0, priceHalf: 0, priceSqFt: 0,
+            availableStock: undefined, variantId: undefined,
+            sheetLengthMm: 0, sheetWidthMm: 0,
+        };
         let match = product.variants?.find(v => Object.entries(extraSelections).every(([key, val]) => v.attributes?.[key] === val));
         if (match) return {
             priceFull: match.price ?? match.priceFull ?? 0,
@@ -130,7 +160,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
             sheetLengthMm: 0,
             sheetWidthMm: 0,
         };
-    }, [product, extraSelections]);
+    }, [product, extraSelections, missingRequired]);
 
     // Splitting a sheet down the middle of one side always leaves a leftover
     // identical to the piece sold — see server-side half_sheet_piece_dims_mm —
@@ -153,7 +183,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     }, [fullQty, halfQty, halfSide, cutPieces, pricing]);
 
     useEffect(() => {
-        let syncValid = true;
+        let syncValid = missingRequired.length === 0;
         if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setError(`Only ${pricing.availableStock} Full Sheets available`); syncValid = false; }
         else setError(null);
 
@@ -165,8 +195,8 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         const attributes = [];
         if (extraSelections['Thickness']) attributes.push({ label: 'Thickness', value: extraSelections['Thickness'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Thickness') attributes.push({ label: key, value: val }); });
-        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, checkingStock: feasibility.checking, stockError: feasibility.message });
-    }, [fullQty, halfQty, halfSide, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility]);
+        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, missingAttributes: missingRequired, checkingStock: feasibility.checking, stockError: feasibility.message });
+    }, [fullQty, halfQty, halfSide, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current sheet stock/offcuts? Reuses the exact real checkout deduction
@@ -175,7 +205,9 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     // since only the live DB knows what offcuts/stock actually exist.
     const feasibilitySeqRef = useRef(0);
     useEffect(() => {
-        if (fullQty <= 0 && halfQty <= 0 && cutPieces.length === 0) {
+        // Nothing to check, or nothing to check it against: with a required
+        // attribute still unpicked there's no variant to resolve stock from.
+        if ((fullQty <= 0 && halfQty <= 0 && cutPieces.length === 0) || missingRequired.length > 0) {
             setFeasibility({ checking: false, ok: true, message: null });
             return;
         }
@@ -207,7 +239,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         }, 400);
 
         return () => clearTimeout(timer);
-    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems]);
+    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems, missingRequired]);
 
     const getArea = (l, w, u) => {
         if (u === 'ft') { const rl = roundToHalfWithRule(l), rw = roundToHalfWithRule(w); return rl * rw; }
@@ -284,20 +316,34 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         <div>
             {/* Attribute selectors */}
             {Object.entries(extraAttributes).length > 0 && (
-                <div style={sectionStyle}>
-                    {Object.entries(extraAttributes).map(([key]) => (
+                <div style={missingRequired.length > 0
+                    ? { ...sectionStyle, background: 'rgba(251,146,60,0.06)', border: '1px solid rgba(251,146,60,0.4)' }
+                    : sectionStyle}>
+                    {Object.entries(extraAttributes).map(([key]) => {
+                        const isMissing = missingRequired.includes(key);
+                        return (
                         <div key={key} style={{ marginBottom: '0.625rem' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.375rem' }}>
-                                <span style={labelStyle}>{key}</span>
-                                {key === 'Thickness' && <span style={{ fontSize: '0.65rem', color: '#475569', fontFamily: 'var(--font-mono)' }}>KSH{pricing.priceSqFt}/sqft</span>}
+                                <span style={isMissing ? { ...labelStyle, color: '#fb923c' } : labelStyle}>
+                                    {key}{isRequiredKey(key) ? ' *' : ''}
+                                </span>
+                                {isMissing
+                                    ? <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#fb923c', letterSpacing: '0.08em' }}>REQUIRED</span>
+                                    : key === 'Thickness' && <span style={{ fontSize: '0.65rem', color: '#475569', fontFamily: 'var(--font-mono)' }}>KSH{pricing.priceSqFt}/sqft</span>}
                             </div>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
                                 {(optionsForKey[key] || []).map(opt => (
-                                    <button key={opt} onClick={() => setExtraSelections(prev => ({ ...prev, [key]: opt }))} style={chipBtn(extraSelections[key] === opt, '#06b6d4')}>{opt}</button>
+                                    <button key={opt} onClick={() => setExtraSelections(prev => ({ ...prev, [key]: opt }))} style={chipBtn(extraSelections[key] === opt, isMissing ? '#fb923c' : '#06b6d4')}>{opt}</button>
                                 ))}
                             </div>
                         </div>
-                    ))}
+                        );
+                    })}
+                    {missingRequired.length > 0 && (
+                        <p style={{ fontSize: '0.68rem', color: '#fb923c', fontWeight: 700, margin: '0.25rem 0 0' }}>
+                            Select {missingRequired.join(' and ')} before adding — a sheet cut to the wrong thickness can't be undone.
+                        </p>
+                    )}
                 </div>
             )}
 
