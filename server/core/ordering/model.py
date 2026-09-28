@@ -36,9 +36,13 @@ class OrderCreate(BaseModel):
 class OrderCreateResponse(BaseModel):
     message: str
     orderId: int
+    # Gap-free receipt number (core/ordering/orderNumbers.py). None only for responses
+    # about an order that has not been confirmed yet.
+    orderNo: Optional[int] = None
 
 class OrderResponse(BaseModel):
     orderId: int
+    orderNo: Optional[int] = None   # the number to show people; see OrderCreateResponse
     customerId: Optional[int] = None
     customerName: Optional[str] = None
     customerType: Optional[str] = None

@@ -81,6 +81,7 @@ from entities.orderItems import OrderItem
 from entities.orders import Order
 from core.inventory.poolKey import compute_pool_key, safe_delete_offcut
 from core.inventory import offcutLedger as ledger
+from core.inventory import holdScope as hold
 from loggiing import logger
 
 
@@ -500,6 +501,7 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
         Offcut.width.isnot(None),
         Offcut.height.isnot(None),
         Offcut.pool_key == pool_key,
+        hold.visible_to_scope(),  # never another open window's private remainder
     )
     offcuts = db.exec(stmt).all()
 
@@ -865,6 +867,9 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
         Offcut.width >= width - OFFCUT_MATCH_TOLERANCE_MM, Offcut.width <= width + OFFCUT_MATCH_TOLERANCE_MM,
         Offcut.height >= height - OFFCUT_MATCH_TOLERANCE_MM, Offcut.height <= height + OFFCUT_MATCH_TOLERANCE_MM,
         Offcut.pool_key == pool_key,
+        # An open window's remainder gets a row of its own, private until the window closes
+        # (core/inventory/holdScope.py) — never merged into a public row.
+        hold.same_scope(),
     ).with_for_update()
     existing = db.exec(stmt).first()
     if existing:
@@ -880,6 +885,7 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
             pool_key=pool_key,
             width=width, height=height, length=0.0,
             quantity=1, status=status, source_item_id=source_item_id,
+            held_by_order_id=hold.current_hold(),
         )
         db.add(new_offcut)
         db.flush()  # assign a real id immediately, not just on the next autoflush
@@ -920,7 +926,8 @@ def _find_glass_offcut(db: Session, product: Product, variant: Optional[Variant]
         Offcut.width >= width - OFFCUT_MATCH_TOLERANCE_MM, Offcut.width <= width + OFFCUT_MATCH_TOLERANCE_MM,
         Offcut.height >= height - OFFCUT_MATCH_TOLERANCE_MM, Offcut.height <= height + OFFCUT_MATCH_TOLERANCE_MM,
         Offcut.pool_key == pool_key,
-    ).with_for_update()
+        hold.visible_to_scope(),
+    ).order_by(hold.own_rows_first()).with_for_update()
     return db.exec(stmt).first()
 
 
@@ -1001,6 +1008,7 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
         locked = db.exec(select(Offcut).where(Offcut.offcutId == candidate["source_id"]).with_for_update()).first()
         if not locked or locked.quantity < 1:
             raise ValueError(f"Offcut #{candidate['source_id']} is no longer available")
+        hold.assert_usable(locked)
         if locked.source_item_id:
             producing_item = db.get(OrderItem, locked.source_item_id)
             if producing_item and not producing_item.cutting_completed:

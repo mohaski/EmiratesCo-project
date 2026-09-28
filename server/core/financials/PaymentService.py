@@ -163,10 +163,12 @@ def get_financial_summary(period: str, date_str: str | None, db: Session) -> mod
             by_method["cash"] += p.amount
             by_method_count["cash"] += 1
 
+    from core.ordering.visibility import visible_orders
     orders = db.exec(
         select(Order).where(
             func.date(Order.created_at) >= range_start,
             func.date(Order.created_at) <= range_end,
+            visible_orders(),  # open/abandoned sale windows are not orders
         )
     ).all()
     status_counts: dict = {}
@@ -262,8 +264,9 @@ def record_payment(
         if amount is None or amount <= 0:
             raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
 
+        from core.ordering.visibility import is_hidden
         order = db.exec(select(Order).where(Order.orderId == order_id)).first()
-        if not order:
+        if not order or is_hidden(order):
             raise HTTPException(status_code=404, detail="Order not found")
         if order.status == "cancelled":
             raise HTTPException(status_code=400, detail="Cannot record a payment against a cancelled order")

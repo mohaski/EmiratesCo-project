@@ -279,6 +279,9 @@ class GlassCutPreviewCut(BaseModel):
 class GlassCutPreviewRequest(BaseModel):
     variant_id: Optional[int] = None
     cuts: List[GlassCutPreviewCut]
+    # The sale window (its held order id) this preview is for, so its own held remainders
+    # count (core/inventory/holdScope.py). Must be the caller's own open window.
+    hold_order_id: Optional[int] = None
 
 
 class OffcutReplacementPreviewPiece(BaseModel):

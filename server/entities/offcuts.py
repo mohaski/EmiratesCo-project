@@ -36,6 +36,13 @@ class Offcut(SQLModel, table=True):
     # decide whether to attach a pending_source_notice (see glassOffcutService/inventoryService).
     source_item_id: Optional[int] = Field(default=None, foreign_key="orderitems.item_id", index=True)
 
+    # Set while this row is a remainder produced by an open sale window (a "held" order).
+    # Only that window may draw on it: the bar/sheet it came from has not been cut, and if
+    # another sale cut into this remainder, abandoning the window could no longer hand the
+    # bar back whole. Cleared when the window is confirmed or released
+    # (core/inventory/holdScope.publish_held_offcuts). NULL = public, the normal case.
+    held_by_order_id: Optional[int] = Field(default=None, foreign_key="orders.orderId", index=True)
+
     # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
     

@@ -10,6 +10,7 @@ from entities.orders import Order
 from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines, half_sheet_piece_dims_mm
 from core.inventory.poolKey import load_attribute_types, pool_key_from_attributes, compute_pool_key, pool_sibling_variants, safe_delete_offcut
 from core.inventory import offcutLedger as ledger
+from core.inventory import holdScope as hold
 from loggiing import logger
 
 
@@ -271,10 +272,16 @@ def check_line_items_feasible(
     no longer exists" and disabled Add to Order, though saving would have worked (order 202).
     """
     trial_lines = [dict(line) for line in line_items]  # don't mutate caller's lineItems
+    # An open sale window may also draw on its own held remainders (core/inventory/holdScope.py),
+    # so its check runs in that window's scope. Any other order is checked as the public pool.
+    from core.ordering.visibility import HELD
+    order = db.get(Order, edit_order_id) if edit_order_id else None
+    scope = order.orderId if order is not None and order.status == HELD else None
     try:
-        if edit_order_id:
-            _simulate_edit_return(db, product, edit_order_id, trial_lines)
-        _process_line_items(db, product, variant, trial_lines)
+        with hold.holding_for(scope):
+            if edit_order_id:
+                _simulate_edit_return(db, product, edit_order_id, trial_lines)
+            _process_line_items(db, product, variant, trial_lines)
         return {"ok": True, "message": None}
     except ValueError as e:
         return {"ok": False, "message": str(e)}
@@ -622,12 +629,25 @@ def _restore_packaged_stock_pooled(
             box_variant = db.get(Variant, s.get("variant_id"))
             box_size = round(s.get("box_size", 0))
             remainder = round(s.get("remainder_to_pool", 0))
-            if box_variant and box_size > 0:
+            # Re-sealing puts the WHOLE box back, which is only true if the leftover this
+            # opening added to the loose pool is still there. If a later sale has drawn it
+            # down, part of this box is already sold: re-sealing anyway (and flooring the
+            # pool at 0) invented those pieces — e.g. box of 100, this sale took 10, another
+            # sale took 50 of the 90 leftover, and the restore reported 300 pieces where 250
+            # physically remained. Same rule as a bar whose remainder was cut into
+            # (restore_specific_offcut_sources): only this sale's own pieces come back, loose.
+            # Open sale windows make this common — abandoning one is a restore.
+            loose_row = _find_loose_pcs_offcut(db, product, pool_key) if pool_key is not None else None
+            leftover_intact = remainder <= 0 or (loose_row is not None and loose_row.length >= remainder)
+            if box_variant and box_size > 0 and leftover_intact:
                 locked = _lock_variant(db, box_variant)
                 locked.stock_quantity += box_size
                 db.add(locked)
-            if remainder > 0 and pool_key is not None:
-                _remove_loose_pcs(db, product, pool_key, remainder)
+                if remainder > 0:
+                    _remove_loose_pcs(db, product, pool_key, remainder)
+            elif stock_used > 0 and pool_key is not None:
+                _add_loose_pcs(db, product, pool_key, stock_used,
+                               variant_id=box_variant.variantId if box_variant else None)
         else:
             # Legacy shape predating the box-opening model — {"variant_id", "stock_used"}
             v = db.get(Variant, s.get("variant_id"))
@@ -835,6 +855,7 @@ def _fulfill_one_cut_via_best_fit(
             Offcut.length >= required_length,
             Offcut.quantity > 0,
             Offcut.pool_key == pool_key,
+            hold.visible_to_scope(),  # never another open window's private remainder
         )
         .order_by(Offcut.length.asc())  # smallest fit first → least waste
         .with_for_update()  # prevent two concurrent cuts from claiming the same offcut
@@ -1176,7 +1197,8 @@ def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] 
         Offcut.length >= length - 0.01,
         Offcut.length <= length + 0.01,
         Offcut.pool_key == pool_key,
-    ).with_for_update()
+        hold.visible_to_scope(),
+    ).order_by(hold.own_rows_first()).with_for_update()
 
     existing = db.exec(stmt).first()
     if not existing:
@@ -1228,7 +1250,8 @@ def _drop_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) -> N
                     Offcut.pool_key == pool_key,
                     Offcut.length >= piece.length - 0.01,
                     Offcut.length <= piece.length + 0.01,
-                ).with_for_update()
+                    hold.visible_to_scope(),
+                ).order_by(hold.own_rows_first()).with_for_update()
             ).first()
 
     if row is None:
@@ -1253,6 +1276,9 @@ def _return_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) ->
         db.add(row)
         return
 
+    # Inside an open window's cart change, only the window's own remainders stay private; a
+    # public offcut it had consumed goes back to the public pool (holdScope.hold_for_new_row).
+    held_by = hold.hold_for_new_row(db, piece.produced_by_item_id)
     if piece.geom_kind == ledger.GEOM_2D:
         new_row = Offcut(
             product_id=product.productId,
@@ -1260,6 +1286,7 @@ def _return_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) ->
             pool_key=pool_key,
             width=piece.width, height=piece.height, length=0.0,
             quantity=1, status="scrap" if piece.is_scrap else "available",
+            held_by_order_id=held_by,
         )
     else:
         new_row = Offcut(
@@ -1268,6 +1295,7 @@ def _return_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) ->
             pool_key=pool_key,
             length=piece.length,
             quantity=1, status="scrap" if piece.is_scrap else "available",
+            held_by_order_id=held_by,
         )
     db.add(new_row)
     db.flush()
@@ -1452,6 +1480,7 @@ def _consume_offcut_sources(
 
         if not locked:
             raise ValueError(f"Offcut #{oc_id} no longer exists")
+        hold.assert_usable(locked)
         if locked.quantity < 1:
             raise ValueError(f"Offcut #{oc_id} is no longer available (qty=0)")
         if locked.length < length_used - 0.02:
@@ -1581,6 +1610,9 @@ def _upsert_offcut(
         Offcut.length >= length - 0.001,
         Offcut.length <= length + 0.001,
         Offcut.pool_key == pool_key,
+        # An open window's remainder is kept in a row of its own, private to that window
+        # until it closes (core/inventory/holdScope.py) — never merged into a public row.
+        hold.same_scope(),
     ).with_for_update()
 
     existing = db.exec(stmt).first()
@@ -1599,6 +1631,7 @@ def _upsert_offcut(
             quantity=1,
             status=status,
             source_item_id=source_item_id,
+            held_by_order_id=hold.current_hold(),
         )
         db.add(new_row)
         db.flush()  # assign a real id now, for the ledger's projection pointer

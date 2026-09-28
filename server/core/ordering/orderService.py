@@ -23,6 +23,8 @@ from utils import require_role, ceil_amount
 from ..userManagement.authService import get_current_user
 from ..inventory.inventoryService import deduct_stock_for_order_item
 from . import model
+from .visibility import HIDDEN_STATUSES, visible_orders, get_visible_order_or_404
+from .orderNumbers import assign_order_no
 from typing import List, Optional
 
 
@@ -71,6 +73,7 @@ def _order_to_response(order: Order) -> model.OrderResponse:
 
     return model.OrderResponse(
         orderId=order.orderId,
+        orderNo=order.order_no,
         customerId=order.customerid,
         customerName=customer_name,
         customerType=customer_type,
@@ -124,6 +127,7 @@ def _order_to_shallow_response(order: Order) -> model.OrderResponse:
 
     return model.OrderResponse(
         orderId=order.orderId,
+        orderNo=order.order_no,
         customerId=order.customerid,
         customerName=customer_name,
         customerType=customer_type,
@@ -276,6 +280,10 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # 🔐 Ensure user has privilege to create
         require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
+        # Held/abandoned belong to sale windows (windowService) and are never created here.
+        if order_data.status in HIDDEN_STATUSES:
+            raise HTTPException(status_code=422, detail=f"An order cannot be created as '{order_data.status}'")
+
         # 1. Validate source invoice (if converting) before touching anything
         source_inv = None
         if order_data.sourceInvoiceId:
@@ -410,12 +418,15 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
             )
             db.add(new_payment_rec)
 
+        # Last, after every stock lock: the counter row serialises confirms (orderNumbers.py).
+        assign_order_no(db, new_order)
         db.commit()
 
-        logger.info(f"Order {new_order.orderId} created (Items: {len(order_data.items)}) by {current_user.userId}.")
+        logger.info(f"Order {new_order.orderId} (no. {new_order.order_no}) created (Items: {len(order_data.items)}) by {current_user.userId}.")
         return model.OrderCreateResponse(
             message="Order created successfully",
-            orderId=new_order.orderId
+            orderId=new_order.orderId,
+            orderNo=new_order.order_no,
         )
     except HTTPException:
         raise
@@ -434,10 +445,7 @@ def get_order_by_orderId(order_id: int, db: Session = Depends(get_session)) -> m
     - Raises 404 error if the order does not exist.
     """
     try:
-        order = db.get(Order, order_id)
-        if not order:
-            logger.warning(f"Order {order_id} not found.")
-            raise HTTPException(status_code=404, detail="Order not found")
+        order = get_visible_order_or_404(db, order_id)
         return _order_to_response(order)
     except HTTPException:
         raise
@@ -461,7 +469,8 @@ def get_orders_for_period_vatExcluded(
             .where(
                 Order.created_at >= start_date,
                 Order.created_at <= end_date,
-                Order.VAT_status == False
+                Order.VAT_status == False,
+                visible_orders(),
             )
             .offset(skip)
             .limit(limit)
@@ -495,7 +504,8 @@ def get_orders_for_period_vatIncluded(
             .where(
                 Order.created_at >= start_date,
                 Order.created_at <= end_date,
-                Order.VAT_status == True
+                Order.VAT_status == True,
+                visible_orders(),
             )
             .offset(skip)
             .limit(limit)
@@ -525,7 +535,7 @@ def get_orders_by_customerId(
     try:
         statement = (
             select(Order)
-            .where(Order.customerid == customer_id)
+            .where(Order.customerid == customer_id, visible_orders())
             .offset(skip)
             .limit(limit)
         )
@@ -554,7 +564,7 @@ def get_orders_by_servedby(
     try:
         statement = (
             select(Order)
-            .where(Order.servedby == user_id)
+            .where(Order.servedby == user_id, visible_orders())
             .offset(skip)
             .limit(limit)
         )
@@ -578,7 +588,8 @@ def get_orders_for_certain_day(date: str, db: Session = Depends(get_session)) ->
     try:
         statement = select(Order).where(
             Order.created_at >= f"{date} 00:00:00",
-            Order.created_at <= f"{date} 23:59:59"
+            Order.created_at <= f"{date} 23:59:59",
+            visible_orders(),
         )
         orders = db.exec(statement).all()
         return [_order_to_shallow_response(order) for order in orders]
@@ -594,7 +605,7 @@ def get_child_orders(parent_order_id: int, db: Session = Depends(get_session)) -
     - Returns a list of child orders for the given parent order.
     """
     try:
-        statement = select(Order).where(Order.parent_orderid == parent_order_id)
+        statement = select(Order).where(Order.parent_orderid == parent_order_id, visible_orders())
         orders = db.exec(statement).all()
         return [_order_to_shallow_response(order) for order in orders]
     except HTTPException:
@@ -612,7 +623,7 @@ def get_all_orders(
     Retrieve all orders in the system with pagination, newest first.
     """
     try:
-        statement = select(Order).order_by(Order.created_at.desc()).offset(skip).limit(limit)
+        statement = select(Order).where(visible_orders()).order_by(Order.created_at.desc()).offset(skip).limit(limit)
         orders = db.exec(statement).all()
 
         return [_order_to_shallow_response(order) for order in orders]
@@ -630,7 +641,7 @@ def getAll_orders_VatIncluded(db: Session = Depends(get_session)) -> list[model.
     - Returns a list of VAT-included orders.
     """
     try:
-        statement = select(Order).where(Order.VAT_status == True)
+        statement = select(Order).where(Order.VAT_status == True, visible_orders())
         orders = db.exec(statement).all()
 
         return [_order_to_shallow_response(order) for order in orders]
@@ -869,9 +880,7 @@ def update_order(
 
     require_role(["manager", "ceo", "admin"], current_user)
 
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    order = get_visible_order_or_404(db, order_id)
     # A finished or cancelled order is off limits. This blocked every CUT order too until
     # mark_cutting_complete_for_orders_batch stopped auto-completing them: reporting a
     # cutting job done no longer touches the order's workflow status, so "completed" once
@@ -1188,9 +1197,7 @@ def correct_offcut_for_order_item(
 
     require_role(["manager", "ceo", "admin"], current_user)
 
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    order = get_visible_order_or_404(db, order_id)
     if order.status == "cancelled":
         raise HTTPException(
             status_code=400,
@@ -1300,9 +1307,7 @@ def correct_profile_offcut_for_order_item(
 
     require_role(["manager", "ceo", "admin"], current_user)
 
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    order = get_visible_order_or_404(db, order_id)
     if order.status == "cancelled":
         raise HTTPException(
             status_code=400,
@@ -1381,7 +1386,11 @@ def mark_cutting_complete_batch(item_ids: list, db: Session, current_user) -> di
     require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
     items = db.exec(
-        select(OrderItem).where(OrderItem.item_id.in_(item_ids), OrderItem.cutting_completed == False)  # noqa: E712
+        select(OrderItem)
+        .join(Order, Order.orderId == OrderItem.order_id)
+        # An open sale window's items are not in the cutting queue (no cutting before
+        # payment), so they can't be reported cut either.
+        .where(OrderItem.item_id.in_(item_ids), OrderItem.cutting_completed == False, visible_orders())  # noqa: E712
     ).all()
     now = datetime.utcnow()
     updated = []
@@ -1416,7 +1425,7 @@ def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current
     """
     require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
-    orders = db.exec(select(Order).where(Order.orderId.in_(order_ids))).all()
+    orders = db.exec(select(Order).where(Order.orderId.in_(order_ids), visible_orders())).all()
     now = datetime.utcnow()
     updated_items = []
     updated_orders = []  # orders processed — their workflow status is left untouched
@@ -1437,7 +1446,7 @@ def mark_cutting_complete_for_order(order_id: int, db: Session, current_user) ->
     """Single-order convenience wrapper around mark_cutting_complete_for_orders_batch
     (e.g. the cashier reporting "this order's been cut" from the order summary page)."""
     order = db.get(Order, order_id)
-    if not order:
+    if not order or order.status in HIDDEN_STATUSES:
         raise HTTPException(status_code=404, detail="Order not found")
     result = mark_cutting_complete_for_orders_batch([order_id], db, current_user)
     return {"updated": result["updated_items"]}
@@ -1456,7 +1465,8 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
     stmt = (
         select(Order)
         .join(OrderItem, OrderItem.order_id == Order.orderId)
-        .where(OrderItem.cutting_completed == False, Order.status != "cancelled")  # noqa: E712
+        # visible_orders(): an open sale window is not cut before it is paid for.
+        .where(OrderItem.cutting_completed == False, Order.status != "cancelled", visible_orders())  # noqa: E712
         .distinct()
         .order_by(Order.created_at.asc())
         .offset(skip).limit(limit)
@@ -1533,7 +1543,7 @@ def get_orders_with_balance(db: Session, skip: int = 0, limit: int = 200) -> lis
     try:
         statement = (
             select(Order)
-            .where(Order.balance > 0.01, Order.status != "cancelled")
+            .where(Order.balance > 0.01, Order.status != "cancelled", visible_orders())
             .order_by(Order.created_at.asc())
             .offset(skip)
             .limit(limit)
@@ -1642,9 +1652,7 @@ def get_reversal_plan(order_id: int, db: Session, current_user, incoming_items=N
 
     require_role(["manager", "ceo", "admin"], current_user)
 
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    order = get_visible_order_or_404(db, order_id)
 
     # Given the cart an edit is about to submit, narrow the question to the items that edit
     # will actually disturb — matched exactly the way update_order will match them, so the
@@ -1683,9 +1691,10 @@ def update_order_status(
                 detail="Cancelling an order requires the cancel PIN — use PUT /orders/{id}/cancel instead.",
             )
 
-        order = db.get(Order, order_id)
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+        if new_status in HIDDEN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"An order cannot be set to '{new_status}'.")
+
+        order = get_visible_order_or_404(db, order_id)
 
         old_status = order.status
         order.status = new_status
@@ -1755,9 +1764,7 @@ def cancel_order_with_pin(
         if not verify_cancel_pin(db, pin):
             raise HTTPException(status_code=403, detail="Incorrect PIN.")
 
-        order = db.get(Order, order_id)
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+        order = get_visible_order_or_404(db, order_id)
         if order.status != "cancelled" and _order_age(db, order) > CANCEL_WINDOW:
             raise HTTPException(status_code=400, detail="This order is more than a week old and can no longer be cancelled.")
 

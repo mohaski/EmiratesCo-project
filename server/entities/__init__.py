@@ -16,6 +16,7 @@ from .editHistory import EditHistory
 from .settings import SystemSetting
 from .tools import Tool, ToolLoan, ToolLoanItem
 from .stockInputSession import StockInputSession, StockInputSessionItem
+from .saleWindows import SaleWindow, OrderNumberCounter
 
 __all__ = [
     "User",
@@ -42,4 +43,6 @@ __all__ = [
     "ToolLoanItem",
     "StockInputSession",
     "StockInputSessionItem",
+    "SaleWindow",
+    "OrderNumberCounter",
 ]
