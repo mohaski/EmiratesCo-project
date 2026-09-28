@@ -281,7 +281,8 @@ def check_cut_feasibility(
     error — this fires on every keystroke, unlike glass's user-triggered
     preview (glass-cut-preview) which surfaces failures as 422.
     """
-    return service.check_cut_feasibility(product_id, payload.line_items, db, payload.variant_id)
+    return service.check_cut_feasibility(product_id, payload.line_items, db, payload.variant_id,
+                                         edit_order_id=payload.edit_order_id)
 
 @router.get("/{product_id}/availability", response_model=model.StockAvailabilityResponse)
 def check_availability(

@@ -275,8 +275,14 @@ export const ProductService = {
      * routine "not enough stock yet" state shouldn't trigger the global
      * error-toast interceptor above.
      */
-    checkCutFeasibility: async (productId, variantId, lineItems) => {
-        const response = await api.post(`/products/${productId}/cut-feasibility`, { variant_id: variantId, line_items: lineItems });
+    checkCutFeasibility: async (productId, variantId, lineItems, editOrderId = null) => {
+        const response = await api.post(`/products/${productId}/cut-feasibility`, {
+            variant_id: variantId,
+            line_items: lineItems,
+            // Set while editing a saved order: the check then gives that order's own
+            // material back first, as the edit will.
+            edit_order_id: editOrderId ?? null,
+        });
         return response.data;
     },
     getRestockHistory: async (skip = 0, limit = 100, productId = null) => {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import OffcutSelectorModal from './OffcutSelectorModal';
 import api from '../../../services/api';
+import { useCart } from '../../../context/CartContext';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -12,6 +13,10 @@ const sectionStyle = { background: 'rgba(255,255,255,0.04)', border: '1px solid 
 const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' };
 
 const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart = [], cartIndex = null, source = 'sales' }) => {
+    // Set while editing a saved order: the stock check then gives that order's own material
+    // back first, as the edit will, instead of calling a cut impossible because this very
+    // order used its hand-picked offcut up (see CartContext.editingOrderId).
+    const { editingOrderId } = useCart();
     // Offcut selection is a POS/cutting-floor concern — invoices/quotations are
     // generated before any physical cutting happens, so there's nothing to pick from yet.
     const allowOffcutSelection = source !== 'invoice';
@@ -158,7 +163,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
 
         const timer = setTimeout(() => {
             api.productService
-                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems)
+                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId)
                 .then(res => {
                     if (feasibilitySeqRef.current !== mySeq) return; // superseded by a newer check
                     setFeasibility({ checking: false, ok: !!res.ok, message: res.ok ? null : (res.message || 'Insufficient stock for this configuration.') });
@@ -172,7 +177,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         }, 400);
 
         return () => clearTimeout(timer);
-    }, [fullQty, halfQty, feet, pricing.variantId, offcutSelection, product.id, fullLengtherror, cuterror, lineItems]);
+    }, [fullQty, halfQty, feet, pricing.variantId, offcutSelection, product.id, fullLengtherror, cuterror, lineItems, editingOrderId]);
 
     const handleExtraChange = (key, val) => setExtraSelections(prev => ({ ...prev, [key]: val }));
     const chipBtn = (active) => ({

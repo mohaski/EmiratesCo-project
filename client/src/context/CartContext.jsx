@@ -103,17 +103,27 @@ export const CartProvider = ({ children }) => {
         setCartItems(prev => prev.filter((_, i) => i !== index));
     }, []);
 
+    // The order this cart is an edit of, or null for a new sale. The calculators' stock
+    // check sends it along so the dry run first gives that order's own material back, as
+    // the edit will — otherwise a cut whose hand-picked offcut this very order used up is
+    // reported as impossible ("Offcut #N no longer exists") and Add to Order is disabled.
+    // Not persisted: SalesDashboard sets it from the navigation state on every load.
+    const [editingOrderId, setEditingOrderId] = useState(null);
+
     const clearCart = useCallback(() => {
         setCartItems([]);
         setCustomer(null);
         setLinkedRef(null);
+        setEditingOrderId(null);
         // We typically keep tax settings even after clearing
     }, []);
 
-    // Used when editing a historical order
-    const loadOrder = useCallback((orderData) => {
+    // Used when editing a historical order (and resuming one). `editingOrderId` is passed
+    // only for a real edit of a saved order.
+    const loadOrder = useCallback((orderData, { editingOrderId: editing = null } = {}) => {
         setCartItems(orderData.items || []);
         setCustomer(orderData.customer || null);
+        setEditingOrderId(editing);
     }, []);
 
     const value = {
@@ -130,7 +140,9 @@ export const CartProvider = ({ children }) => {
         updateCartItem,
         removeFromCart,
         clearCart,
-        loadOrder
+        loadOrder,
+        editingOrderId,
+        setEditingOrderId,
     };
 
     return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

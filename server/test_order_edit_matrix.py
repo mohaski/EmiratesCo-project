@@ -774,6 +774,82 @@ def test_plan_labels_and_tree(db, cat, user):
     check("every piece in the history follows its own parent", ok, True)
 
 
+def test_calculator_check_during_edit(db, cat, user):
+    """Re-opening a cut in the calculator during an edit re-checks it against current stock.
+    If this very order had used its hand-picked offcut up, that offcut no longer existed, so
+    the check said "Offcut #N no longer exists" and disabled Add to Order — though saving
+    would have worked. With the order being edited named, the dry run gives that order's
+    material back first, as the edit does. A new sale keeps the strict check."""
+    print("\n--- 19. The calculator's stock check understands an edit ---")
+    from core.inventory import offcutLedger as ledger
+    from core.inventory.inventoryService import check_line_items_feasible
+
+    bar, bvar = seed_product(db, cat, "Reg Calc Bar", kind="bar")
+    row = Offcut(product_id=bar.productId, variant_id=bvar.variantId, pool_key="",
+                 length=4.0, quantity=1, status="available")
+    db.add(row)
+    db.flush()
+    ledger.mint_pieces_for_row(db, row, origin=ledger.ORIGIN_MANUAL_ENTRY, notes="test")
+    db.commit()
+    picked = row.offcutId
+
+    order = new_order(db, user)
+    line = {**line_cut_1d(4.0), "offcut_selection": [{"offcut_id": picked, "length_used": 4.0}]}
+    add_item(db, order, bar, bvar, [line])
+    db.commit()
+    check("the pick used the offcut up", db.get(Offcut, picked), None)
+
+    as_sent = [{k: v for k, v in line.items() if k != "offcut_sources"}]
+    strict = check_line_items_feasible(db, bar, bvar, as_sent)
+    check("a NEW sale is still told the offcut is gone", strict["ok"], False)
+    edit_aware = check_line_items_feasible(db, bar, bvar, as_sent, edit_order_id=order.orderId)
+    check("the same cut inside an edit of that order is fine", edit_aware["ok"], True)
+    check("and the dry run left the order's consumption untouched",
+          bool(items_of(db, order)), True)
+    check("nor brought the offcut back", db.get(Offcut, picked), None)
+
+
+def test_history_shows_only_the_lines_lineage(db, cat, user):
+    """The material history used to draw every piece ever cut from the root sheet — 14 rows
+    for a 2-piece line on order 202. It now shows only this line's lineage.
+
+    Needs a BRANCH to mean anything: a sheet leaves two remainders, and two different orders
+    each cut from one of them. Each order's history must show its own branch and not the
+    other's (a straight bar chain has no branches, so it can't tell the two behaviours apart).
+    """
+    print()
+    print("--- 20. The history shows only this line's own lineage ---")
+    g, gv = seed_product(db, cat, "Reg Lineage Glass", kind="glass")
+    first = new_order(db, user)
+    sheet_cut = add_item(db, first, g, gv, [line_cut_2d(1200, 900)])
+    rems = sheet_cut.details["lineItems"][0]["offcut_sources"][0]["remainders_created"]
+    check("the sheet left at least two remainders to branch from", len(rems) >= 2, True)
+    small = min(rems, key=lambda r: r["width"] * r["height"])
+    large = max(rems, key=lambda r: r["width"] * r["height"])
+
+    a = new_order(db, user)
+    add_item(db, a, g, gv, [line_cut_2d(small["width"] - 50, small["height"] - 50)])
+    b = new_order(db, user)
+    add_item(db, b, g, gv, [line_cut_2d(large["width"] - 50, large["height"] - 50)])
+    db.commit()
+
+    def lineage_ids(order):
+        plan = rp.build_plan(db, order)
+        return {p["piece_id"] for l in plan["lines"] for p in (l["chain"] or {}).get("pieces", [])}
+
+    def fmt(r):
+        return f"{r['width']:.0f}x{r['height']:.0f}mm"
+
+    a_ids, b_ids = lineage_ids(a), lineage_ids(b)
+    check("each order shows its own branch", bool(a_ids) and bool(b_ids), True)
+    check("the two branches share only their common ancestry",
+          a_ids & b_ids <= lineage_ids(first) | {small.get("piece_id"), large.get("piece_id")} - {None}, True)
+    check("order A's history does not show order B's remainder",
+          large.get("piece_id") in a_ids, False)
+    check("order B's history does not show order A's remainder",
+          small.get("piece_id") in b_ids, False)
+
+
 def main():
     engine = engine_for_test_db()
     with Session(engine) as db:
@@ -789,7 +865,8 @@ def main():
                    test_fingerprint_ignores_untouched_chains, test_order_age_uses_local_clock,
                    test_shared_sheet_is_cut_if_any_line_is,
                    test_shared_sheet_all_cut_keeps_every_piece,
-                   test_legacy_already_cut_is_honoured, test_plan_labels_and_tree):
+                   test_legacy_already_cut_is_honoured, test_plan_labels_and_tree,
+                   test_calculator_check_during_edit, test_history_shows_only_the_lines_lineage):
             fn(db, cat, user)
 
     print("\n" + "=" * 68)

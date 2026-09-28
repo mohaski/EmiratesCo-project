@@ -300,6 +300,9 @@ class LineItemsFeasibilityRequest(BaseModel):
     knows how to dispatch (profile-full/half/cut, sheet-full/half, glass-cut, ...)."""
     variant_id: Optional[int] = None
     line_items: List[Dict[str, Any]]
+    # Set when the item belongs to an order being EDITED: the dry run first gives that
+    # order's own material back, as the edit itself will (inventoryService._simulate_edit_return).
+    edit_order_id: Optional[int] = None
 
 
 class LineItemsFeasibilityResponse(BaseModel):

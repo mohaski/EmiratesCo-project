@@ -1104,6 +1104,7 @@ def check_cut_feasibility(
     line_items: List[Dict[str, Any]],
     db: Session,
     variant_id: Optional[int] = None,
+    edit_order_id: Optional[int] = None,
 ) -> dict:
     """
     Dry-run whether the given line items — profile full/half/custom-cut
@@ -1123,7 +1124,7 @@ def check_cut_feasibility(
         raise HTTPException(status_code=404, detail="Product not found")
     variant = db.get(Variant, variant_id) if variant_id else None
 
-    return check_line_items_feasible(db, product, variant, line_items)
+    return check_line_items_feasible(db, product, variant, line_items, edit_order_id=edit_order_id)
 
 
 def check_stock_availability(product_id: int, qty: int, db: Session = Depends(get_session), variant_id: Optional[int] = None):

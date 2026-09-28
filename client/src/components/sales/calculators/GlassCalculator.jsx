@@ -2,6 +2,7 @@ import { memo, useState, useMemo, useEffect, useRef } from 'react';
 import { mmToSquareFeet, inchesToSquareFeet, roundToHalfWithRule } from '../../../utils/calculations';
 import CutPreviewModal from './CutPreviewModal';
 import api from '../../../services/api';
+import { useCart } from '../../../context/CartContext';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -17,6 +18,10 @@ const inputStyle = {
 const isRequiredKey = key => /thick/i.test(key);
 
 const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
+    // Set while editing a saved order: the stock check then gives that order's own material
+    // back first, as the edit will, instead of calling a cut impossible because this very
+    // order used its hand-picked offcut up (see CartContext.editingOrderId).
+    const { editingOrderId } = useCart();
 
     const extraAttributes = useMemo(() => {
         const extras = {};
@@ -225,7 +230,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
         const timer = setTimeout(() => {
             api.productService
-                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems)
+                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId)
                 .then(res => {
                     if (feasibilitySeqRef.current !== mySeq) return; // superseded by a newer check
                     setFeasibility({ checking: false, ok: !!res.ok, message: res.ok ? null : (res.message || 'Insufficient stock for this configuration.') });
@@ -239,7 +244,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         }, 400);
 
         return () => clearTimeout(timer);
-    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems, missingRequired]);
+    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems, missingRequired, editingOrderId]);
 
     const getArea = (l, w, u) => {
         if (u === 'ft') { const rl = roundToHalfWithRule(l), rw = roundToHalfWithRule(w); return rl * rw; }

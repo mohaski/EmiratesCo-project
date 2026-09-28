@@ -73,7 +73,8 @@ export default function SalesDashboard() {
         sessionType,
         setSessionType,
         linkedRef,
-        setLinkedRef
+        setLinkedRef,
+        setEditingOrderId,
     } = useCart();
 
     const [enableTax, setEnableTax] = useState(() =>
@@ -139,7 +140,11 @@ export default function SalesDashboard() {
                 };
             });
 
-            loadOrder({ ...orderData, items: mappedItems });
+            loadOrder({ ...orderData, items: mappedItems }, {
+                editingOrderId: location.state?.mode === 'edit'
+                    ? (orderData.id ?? orderData.orderId ?? null)
+                    : null,
+            });
             setEnableTax(orderData.VAT_status ?? (!cust || cust.type === 'corporate'));
         } else if (location.state?.mode === 'link' && location.state?.customer) {
             if (loadedStateRef.current?.startsWith('link')) return;
@@ -160,8 +165,11 @@ export default function SalesDashboard() {
             loadedStateRef.current = null;
             setSelectedCustomer(null);
             setLinkedRef(null);
+            // An abandoned edit must not leave its order id behind: a new sale's stock check
+            // would then assume that order's material is coming back.
+            setEditingOrderId(null);
         }
-    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, PRODUCTS]);
+    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, setEditingOrderId, PRODUCTS]);
 
     const handleProductClick = useCallback((product) => {
         setSelectedProduct(product);

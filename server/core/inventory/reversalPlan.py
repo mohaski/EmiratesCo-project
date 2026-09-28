@@ -173,21 +173,33 @@ def _piece_summary(piece: OffcutPiece, db: Session) -> dict:
 
 
 def _chain_for_line(db: Session, sources: list) -> Optional[dict]:
-    """The whole physical unit this line cut into, for the preview. Built from the
-    first event that recorded a piece id; every event on one line shares a source
-    unit in the overwhelmingly common case, and the UI only needs one picture."""
+    """This line's own lineage, for the preview: every piece it was cut from, their parents
+    up to the original bar/sheet, and everything since cut from those pieces.
+
+    Only THIS line's lineage. It used to draw the whole family of the root — on order 202 a
+    line that cut two 456x1050 pieces showed 14 rows: every other piece ever taken off that
+    sheet, retired ones included. It also used only the first source, so a line cut from two
+    different offcuts showed half its history.
+    """
+    lineage: dict = {}
     for src in sources:
+        if not isinstance(src, dict):
+            continue
         piece = ledger.get_piece(db, src.get("source_piece_id"))
         if piece is None:
             continue
-        chain = ledger.chain_for(db, piece.piece_id)
-        if not chain:
-            continue
-        return {
-            "root_piece_id": chain["root_piece_id"],
-            "pieces": [_piece_summary(p, db) for p in _tree_order(chain["pieces"])],
-        }
-    return None
+        lineage[piece.piece_id] = piece
+        for p in ledger.ancestors(db, piece):
+            lineage[p.piece_id] = p
+        for p in ledger.descendants(db, piece.piece_id):
+            lineage[p.piece_id] = p
+    if not lineage:
+        return None
+    ordered = _tree_order(list(lineage.values()))
+    return {
+        "root_piece_id": ordered[0].root_piece_id or ordered[0].piece_id,
+        "pieces": [_piece_summary(p, db) for p in ordered],
+    }
 
 
 def _tree_order(pieces: list) -> list:
