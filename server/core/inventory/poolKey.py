@@ -135,4 +135,12 @@ def safe_delete_offcut(db: Session, offcut: Offcut) -> None:
     ).all():
         item.created_offcut_id = None
         db.add(item)
+
+    # Same reason, for the offcut ledger's advisory back-pointer: the pieces this
+    # row projected (and their whole recorded history) outlive it, so only the
+    # pointer to the now-gone projection row is cleared. Imported locally to keep
+    # this module free of a core.inventory import cycle.
+    from core.inventory.offcutLedger import detach_offcut_row
+    detach_offcut_row(db, offcut.offcutId)
+
     db.delete(offcut)

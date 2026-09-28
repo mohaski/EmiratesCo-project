@@ -82,6 +82,21 @@ export const OrderService = {
         const response = await api.put(`/orders/${id}/edit`, orderData);
         return response.data;
     },
+    /** What editing or cancelling this order would do to its cut material, and which cut
+     * lines still need a physical yes/no from the floor. Read-only — call it before
+     * showing the edit or cancel screen (see ResolveCutsModal). When
+     * `all_defaults_safe` is true nothing needs confirming and the modal is skipped. */
+    getReversalPlan: async (id) => {
+        const response = await api.get(`/orders/${id}/reversal-plan`);
+        return response.data;
+    },
+    /** Same, narrowed to the items the given cart would actually change — so an edit only
+     * asks about cut material it actually disturbs. `items` is the mapped backend payload
+     * (see OrderContext.mapItemForBackend). Read-only. */
+    previewReversalPlan: async (id, items) => {
+        const response = await api.post(`/orders/${id}/reversal-plan`, { items });
+        return response.data;
+    },
     /** CEO/admin-only activity feed spanning every module that writes to edit_history
      * (restocks, stock-batch sessions, offcut corrections, order edits/status/cancellations).
      * since/until are inclusive YYYY-MM-DD bounds. */
@@ -95,12 +110,16 @@ export const OrderService = {
         return response.data;
     },
     /** refund: { method: 'cash'|'mpesa'|'split', details?: { cash, mpesa } } — how the
-     * cashier is handing back whatever was already collected. Omit when nothing was paid. */
-    cancelOrder: async (id, pin, refund = null) => {
+     * cashier is handing back whatever was already collected. Omit when nothing was paid.
+     * cutConfirmations: { [line_ref]: { physicalState, resolution } } from
+     * ResolveCutsModal — omit when the plan said nothing needed confirming. */
+    cancelOrder: async (id, pin, refund = null, cutConfirmations = null, planToken = null) => {
         const response = await api.put(`/orders/${id}/cancel`, {
             pin,
             refundMethod: refund?.method || null,
             refundDetails: refund?.details || null,
+            cutConfirmations,
+            planToken,
         });
         return response.data;
     },

@@ -9,6 +9,7 @@ from entities.orderItems import OrderItem
 from entities.orders import Order
 from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines, half_sheet_piece_dims_mm
 from core.inventory.poolKey import load_attribute_types, pool_key_from_attributes, compute_pool_key, pool_sibling_variants, safe_delete_offcut
+from core.inventory import offcutLedger as ledger
 from loggiing import logger
 
 
@@ -249,6 +250,7 @@ def check_line_items_feasible(
     product: Product,
     variant: Optional[Variant],
     line_items: list,
+    edit_order_id: Optional[int] = None,
 ) -> dict:
     """
     Dry-runs _process_line_items — the exact dispatcher a real checkout calls
@@ -260,15 +262,64 @@ def check_line_items_feasible(
 
     Returns {"ok": True, "message": None} if fulfillable, else
     {"ok": False, "message": <human-readable reason, from the ValueError>}.
+
+    `edit_order_id`: the check is for an item on an order being EDITED. The edit will give
+    that order's own material back before re-cutting (update_order), so the dry run does
+    the same first — otherwise it judges the cut against a stock that is missing exactly
+    the material this order already holds. The visible failure was re-opening a cut whose
+    manual offcut pick had been used up by the order itself: the check reported "Offcut #N
+    no longer exists" and disabled Add to Order, though saving would have worked (order 202).
     """
     trial_lines = [dict(line) for line in line_items]  # don't mutate caller's lineItems
     try:
+        if edit_order_id:
+            _simulate_edit_return(db, product, edit_order_id, trial_lines)
         _process_line_items(db, product, variant, trial_lines)
         return {"ok": True, "message": None}
     except ValueError as e:
         return {"ok": False, "message": str(e)}
     finally:
         db.rollback()  # dry run only — never persist
+
+
+def _simulate_edit_return(db: Session, product: Product, order_id: int, trial_lines: list) -> None:
+    """Inside a dry run: give back what the order being edited holds of this product, and
+    re-point any manual offcut picks at wherever that material went — the same two steps
+    update_order performs before it re-cuts.
+
+    Every item of this product on the order is returned, not just the one being edited: at
+    calculator time nobody knows yet which items the edit will change. That makes the check
+    optimistic, which is right for an advisory gate — update_order is the authority, and it
+    reports its own reason if the final cart can't be cut.
+    """
+    from core.ordering.orderService import _remap_offcut_selection
+
+    items = db.exec(
+        select(OrderItem)
+        .where(OrderItem.order_id == order_id, OrderItem.product_id == product.productId)
+        .order_by(OrderItem.item_id.desc())  # newest first, as update_order reverses
+    ).all()
+    if not items:
+        return
+
+    old_sources = [
+        src
+        for item in items
+        for line in (item.details or {}).get("lineItems") or []
+        if isinstance(line, dict)
+        for src in line.get("offcut_sources") or []
+    ]
+    for item in items:
+        restore_stock_for_order_item(db, item)
+    db.flush()
+
+    for line in trial_lines:
+        if line.get("offcut_selection"):
+            remapped = _remap_offcut_selection(db, line["offcut_selection"], old_sources)
+            if remapped:
+                line["offcut_selection"] = remapped
+            else:
+                line.pop("offcut_selection")
 
 
 # ── Stock deduction primitives ────────────────────────────────────────────────
@@ -796,6 +847,16 @@ def _fulfill_one_cut_via_best_fit(
         oc_id = best_offcut.offcutId
         oc_len = best_offcut.length
         notice = _pending_source_notice(db, best_offcut.source_item_id)
+
+        # Ledger: decide WHICH physical piece of this pooled row is going under the
+        # saw, before the row is decremented away, so the remainder below can be
+        # parented to it. That parent link is what lets a later edit/cancel walk
+        # forward and see whether this bar is still reconstructable.
+        src_piece = ledger.claim_available_piece(db, best_offcut)
+        ledger.consume_piece(
+            db, src_piece, item_id=item_id, cut_geom=ledger.geom_1d(required_length)
+        )
+
         best_offcut.quantity -= 1
         remainder = round(oc_len - required_length, 4)
         if best_offcut.quantity == 0:
@@ -804,8 +865,10 @@ def _fulfill_one_cut_via_best_fit(
             db.add(best_offcut)
 
         remainder_status = "scrap" if remainder > 0.01 and _is_scrap_1d(remainder, variant) else "available"
+        rem_ledger: dict = {}
         if remainder > 0.01:
-            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key, status=remainder_status)
+            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key,
+                           status=remainder_status, parent_piece=src_piece, ledger_out=rem_ledger)
 
         result = {
             "source": "offcut",
@@ -814,6 +877,15 @@ def _fulfill_one_cut_via_best_fit(
             "length_used": required_length,
             "remainder_created": remainder if remainder > 0.01 else 0,
             "remainder_status": remainder_status if remainder > 0.01 else None,
+            # Piece identity of what was actually consumed — the exact-identity
+            # replacement for the dimension matching restore_specific_offcut_sources
+            # has to fall back on. Additive to offcut_sources; ignored by every
+            # existing reader (frontend worksheets, correct_profile_offcut_event).
+            "source_piece_id": src_piece.piece_id if src_piece else None,
+            # Identity of the remainder THIS cut produced, so a reversal retires
+            # exactly that piece instead of whichever same-length sibling the
+            # pooled row happens to hand back first.
+            "remainder_piece_id": rem_ledger.get("piece_id"),
         }
         if notice is not None:
             result["pending_source_notice"] = notice
@@ -842,10 +914,30 @@ def _fulfill_one_cut_via_best_fit(
         )
 
     _deduct_full_stock(db, product, variant, 1)
+
+    # Ledger: a fresh bar leaving stock is the ROOT of a new chain. It gets a piece
+    # of its own (immediately consumed) so every remainder cut from it, at any
+    # depth and across any number of later orders, hangs off one identifiable
+    # physical bar — which is what makes "can a whole bar be given back?" an exact
+    # question instead of a same-length lookup.
+    root_piece = ledger.mint_piece(
+        db,
+        product_id=product.productId,
+        variant_id=variant.variantId if variant else None,
+        pool_key=pool_key,
+        geom=ledger.geom_1d(full_length),
+        origin=ledger.ORIGIN_STOCK_UNIT,
+        produced_by_item_id=item_id,
+        notes="whole bar drawn from stock for a cut",
+    )
+    ledger.consume_piece(db, root_piece, item_id=item_id, cut_geom=ledger.geom_1d(required_length))
+
     remainder = round(full_length - required_length, 4)
     remainder_status = "scrap" if remainder > 0.01 and _is_scrap_1d(remainder, variant) else "available"
+    rem_ledger: dict = {}
     if remainder > 0.01:
-        _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key, status=remainder_status)
+        _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key,
+                       status=remainder_status, parent_piece=root_piece, ledger_out=rem_ledger)
 
     return {
         "source": "full_bar",
@@ -854,6 +946,8 @@ def _fulfill_one_cut_via_best_fit(
         "length_used": required_length,
         "remainder_created": remainder if remainder > 0.01 else 0,
         "remainder_status": remainder_status if remainder > 0.01 else None,
+        "source_piece_id": root_piece.piece_id if root_piece else None,
+        "remainder_piece_id": rem_ledger.get("piece_id"),
     }
 
 
@@ -892,10 +986,15 @@ def _process_cut_with_offcuts(
 
 # ── Stock restoration (reverses a previous deduction) ────────────────────────
 
-def restore_stock_for_order_item(db: Session, item: OrderItem) -> None:
+def restore_stock_for_order_item(db: Session, item: OrderItem, decisions=None) -> None:
     """
     Reverse the stock deduction for a single OrderItem so an order can be re-processed.
     Mirrors deduct_stock_for_order_item but adds stock back instead of removing it.
+
+    `decisions` is the operator's Phase 3 per-cut-line confirmation
+    (core/inventory/reversalPlan.ReversalDecisions) — whether each cut has physically
+    been made, and what to do with the piece if it has. Left None the chain decides on
+    its own, which is the Phase 2 behaviour and what every non-order caller wants.
     """
     product = db.get(Product, item.product_id)
     if not product:
@@ -910,7 +1009,8 @@ def restore_stock_for_order_item(db: Session, item: OrderItem) -> None:
     line_items = details.get("lineItems")
 
     if line_items and isinstance(line_items, list):
-        _restore_line_items(db, product, variant, line_items)
+        _restore_line_items(db, product, variant, line_items, item_id=item.item_id,
+                            decisions=decisions)
     else:
         qty = float(details.get("quantity", 0))
         if qty > 0:
@@ -928,12 +1028,28 @@ def _restore_simple_stock(db, product, variant, qty: float) -> None:
         db.add(product)
 
 
-def _restore_line_items(db, product, variant, line_items: list) -> None:
+def _restore_line_items(db, product, variant, line_items: list, item_id: Optional[int] = None,
+                        decisions=None) -> None:
+    """`item_id` is the OrderItem being reversed — threaded through so the chain
+    resolver never counts that item's own consumptions as blocking itself. Left None
+    by direct/test callers, which only costs the blocker check its self-exclusion.
+
+    `decisions` carries the per-cut-line physical confirmation (Phase 3), looked up by
+    (item_id, line_idx); a line with no answer falls through to the chain's own verdict."""
     track = product.track_offcuts
     full_len = _get_full_length(product, variant)
     pool_key = compute_pool_key(db, variant)
 
-    glass_cut_lines = [l for l in line_items if l.get("type", "") == "glass-cut" and int(l.get("qty", 0)) > 0]
+    def _decision(idx: int):
+        if decisions is None or item_id is None:
+            return None, None
+        d = decisions.for_line(item_id, idx)
+        return (d.get("physical_state"), d.get("resolution")) if d else (None, None)
+
+    glass_pairs = [(i, l) for i, l in enumerate(line_items)
+                   if l.get("type", "") == "glass-cut" and int(l.get("qty", 0)) > 0]
+    glass_cut_lines = [l for _, l in glass_pairs]
+    two_d_pairs = list(glass_pairs)
     two_d_lines = list(glass_cut_lines)
     if track and product.has_dimensions:
         # Only a line that actually went through the 2D engine at deduct time
@@ -941,18 +1057,30 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
         # full-sheet deduction (no sheet size set on the variant) never got any,
         # so restore_glass_cut_lines would silently no-op for it; that fallback
         # case is instead restored as simple stock in the loop below.
-        two_d_lines += [
-            l for l in line_items
+        half_pairs = [
+            (i, l) for i, l in enumerate(line_items)
             if l.get("type", "") == "sheet-half" and int(l.get("qty", 0)) > 0 and l.get("offcut_sources")
         ]
+        two_d_pairs += half_pairs
+        two_d_lines += [l for _, l in half_pairs]
     if two_d_lines and track:
-        restore_glass_cut_lines(db, product, variant, two_d_lines)
+        # Decisions go across positionally, one per line in two_d_lines: that list is a
+        # FILTERED subset of line_items, so its own indices can't look a decision up.
+        restore_glass_cut_lines(db, product, variant, two_d_lines, item_id=item_id,
+                                decisions=[_decision(i) for i, _ in two_d_pairs])
 
-    for line in line_items:
+    # Undone LAST-IN-FIRST-OUT. A later cut is often cut out of an earlier cut's remainder
+    # (qty 2 of 1.8 off a 6.0 bar: the second 1.8 comes out of the first one's 4.2). Undone in
+    # the order they were made, the first cut finds its remainder still held by the second, so
+    # an UNCUT bar comes back as two offcuts instead of one bar to stock. Undoing the second
+    # cut first releases that remainder, and the first then recombines the whole bar.
+    # (Line order matters too: a later line can be cut from an earlier line's remainder.)
+    for line_idx, line in reversed(list(enumerate(line_items))):
         l_type = line.get("type", "")
         qty = int(line.get("qty", 0))
         if qty <= 0:
             continue
+        phys_state, phys_resolution = _decision(line_idx)
 
         if l_type == "glass-cut":
             if not track:
@@ -976,7 +1104,8 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
             else:
                 sources = line.get("offcut_sources")
                 if sources:
-                    restore_specific_offcut_sources(db, product, variant, sources, pool_key)
+                    restore_specific_offcut_sources(db, product, variant, sources, pool_key, item_id=item_id,
+                                                    physical_state=phys_state, resolution=phys_resolution)
                 else:
                     half_len = round(full_len / 2.0, 4)
                     for _ in range(qty):
@@ -998,7 +1127,8 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
                 sources = line.get("offcut_sources")
                 if sources:
                     # Use the exact recorded sources — mirrors restore_specific_offcut_sources
-                    restore_specific_offcut_sources(db, product, variant, sources, pool_key)
+                    restore_specific_offcut_sources(db, product, variant, sources, pool_key, item_id=item_id,
+                                                    physical_state=phys_state, resolution=phys_resolution)
                 else:
                     # No source record (legacy) — fall back to full-bar assumption,
                     # unless the remainder it would have produced is no longer
@@ -1031,7 +1161,8 @@ def _restore_line_items(db, product, variant, line_items: list) -> None:
             _restore_simple_stock(db, product, variant, qty)
 
 
-def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] = None) -> bool:
+def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] = None,
+                   remainder_piece_id: Optional[int] = None) -> bool:
     """Decrement (or delete) an offcut that was previously created as a remainder.
     Returns whether a matching offcut was actually found — callers use this to
     tell "the remainder is still intact, fully undone" apart from "someone else
@@ -1050,6 +1181,21 @@ def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] 
     existing = db.exec(stmt).first()
     if not existing:
         return False
+
+    # Ledger: a remainder being un-created (the bar it came from is being
+    # reassembled by an edit/cancel), so the piece ceases to exist rather than
+    # returning to the pool — retired, not released.
+    #
+    # `remainder_piece_id` is the exact piece the original cut recorded producing.
+    # Without it (a legacy deduction, or a caller that only knows a length) the
+    # pooled row can only hand back whichever same-length sibling is oldest —
+    # physically interchangeable, but it would attribute the retirement to the
+    # wrong bar's chain, so prefer the recorded id whenever there is one.
+    rem_piece = ledger.get_piece(db, remainder_piece_id)
+    if rem_piece is None:
+        rem_piece = ledger.claim_available_piece(db, existing, mint_if_missing=False)
+    ledger.retire_piece(db, rem_piece, reason="remainder reversed by an order edit/cancel")
+
     if existing.quantity <= 1:
         safe_delete_offcut(db, existing)
     else:
@@ -1060,12 +1206,84 @@ def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] 
 
 # ── Store-manager offcut reassignment helpers ─────────────────────────────────
 
+def _drop_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) -> None:
+    """Remove the pooled `offcuts` unit a now-retired piece was contributing.
+
+    The ledger has already decided this remainder is coming out of the pool, so
+    unlike _remove_offcut this does not treat "found it" as the decision — it just
+    applies it. Prefers the row the piece itself points at; falls back to a geometry
+    lookup if that pointer was cleared (safe_delete_offcut nulls it when a row is
+    deleted).
+    """
+    row = db.get(Offcut, piece.offcut_row_id) if piece.offcut_row_id else None
+    if row is None:
+        if piece.geom_kind == ledger.GEOM_2D:
+            from core.inventory.glassOffcutService import _find_glass_offcut
+            row = _find_glass_offcut(db, product, variant, piece.width, piece.height,
+                                    "scrap" if piece.is_scrap else "available", pool_key)
+        else:
+            row = db.exec(
+                select(Offcut).where(
+                    Offcut.product_id == product.productId,
+                    Offcut.pool_key == pool_key,
+                    Offcut.length >= piece.length - 0.01,
+                    Offcut.length <= piece.length + 0.01,
+                ).with_for_update()
+            ).first()
+
+    if row is None:
+        logger.warning(
+            f"offcut resolver: piece {piece.piece_id} is available in the ledger but has no "
+            "pooled offcut row to decrement — leaving the pool alone"
+        )
+        return
+
+    if row.quantity <= 1:
+        safe_delete_offcut(db, row)
+    else:
+        row.quantity -= 1
+        db.add(row)
+
+
+def _return_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) -> None:
+    """Put a released piece's unit back into the pooled `offcuts` table."""
+    row = db.get(Offcut, piece.offcut_row_id) if piece.offcut_row_id else None
+    if row is not None:
+        row.quantity += 1
+        db.add(row)
+        return
+
+    if piece.geom_kind == ledger.GEOM_2D:
+        new_row = Offcut(
+            product_id=product.productId,
+            variant_id=variant.variantId if variant else None,
+            pool_key=pool_key,
+            width=piece.width, height=piece.height, length=0.0,
+            quantity=1, status="scrap" if piece.is_scrap else "available",
+        )
+    else:
+        new_row = Offcut(
+            product_id=product.productId,
+            variant_id=variant.variantId if variant else None,
+            pool_key=pool_key,
+            length=piece.length,
+            quantity=1, status="scrap" if piece.is_scrap else "available",
+        )
+    db.add(new_row)
+    db.flush()
+    piece.offcut_row_id = new_row.offcutId
+    db.add(piece)
+
+
 def restore_specific_offcut_sources(
     db: Session,
     product: Product,
     variant: Optional[Variant],
     sources: list,
     pool_key: Optional[str] = None,
+    item_id: Optional[int] = None,
+    physical_state: Optional[str] = None,
+    resolution: Optional[str] = None,
 ) -> None:
     """
     Undo the exact offcut/stock consumption recorded in a cut line's offcut_sources.
@@ -1078,14 +1296,76 @@ def restore_specific_offcut_sources(
     it needs restoring here exactly like any other event. A replacement event
     created alongside it is a fully separate, independent entry that gets
     restored on its own merits in the same pass.
+
+    Phase 2: for any event recorded since the offcut ledger existed, whether the
+    material can actually come back is decided by walking the piece chain
+    (core/inventory/offcutResolver.py) instead of looking for a same-size offcut in
+    the pool. Pre-ledger events have no piece ids and keep the size-matching path
+    below unchanged. `item_id` scopes the blocker check so the item being reversed
+    never blocks itself.
+
+    Phase 3: `physical_state` / `resolution` are the operator's confirmation for this cut
+    line. ALREADY_CUT overrides the chain — the bar is never recombined once the saw has
+    run — and the resolution decides whether this cut's own piece comes back as stock, as
+    scrap, or not at all.
     """
+    from core.inventory import offcutResolver as resolver
+
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
 
-    for src in sources:
+    # Undone LAST-IN-FIRST-OUT. A later cut is often cut out of an earlier cut's remainder
+    # (qty 2 of 1.8 off a 6.0 bar: the second 1.8 comes out of the first one's 4.2). Undone in
+    # the order they were made, the first cut finds its remainder still held by the second, so
+    # an UNCUT bar comes back as two offcuts instead of one bar to stock. Undoing the second
+    # cut first releases that remainder, and the first then recombines the whole bar.
+    for src in reversed(sources):
         remainder = float(src.get("remainder_created", 0))
         length_used = float(src.get("length_used", 0))
         source_kind = src.get("source")
+        rev = resolver.resolve_source(db, src, item_id=item_id, is_2d=False,
+                                      physical_state=physical_state, resolution=resolution)
+        if not rev.is_legacy:
+            if rev.reversible:
+                # Every remainder this cut produced is still exactly where it was
+                # left and nothing below it is claimed, so the material recombines.
+                for p in rev.remainder_pieces:
+                    _drop_pooled_unit_for_piece(db, product, variant, p, pool_key)
+                    ledger.retire_piece(db, p, reason="remainder reversed by an order edit/cancel",
+                                        item_id=item_id)
+                if rev.kind == resolver.KIND_FULL_UNIT:
+                    _restore_simple_stock(db, product, variant, 1)
+                    # The bar went back to stock whole, so it was never really drawn —
+                    # retire its root piece rather than releasing it (it is a stock unit
+                    # again, not a piece in the offcut pool).
+                    ledger.retire_piece(db, rev.source_piece, item_id=item_id,
+                                        reason="whole bar returned to stock by an edit/cancel")
+                else:
+                    _return_pooled_unit_for_piece(db, product, variant, rev.source_piece, pool_key)
+                    ledger.release_piece(db, rev.source_piece, item_id=item_id,
+                                         reason="order edit/cancel restored this cut")
+            else:
+                # Either part of this bar is committed to a later live order, or the
+                # operator confirmed the cut has already been made. Nothing whole can go
+                # back; the most this reversal frees is the length THIS cut used.
+                #
+                # NOTE this also applies to source == "offcut". The old code restored the
+                # consumed offcut unconditionally, on the reasoning that putting back what
+                # the cut took is always right — but when a later order has already cut
+                # into the remainder, that double-counts: the parent offcut comes back
+                # whole AND the later order keeps its own piece of it.
+                if rev.retire_source:
+                    # The saw has run, so the source piece physically no longer exists.
+                    # Its remainders are left alone — those are real pieces on the floor.
+                    ledger.retire_piece(db, rev.source_piece, item_id=item_id,
+                                        reason=f"confirmed already cut — {rev.detail}")
+                if rev.kind != resolver.KIND_NO_CREDIT and length_used > 0:
+                    status = ("scrap" if (rev.credit_as_scrap or _is_scrap_1d(length_used, variant))
+                              else "available")
+                    _upsert_offcut(db, product, variant, length_used, pool_key=pool_key, status=status,
+                                   parent_piece=rev.source_piece, origin=ledger.ORIGIN_RESTORE_CREDIT,
+                                   ledger_notes=f"partial credit — {rev.detail}")
+            continue
 
         if source_kind == "offcut":
             # Restore the consumed offcut piece — this puts back exactly what
@@ -1107,8 +1387,13 @@ def restore_specific_offcut_sources(
                         length=oc_len,
                         quantity=1,
                     ))
+            # No ledger bookkeeping in this branch: it is only reached when the event
+            # carries no piece identity (src_piece is None by definition here), so
+            # there is nothing to release. _remove_offcut below still retires whatever
+            # piece the pooled row can offer, on a best-effort basis.
             if remainder > 0.01:
-                _remove_offcut(db, product, variant, remainder, pool_key)
+                _remove_offcut(db, product, variant, remainder, pool_key,
+                               remainder_piece_id=src.get("remainder_piece_id"))
         else:
             # "full_bar": this cut consumed a whole fresh bar, producing this
             # cut's piece plus `remainder`. Restoring it is only valid if
@@ -1118,12 +1403,21 @@ def restore_specific_offcut_sources(
             # bar to give back. In that case the only material actually being
             # freed by this cancel/edit is the length THIS cut itself used —
             # credit that back as a new offcut instead of a phantom whole bar.
-            remainder_intact = remainder <= 0.01 or _remove_offcut(db, product, variant, remainder, pool_key)
+            remainder_intact = remainder <= 0.01 or _remove_offcut(
+                db, product, variant, remainder, pool_key,
+                remainder_piece_id=src.get("remainder_piece_id"),
+            )
             if remainder_intact:
                 _restore_simple_stock(db, product, variant, 1)
             elif length_used > 0:
                 status = "scrap" if _is_scrap_1d(length_used, variant) else "available"
-                _upsert_offcut(db, product, variant, length_used, pool_key=pool_key, status=status)
+                # Only this cut's own length comes back — the rest of that bar stays
+                # committed to whoever cut into it after us. No parent piece to hang it
+                # off: this branch is the pre-ledger path, where the source's identity
+                # was never recorded.
+                _upsert_offcut(db, product, variant, length_used, pool_key=pool_key, status=status,
+                               origin=ledger.ORIGIN_RESTORE_CREDIT,
+                               ledger_notes="partial credit (legacy event): the bar was already subdivided")
 
 
 def _consume_offcut_sources(
@@ -1168,6 +1462,12 @@ def _consume_offcut_sources(
 
         notice = _pending_source_notice(db, locked.source_item_id)
         remainder = round(locked.length - length_used, 4)
+
+        # Ledger: same claim-then-consume as the automatic best-fit path, so a
+        # manager's manual pick builds the same chain an engine-chosen cut does.
+        src_piece = ledger.claim_available_piece(db, locked)
+        ledger.consume_piece(db, src_piece, item_id=item_id, cut_geom=ledger.geom_1d(length_used))
+
         locked.quantity -= 1
         if locked.quantity == 0:
             safe_delete_offcut(db, locked)
@@ -1175,8 +1475,10 @@ def _consume_offcut_sources(
             db.add(locked)
 
         remainder_status = "scrap" if remainder > 0.01 and _is_scrap_1d(remainder, variant) else "available"
+        rem_ledger: dict = {}
         if remainder > 0.01:
-            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key, status=remainder_status)
+            _upsert_offcut(db, product, variant, remainder, source_item_id=item_id, pool_key=pool_key,
+                           status=remainder_status, parent_piece=src_piece, ledger_out=rem_ledger)
 
         entry = {
             "source": "offcut",
@@ -1185,6 +1487,8 @@ def _consume_offcut_sources(
             "length_used": length_used,
             "remainder_created": remainder if remainder > 0.01 else 0,
             "remainder_status": remainder_status if remainder > 0.01 else None,
+            "source_piece_id": src_piece.piece_id if src_piece else None,
+            "remainder_piece_id": rem_ledger.get("piece_id"),
         }
         if notice is not None:
             entry["pending_source_notice"] = notice
@@ -1242,7 +1546,11 @@ def _upsert_offcut(
     source_item_id: Optional[int] = None,
     pool_key: Optional[str] = None,
     status: str = "available",
-) -> None:
+    parent_piece=None,
+    origin: str = ledger.ORIGIN_CUT_REMAINDER,
+    ledger_notes: Optional[str] = None,
+    ledger_out: Optional[dict] = None,
+) -> int:
     """
     Create a new offcut record or increment the quantity if one of the
     same length (±1mm tolerance) already exists IN THE SAME POOL (see
@@ -1258,6 +1566,12 @@ def _upsert_offcut(
     offered as a pickable offcut; a merge onto an existing row never changes its
     status since same length + same variant's threshold always classifies the
     same way.
+
+    `parent_piece` — the OffcutPiece this remainder was physically cut out of (the
+    consumed offcut, or the fresh bar minted for a full-bar cut). This is the link
+    the reversal resolver walks; pass it wherever the caller knows it. Returns the
+    pooled row's id, which the ledger keeps as an advisory projection pointer (and
+    which mirrors what the 2D _upsert_glass_offcut has always returned).
     """
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
@@ -1275,8 +1589,9 @@ def _upsert_offcut(
         if source_item_id is not None:
             existing.source_item_id = source_item_id
         db.add(existing)
+        row_id = existing.offcutId
     else:
-        db.add(Offcut(
+        new_row = Offcut(
             product_id=product.productId,
             variant_id=variant.variantId if variant else None,
             pool_key=pool_key,
@@ -1284,7 +1599,29 @@ def _upsert_offcut(
             quantity=1,
             status=status,
             source_item_id=source_item_id,
-        ))
+        )
+        db.add(new_row)
+        db.flush()  # assign a real id now, for the ledger's projection pointer
+        row_id = new_row.offcutId
+
+    # Ledger: this pooled row just gained one physical piece. Recorded with its
+    # own identity and parentage even though the row itself merges it away.
+    minted = ledger.mint_piece(
+        db,
+        product_id=product.productId,
+        variant_id=variant.variantId if variant else None,
+        pool_key=pool_key,
+        geom=ledger.geom_1d(length),
+        origin=origin,
+        parent=parent_piece,
+        produced_by_item_id=source_item_id,
+        offcut_row_id=row_id,
+        is_scrap=(status == "scrap"),
+        notes=ledger_notes,
+    )
+    if ledger_out is not None:
+        ledger_out["piece_id"] = minted.piece_id if minted else None
+    return row_id
 
 
 # ── Manager-facing correction (1D analogue of glassOffcutService.correct_glass_offcut_event) ──

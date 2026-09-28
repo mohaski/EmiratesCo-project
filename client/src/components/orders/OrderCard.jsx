@@ -10,6 +10,9 @@ const isToday = (dateStr) => {
 
 const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, highlighted, canManage = true }) => {
     const isCancelled = order.status === 'cancelled';
+    // The backend refuses to edit a completed order (update_order), so don't offer it and
+    // let the cashier rebuild a whole cart only to be turned away at save.
+    const isCompleted = order.status === 'completed';
     const orderIsToday = isToday(order.date);
     // Mirrors the backend's 7-day cutoff in cancel_order_with_pin
     const orderTooOldToCancel = (new Date() - new Date(order.date)) > 7 * 24 * 60 * 60 * 1000;
@@ -105,7 +108,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, h
                 onMouseLeave={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.1)'; }}
                 >➕ Add To</button>
             )}
-            {!isCancelled && canManage && (
+            {!isCancelled && !isCompleted && canManage && (
                 <button onClick={() => onEdit(order)} style={{
                     padding: '0.5rem 1rem', borderRadius: '0.625rem',
                     background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', border: 'none',

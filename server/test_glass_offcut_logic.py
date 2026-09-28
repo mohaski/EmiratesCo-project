@@ -72,10 +72,38 @@ def _reset_product(db: Session):
 
 
 def _clear_offcuts(db: Session, p: Product):
+    # Through safe_delete_offcut with the ledger's pieces retired first, not a bare
+    # db.delete: a raw delete leaves the pieces 'available' against a row that no longer
+    # exists, which the reversal resolver would then treat as material it can hand back.
+    from core.inventory import offcutLedger as _ledger
+    from core.inventory.poolKey import safe_delete_offcut as _safe_delete
     offs = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
     for o in offs:
-        db.delete(o)
+        _ledger.retire_pieces_for_row(db, o.offcutId, reason="test teardown")
+        _safe_delete(db, o)
     db.commit()
+
+def _refuse_live_database():
+    """These tests create REAL orders (pending, zero-value, many with cut lines) wherever
+    DATABASE_URL points. Against the live database they land in the floor's cutting queue
+    next to real work — on 2026-09-27 they accounted for 19 of the 50 orders there. Point
+    DATABASE_URL at the throwaway copy instead:
+
+        DATABASE_URL=postgresql+psycopg2://postgres:<pw>@localhost/emiratesco_edit_test
+
+    Set ALLOW_LIVE_TESTS=1 to run against the live database deliberately.
+    """
+    import os
+    from sqlalchemy import text
+    from db.database import engine as _engine
+    with _engine.connect() as c:
+        name = c.execute(text("SELECT current_database()")).scalar()
+    if name == "EmiratesCo_Database" and os.getenv("ALLOW_LIVE_TESTS") != "1":
+        raise SystemExit(
+            f"Refusing to run against the live database ({name}): this suite writes real "
+            "orders into it. Set DATABASE_URL to emiratesco_edit_test, or ALLOW_LIVE_TESTS=1."
+        )
+
 
 
 def _mk_line(l, w, qty=1, unit="mm"):
@@ -1449,4 +1477,5 @@ def run():
 
 
 if __name__ == "__main__":
+    _refuse_live_database()
     run()

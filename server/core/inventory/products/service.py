@@ -1,6 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from sqlmodel import Session, select, col, or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 from typing import List, Optional, Dict, Any
 from entities.products import Product, Category
 from entities.variants import Variant
@@ -109,14 +110,22 @@ def create_product(
 
 def getAllProducts(
     skip: int = 0, 
-    limit: int = 100, 
+    limit: Optional[int] = None, 
     search: Optional[str] = None,
     category_id: Optional[int] = None,
     db: Session = Depends(get_session)
 ) -> List[Product]: # Return Entity list, let FastAPI serialization handle Pydantic conversion
     try:
-        query = select(Product).offset(skip).limit(limit)
-        
+        # ProductResponse serializes .variants, which is a lazy relationship — without
+        # eager loading an unbounded list costs one extra query PER product. selectinload
+        # keeps the whole catalogue at two queries total, which is what makes dropping
+        # the old default limit=100 (it was hiding products) cheap.
+        query = (
+            select(Product)
+            .options(selectinload(Product.variants))
+            .order_by(Product.productId)
+        )
+
         if search:
             query = query.where(
                 or_(
@@ -127,8 +136,13 @@ def getAllProducts(
         if category_id:
             query = query.where(Product.category_id == category_id)
 
-        # Ensure eager loading if needed, though SQLModel usually handles relationships lazy unless specified
-        # For now simple select is strictly strictly fine
+        # Paginate only when asked to — filters must be applied first so skip/limit
+        # slice the matching rows, not the whole table.
+        if skip:
+            query = query.offset(skip)
+        if limit is not None:
+            query = query.limit(limit)
+
         products = db.exec(query).all()
         return products
     except Exception as e:
@@ -608,6 +622,7 @@ def add_offcuts_bulk(
     which tracks full-unit stock only; offcuts are a separate pool."""
     from entities.offcuts import Offcut
     from core.inventory.poolKey import compute_pool_key
+    from core.inventory import offcutLedger as ledger
 
     require_role(["manager", "ceo", "admin"], current_user)
 
@@ -645,6 +660,14 @@ def add_offcuts_bulk(
                 quantity=row.quantity, status="available",
             )
         db.add(offcut)
+        db.flush()  # need the row id for the ledger's projection pointer
+        # Ledger: one identity per physical piece (quantity=N means N separate
+        # hand-measured pieces). Chain roots -- no recorded history before entry.
+        ledger.mint_pieces_for_row(
+            db, offcut, origin=ledger.ORIGIN_MANUAL_ENTRY,
+            actor_id=getattr(current_user, "userId", None),
+            notes="manager bulk offcut entry",
+        )
         created.append(offcut)
 
     if current_user is not None:
@@ -747,6 +770,7 @@ def update_offcut_admin(
     pool_key is likewise left alone — it's derived from the variant's non-size
     attributes (see core/inventory/poolKey.py), and none of those change here."""
     from entities.offcuts import Offcut
+    from core.inventory import offcutLedger as ledger
 
     require_role(["ceo"], current_user)
 
@@ -810,6 +834,16 @@ def update_offcut_admin(
             },
             notes=current_user.username,
         ))
+
+    # Bring the ledger's pieces back in line with the row this endpoint just rewrote by
+    # hand: correct their geometry in place (same physical material, re-measured), retire any
+    # surplus if the count dropped, mint the difference if it rose. Without this the pieces
+    # keep the old size, so a later reversal reasons about material that isn't there.
+    ledger.resync_row_pieces(
+        db, offcut,
+        reason="CEO offcut correction",
+        actor_id=getattr(current_user, "userId", None),
+    )
 
     db.commit()
     db.refresh(offcut)

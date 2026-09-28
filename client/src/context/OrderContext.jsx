@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import api from '../services/api';
 import { wsEvents } from '../utils/wsEvents';
 import { useAuth } from './AuthContext';
+import { mapItemForBackend } from '../utils/orderItemMapping';
 
 const OrderContext = createContext();
 
@@ -41,25 +42,6 @@ const mapBackendInvoice = (inv) => ({
     isConverted: inv.status === 'converted',
     orderId: inv.order_id || null,
 });
-
-const mapItemForBackend = (item) => {
-    const rawQty = parseFloat(item.qty || item.quantity);
-    const qty = isNaN(rawQty) ? 1 : rawQty;
-
-    const rawPrice = parseFloat(item.price || item.unitPrice);
-    const price = isNaN(rawPrice) ? 0 : rawPrice;
-
-    const rawVariantId = item.variantId ?? item.details?.variantId ?? null;
-
-    return {
-        productId: parseInt(item.productId || item.id),
-        variantId: rawVariantId ? parseInt(rawVariantId) : null,
-        quantity: qty,
-        unitPrice: price,
-        unitType: item.unit || 'pcs',
-        details: item.details,
-    };
-};
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
@@ -181,7 +163,7 @@ export const OrderProvider = ({ children }) => {
     }, [fetchOrders]);
 
     const updateOrder = useCallback(async (orderId, orderData) => {
-        const { customer, totals, payment, items: rawItems, servedBy } = orderData;
+        const { customer, totals, payment, items: rawItems, servedBy, cutConfirmations, planToken } = orderData;
         const items = rawItems.map(mapItemForBackend);
 
         const isPaid = totals.balance <= 0.1;
@@ -203,6 +185,10 @@ export const OrderProvider = ({ children }) => {
             paymentDetails: payment?.details || null,
             items,
             notes: `Edited order #${orderId}`,
+            // Per-cut-line physical confirmation from ResolveCutsModal. Null when the
+            // reversal plan said nothing needed confirming, which is the common case.
+            cutConfirmations: cutConfirmations || null,
+            planToken: planToken || null,
         };
 
         const response = await api.orderService.editOrder(orderId, payload);
@@ -235,8 +221,8 @@ export const OrderProvider = ({ children }) => {
     // so the caller (the cancel modal) can show an inline error. refund is
     // { method, details? } — how the cashier is handing back whatever was
     // already collected; omitted when the order had nothing paid against it.
-    const cancelOrder = useCallback(async (orderId, pin, refund = null) => {
-        await api.orderService.cancelOrder(orderId, pin, refund);
+    const cancelOrder = useCallback(async (orderId, pin, refund = null, cutConfirmations = null, planToken = null) => {
+        await api.orderService.cancelOrder(orderId, pin, refund, cutConfirmations, planToken);
         await fetchOrders();
     }, [fetchOrders]);
 

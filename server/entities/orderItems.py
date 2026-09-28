@@ -24,6 +24,15 @@ class OrderItem(SQLModel, table=True):
     cutting_completed: bool = Field(default=True)
     cutting_completed_at: Optional[datetime] = Field(default=None)
 
+    # Where this item sits in the cart the customer/cashier built. Callers match the
+    # order's items back to that array POSITIONALLY (the printed cutting worksheet in
+    # ReceiptPage does exactly this), which used to be safe because item_id order was
+    # insertion order and every edit recreated every item. It no longer is: update_order
+    # keeps an unchanged item at its original id and appends the changed ones, so a kept
+    # item can sort ahead of one that precedes it in the cart. This column makes the
+    # intended order explicit instead of inferred.
+    position: int = Field(default=0, nullable=False, index=True)
+
     # Relationships
     order: "Order" = Relationship(back_populates="orderItems")
     product: "Product" = Relationship(back_populates="orderItems")

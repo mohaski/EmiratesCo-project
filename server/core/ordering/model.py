@@ -118,6 +118,14 @@ class OrderCancelRequest(BaseModel):
     pin: str
     refundMethod: Optional[str] = None
     refundDetails: Optional[Dict[str, Any]] = None
+    # {line_ref: {physicalState, resolution}} — the operator's answer per cut line, keyed
+    # by the line_ref from GET /orders/{id}/reversal-plan. Optional: lines that need no
+    # judgement fall back to their prefilled default, so an order with nothing cut yet
+    # cancels with no payload at all.
+    cutConfirmations: Optional[Dict[str, Dict[str, Any]]] = None
+    # Staleness tag from the reversal plan these confirmations were made against. When
+    # given and no longer current, the request is refused with 409 and a fresh plan.
+    planToken: Optional[str] = None
 
 class OrderEditRequest(BaseModel):
     """Payload for editing an existing order (replaces items + recalculates)."""
@@ -132,6 +140,9 @@ class OrderEditRequest(BaseModel):
     paymentDetails: Optional[Dict[str, Any]] = None
     items: List[OrderItemRequest] = []
     notes: Optional[str] = None
+    # See OrderCancelRequest.cutConfirmations / planToken — same shape, same rules.
+    cutConfirmations: Optional[Dict[str, Dict[str, Any]]] = None
+    planToken: Optional[str] = None
 
 class OffcutRemainderInput(BaseModel):
     """One corrected remainder piece (width/height in mm). status defaults to
@@ -227,6 +238,86 @@ class MarkOrdersCuttingDoneRequest(BaseModel):
 class MarkOrdersCuttingDoneResponse(BaseModel):
     updated_orders: List[int]
     updated_items: List[int]
+
+class ReversalBlocker(BaseModel):
+    """Another order that has since cut into this line's material, which is why a whole
+    bar/sheet can't be returned for it."""
+    piece_id: Optional[int] = None
+    order_id: Optional[int] = None
+    item_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    size: Optional[str] = None
+    depth: Optional[int] = None
+
+
+class ReversalChainPiece(BaseModel):
+    """One node of the physical chain, for the bar/sheet visualisation."""
+    piece_id: int
+    parent_piece_id: Optional[int] = None
+    depth: int = 0
+    size: Optional[str] = None
+    state: Optional[str] = None
+    is_scrap: bool = False
+    origin: Optional[str] = None
+    holder: Optional[Dict[str, Any]] = None
+
+
+class ReversalChain(BaseModel):
+    root_piece_id: Optional[int] = None
+    pieces: List[ReversalChainPiece] = []
+
+
+class ReversalPlanLine(BaseModel):
+    """One cut line awaiting physical confirmation before an edit or cancel."""
+    line_ref: str
+    item_id: int
+    line_idx: int
+    product_id: Optional[int] = None
+    product_name: Optional[str] = None
+    variant_name: Optional[str] = None
+    line_type: Optional[str] = None
+    is_2d: bool = False
+    cut_description: Optional[str] = None
+    event_count: int = 0
+    default_physical_state: str
+    requires_explicit_answer: bool = False
+    allowed_resolutions: List[str] = []
+    default_resolution: Optional[str] = None
+    reconstructable: bool = False
+    legacy: bool = False
+    blockers: List[ReversalBlocker] = []
+    effect_if_not_cut: Optional[str] = None
+    effect_if_already_cut: Optional[str] = None
+    chain: Optional[ReversalChain] = None
+    # False when an edit leaves this item untouched, so its material never moves and it
+    # needs no answer. Always True for a cancel.
+    will_reverse: bool = True
+    # Lines cut from the same physical sheet share this value (None when a line has its
+    # sheet to itself). They are one piece of glass, so they take one cut/not-cut answer.
+    sheet_group: Optional[str] = None
+
+
+class ReversalPlanRequest(BaseModel):
+    """The cart an edit is about to submit. Lets the plan narrow itself to the items that
+    edit will actually disturb, so the operator is only asked about material that moves.
+    Omit it (or use the GET form) for a cancel, which reverses everything."""
+    items: List[OrderItemRequest] = []
+
+
+class ReversalPlanResponse(BaseModel):
+    """Read-only preview of what reversing an order's cuts would do."""
+    order_id: int
+    order_status: str
+    has_cut_lines: bool = False
+    all_defaults_safe: bool = True
+    can_edit: bool = True
+    can_cancel: bool = True
+    # Submit this back with the edit/cancel so the server can tell whether the material
+    # moved while the operator was confirming.
+    plan_token: Optional[str] = None
+    lines: List[ReversalPlanLine] = []
+    warnings: List[str] = []
+
 
 class EditHistoryResponse(BaseModel):
     id: int

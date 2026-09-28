@@ -138,6 +138,15 @@ def _apply_offcut_line(db: Session, session_id: int, line: "model.OffcutLineCrea
     db.add(offcut)
     db.flush()
 
+    # Ledger: one identity per physical piece (this row carries quantity=N to mean
+    # N separate hand-measured pieces). Chain roots -- they have no recorded history
+    # before being entered.
+    from core.inventory import offcutLedger as ledger
+    ledger.mint_pieces_for_row(
+        db, offcut, origin=ledger.ORIGIN_MANUAL_ENTRY,
+        notes="entered via a stock input session",
+    )
+
     return StockInputSessionItem(
         session_id=session_id,
         line_type="offcut",
@@ -512,7 +521,18 @@ def delete_stock_input_session_offcut(
         db.add(item)
         db.flush()
 
-        db.delete(offcut)
+        # The offcut is being declared non-existent (a mis-entered stock line), so the
+        # ledger pieces it projected must stop being available -- otherwise a later reversal
+        # would treat them as material it can hand back. Then safe_delete_offcut, not a bare
+        # db.delete, so the remaining ledger pointers are detached too.
+        from core.inventory import offcutLedger as ledger
+        from core.inventory.poolKey import safe_delete_offcut
+        ledger.retire_pieces_for_row(
+            db, offcut.offcutId,
+            reason="stock-input offcut line deleted as mis-entered",
+            actor_id=current_user.userId,
+        )
+        safe_delete_offcut(db, offcut)
 
         db.add(EditHistory(
             entity_type="stock_batch_correction",

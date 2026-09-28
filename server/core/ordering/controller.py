@@ -136,6 +136,31 @@ def get_order(
     return orderService.get_order_by_orderId(order_id, db)
 
 
+@router.get("/{order_id}/reversal-plan", response_model=model.ReversalPlanResponse)
+def get_reversal_plan(
+    order_id: int,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """What editing or cancelling this order would do to its cut material, and which cut
+    lines still need a physical yes/no from the floor. Read-only — call this before
+    showing the edit or cancel screen so the operator sees the constraints up front."""
+    return orderService.get_reversal_plan(order_id, db, current_user)
+
+
+@router.post("/{order_id}/reversal-plan", response_model=model.ReversalPlanResponse)
+def preview_reversal_plan(
+    order_id: int,
+    body: model.ReversalPlanRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Same as the GET form, but narrowed to the items the given cart would actually change
+    — what the edit screen calls before saving, so it only asks about material that moves.
+    Read-only."""
+    return orderService.get_reversal_plan(order_id, db, current_user, incoming_items=body.items)
+
+
 @router.put("/{order_id}/edit", response_model=model.OrderCreateResponse)
 async def edit_order(
     order_id: int,
@@ -230,7 +255,11 @@ async def cancel_order(
     current_user = Depends(get_current_user)
 ):
     """Cancel an order — requires the CEO-configured PIN. Restores stock/offcuts."""
-    result = orderService.cancel_order_with_pin(order_id, body.pin, db, current_user, body.refundMethod, body.refundDetails)
+    result = orderService.cancel_order_with_pin(
+        order_id, body.pin, db, current_user, body.refundMethod, body.refundDetails,
+        cut_confirmations=body.cutConfirmations,
+        plan_token=body.planToken,
+    )
     background_tasks.add_task(manager.broadcast, "orders_updated")
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result

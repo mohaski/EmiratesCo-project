@@ -3,10 +3,13 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
+import { mapItemForBackend } from '../utils/orderItemMapping';
 import { useCartTotals } from '../hooks/useCartTotals';
 import { ceilAmount } from '../utils/money';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 import { getProfileColorHex, getContrastText, getCategoryAccent, tileGradient, hexToRgba } from '../utils/colors';
+import api from '../services/api';
+import ResolveCutsModal from '../components/orders/ResolveCutsModal';
 
 function useWindowWidth() {
     const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1280));
@@ -174,6 +177,17 @@ export default function CheckoutPage() {
         setCartItems(prev => prev.filter((_, i) => i !== index));
     }, []);
 
+    // Editing an order that consumed cut material: the confirmation is asked at SUBMIT,
+    // not on entry, because only the final cart says which items actually change. An item
+    // the cart still contains unchanged is left completely alone by update_order -- its
+    // stock, offcut chain and cutting status never move -- so asking about it would be
+    // noise. The backend does the matching (POST .../reversal-plan with the cart), so the
+    // question and the eventual reversal can never disagree.
+    const [cutsPlan, setCutsPlan] = useState(null);
+    // Why the confirmation reopened (a 409: the material moved while it was being answered).
+    // Shown inside the modal, where the cashier is looking — not on the page behind it.
+    const [cutsNotice, setCutsNotice] = useState(null);
+
     const [loading, setLoading] = useState(false);
     const [paymentError, setPaymentError] = useState(null);
     const [paymentMethod, setPaymentMethod] = useState(null);
@@ -238,7 +252,7 @@ export default function CheckoutPage() {
         return sig(originalItems) !== sig(cartItems);
     }, [editOrderId, cartItems, location.state?.orderData?.items]);
 
-    const handlePayment = useCallback(async () => {
+    const submitOrder = useCallback(async (cutConfirmations, planToken) => {
         setLoading(true);
         setPaymentError(null);
         try {
@@ -247,6 +261,8 @@ export default function CheckoutPage() {
                 parentOrderId,
                 sourceInvoiceId,
                 totals: { subtotal, tax, total, discount: discountValue, paid: netPayment, balance },
+                cutConfirmations: cutConfirmations || null,
+                planToken: planToken || null,
                 payment: {
                     method: paymentMethod, isPartial,
                     details: paymentMethod === 'split'
@@ -274,11 +290,51 @@ export default function CheckoutPage() {
             });
         } catch (err) {
             console.error('Payment failed', err);
-            setPaymentError('Failed to process payment. Please try again.');
+            if (err?.response?.status === 409 && err?.response?.data?.detail?.plan) {
+                // The cut material moved while the operator was confirming. Reopen the
+                // confirmation on the plan the server just handed back; confirming it
+                // resubmits.
+                setCutsNotice(err.response.data.detail.message || null);
+                setCutsPlan(err.response.data.detail.plan);
+                return;
+            }
+            // Any 4xx the server explains in words is written for the cashier — the cut
+            // validator's 422s, but also "Cannot edit a completed order", an unavailable
+            // offcut, insufficient stock. Only fall back to the generic line when there is
+            // no such message (a 500, a network failure).
+            const status = err?.response?.status;
+            const detail = err?.response?.data?.detail;
+            setPaymentError(status >= 400 && status < 500 && typeof detail === 'string'
+                ? detail
+                : 'Failed to process payment. Please try again.');
         } finally {
             setLoading(false);
         }
     }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories]);
+
+    // Edit mode: ask the backend what THIS cart would disturb, and confirm every cut line
+    // it does — the cutting flags are a prefill, not evidence, so a line the queue still
+    // calls pending may well have been cut already. Gated on will_reverse, NOT on
+    // requires_explicit_answer: the latter is only about which answers can be taken on
+    // trust, and using it here skipped the modal entirely for an ordinary uncut line.
+    // A new sale, or an edit that disturbs no cut material, submits straight through.
+    const handlePayment = useCallback(async () => {
+        if (!editOrderId) return submitOrder(null, null);
+        let plan = null;
+        try {
+            plan = await api.orderService.previewReversalPlan(
+                editOrderId, cartItems.map(mapItemForBackend));
+        } catch (err) {
+            // Advisory pre-check only — the edit call enforces the rules server-side.
+            console.error('Failed to preview the reversal plan', err);
+            return submitOrder(null, null);
+        }
+        if (plan?.lines?.some(l => l.will_reverse !== false)) {
+            setCutsPlan(plan);
+            return undefined;
+        }
+        return submitOrder(null, plan?.plan_token ?? null);
+    }, [editOrderId, cartItems, submitOrder]);
 
     if (cartItems.length === 0) {
         return (
@@ -306,6 +362,23 @@ export default function CheckoutPage() {
             fontFamily: 'var(--font-sans)',
             color: 'var(--color-text)',
         }}>
+
+            {/* Asked at submit, once the cart is final. Closing aborts the save and leaves
+                the cashier on this page with their cart intact; confirming completes it. */}
+            {cutsPlan && (
+                <ResolveCutsModal
+                    plan={cutsPlan}
+                    notice={cutsNotice}
+                    onClose={() => { setCutsPlan(null); setCutsNotice(null); }}
+                    onConfirm={(confirmations) => {
+                        const token = cutsPlan.plan_token ?? null;
+                        setCutsPlan(null);
+                        setCutsNotice(null);
+                        submitOrder(confirmations, token);
+                    }}
+                    actionLabel="Confirm & Save"
+                />
+            )}
 
             {/* ── LEFT: Order Review ── */}
             <div style={{ flex: 1, minWidth: 0, overflowY: isMobile ? 'visible' : 'auto', padding: isMobile ? '1.25rem 1rem' : '2rem' }} className="scrollbar-hide">

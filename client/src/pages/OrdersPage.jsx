@@ -4,9 +4,9 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect, useCallback, useMemo, useDeferredValue } from 'react';
 import OrderCard from '../components/orders/OrderCard';
 import InvoiceCard from '../components/orders/InvoiceCard';
-import CancelOrderModal from '../components/orders/CancelOrderModal';
 import SetCancelPinModal from '../components/orders/SetCancelPinModal';
 import CuttingQueueSection from '../components/orders/CuttingQueueSection';
+import useCancelOrderFlow from '../hooks/useCancelOrderFlow';
 
 export default function OrdersPage() {
     const navigate = useNavigate();
@@ -19,7 +19,9 @@ export default function OrdersPage() {
     const [highlightId, setHighlightId] = useState(() => location.state?.highlightId ?? null);
     const [searchQuery, setSearchQuery] = useState('');
     const deferredQuery = useDeferredValue(searchQuery);
-    const [orderToCancel, setOrderToCancel] = useState(null);
+    // The cancel sequence (reversal plan -> cut confirmation -> PIN -> 409 retry) is shared
+    // with OrderSummaryPage; see hooks/useCancelOrderFlow.
+    const { startCancel, cancelFlowModals } = useCancelOrderFlow({ cancelOrder });
     const [showSetPin, setShowSetPin] = useState(false);
     const [cuttingQueueCount, setCuttingQueueCount] = useState(0);
     const canSetPin = user?.role === 'ceo' || user?.role === 'admin';
@@ -77,11 +79,6 @@ export default function OrdersPage() {
             navigate('/sales', { state: { mode: 'edit', orderData: order } });
         }
     }, [navigate]);
-    const handleCancelConfirm = useCallback(async (pin, refund) => {
-        await cancelOrder(orderToCancel.id, pin, refund);
-        setOrderToCancel(null);
-    }, [cancelOrder, orderToCancel]);
-
     const handleViewOrder = useCallback(async (order) => {
         try {
             // List endpoint returns items=[]; fetch the full order for the summary view
@@ -215,7 +212,7 @@ export default function OrdersPage() {
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                                     {group.items.map(order => (
-                                        <OrderCard key={order.id} order={order} onAddTo={isCeo ? undefined : handleAddTo} onEdit={handleEdit} onCancel={setOrderToCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} canManage={canManageOrders} />
+                                        <OrderCard key={order.id} order={order} onAddTo={isCeo ? undefined : handleAddTo} onEdit={handleEdit} onCancel={startCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} canManage={canManageOrders} />
                                     ))}
                                 </div>
                             </div>
@@ -256,13 +253,7 @@ export default function OrdersPage() {
                 )}
             </div>
 
-            {orderToCancel && (
-                <CancelOrderModal
-                    order={orderToCancel}
-                    onClose={() => setOrderToCancel(null)}
-                    onConfirm={handleCancelConfirm}
-                />
-            )}
+            {cancelFlowModals}
             {showSetPin && (
                 <SetCancelPinModal onClose={() => setShowSetPin(false)} />
             )}

@@ -25,6 +25,7 @@ from entities.editHistory import EditHistory
 from entities.stockInputSession import StockInputSessionItem
 from entities.orders import Order
 from entities.orderItems import OrderItem
+from entities.offcutLedger import OffcutPiece, OffcutPieceEvent
 from core.inventory.openContainers.service import convert_product_stock_mode, _utilization
 from core.inventory.openContainers.utilization import variant_utilization, container_usage
 from core.inventory.poolKey import load_attribute_types, pool_key_from_attributes
@@ -51,7 +52,11 @@ def fresh_db():
     the sales drill-down to resolve (or resolve to nobody) rather than error."""
     engine = create_engine("sqlite://")
     for entity in (Product, Variant, Offcut, OpenContainer, AttributeClass,
-                   EditHistory, StockInputSessionItem, Order, OrderItem):
+                   EditHistory, StockInputSessionItem, Order, OrderItem,
+                   # Needed even though open containers are not piece-tracked:
+                   # safe_delete_offcut detaches the offcut ledger's advisory
+                   # back-pointers before deleting any pooled row.
+                   OffcutPiece, OffcutPieceEvent):
         entity.__table__.create(engine, checkfirst=True)
     with Session(engine) as db:
         db.exec(text(

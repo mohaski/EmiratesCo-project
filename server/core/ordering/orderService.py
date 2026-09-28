@@ -1,12 +1,14 @@
 # services/order_service.py
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from fastapi import Depends, HTTPException, Query
 from sqlmodel import Session, select, update
 from sqlalchemy import func
+from sqlalchemy.orm.attributes import flag_modified
 
 from entities.orders import Order
 from entities.orderItems import OrderItem
@@ -320,7 +322,7 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # 2. Process Items & Calculate Subtotal
         calculated_subtotal = Decimal("0.00")
 
-        for item_req in order_data.items:
+        for cart_index, item_req in enumerate(order_data.items):
             item_total = ceil_amount(_calculate_complex_item_total(item_req, db, products_cache, variants_cache))
 
             store_unit_price = item_total
@@ -337,7 +339,8 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
                 product_id=item_req.productId,
                 variant_id=item_req.variantId,
                 total_price=float(item_total),
-                details=final_details
+                details=final_details,
+                position=cart_index,
             )
             db.add(new_item)
 
@@ -638,6 +641,191 @@ def getAll_orders_VatIncluded(db: Session = Depends(get_session)) -> list[model.
         logger.error(f"Error retrieving VAT-included orders: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
+# Keys the cut/stock engines WRITE into a line after the fact. They are the result of a
+# consumption, not an input to it, so they must not make an otherwise identical line look
+# changed — a round-tripped cart carries them back from the order it was loaded from.
+#
+#   offcut_sources   cut lines, 1D and 2D (inventoryService / glassOffcutService)
+#   stock_sources    packaged/boxed accessory draws and open-container dispenses
+#                    (inventoryService._deduct_packaged_stock_pooled,
+#                     _dispense_from_open_container)
+#   _resolved_as_2d  marks a sheet-half line the 2D engine took over
+#                    (inventoryService._process_line_items)
+#
+# NOT stripped: `offcut_selection`. That one is written by the FRONTEND
+# (ProfileCalculator) and is the cashier's manual choice of which offcut to cut from —
+# a genuine input, so changing it must count as changing the line.
+#
+# `meta` is also left alone even though _process_line_items enriches it for a sheet-half
+# line (injecting l/w/u from the variant's sheet size). It carries the real cut dimensions,
+# so it has to be compared; the enrichment only risks a FALSE "changed", which errs the
+# safe way — the line gets reversed and re-cut, which is correct, just not optimal.
+#
+# These also drift under the order's feet: a manager offcut correction, or a container
+# being finished and reopened, rewrites them on the stored item while a cashier has the
+# order open. Comparing them would then reverse and re-deduct material nobody touched.
+_ENGINE_WRITTEN_LINE_KEYS = ("offcut_sources", "stock_sources", "_resolved_as_2d")
+
+# Per-line pricing and display, written by the frontend calculators. Excluded for the same
+# reason as the item's own unitPrice: money does not describe a different consumption, and
+# the backend reprices from the DB anyway (_calculate_complex_item_total). Comparing them
+# would reverse and re-cut real material over a tariff change.
+_PRICE_AND_DISPLAY_LINE_KEYS = ("rate", "total", "label")
+
+_IGNORED_LINE_KEYS = _ENGINE_WRITTEN_LINE_KEYS + _PRICE_AND_DISPLAY_LINE_KEYS
+
+
+def _stock_signature(product_id, variant_id, unit_type, quantity, line_items) -> str:
+    """Canonical form of everything that determines an item's STOCK consumption.
+
+    Two items with the same signature consume the same material, so an edit that leaves one
+    untouched can leave its stock, its offcut chain and its cutting status completely alone
+    (see update_order). Deliberately EXCLUDES price: stock doesn't depend on what it sold
+    for, so a price-only change must not reverse and re-cut real material.
+    """
+    def norm_line(line):
+        if not isinstance(line, dict):
+            return repr(line)
+        keep = {k: v for k, v in line.items() if k not in _IGNORED_LINE_KEYS}
+        return json.dumps(keep, sort_keys=True, default=str)
+
+    lines = [norm_line(l) for l in (line_items or [])]
+    return json.dumps({
+        "p": product_id,
+        "v": variant_id,
+        "u": unit_type,
+        "q": float(quantity or 0),
+        "l": lines,
+    }, sort_keys=True)
+
+
+CANCEL_WINDOW = timedelta(days=7)
+
+
+def _order_age(db: Session, order: Order) -> timedelta:
+    """How long ago the order was placed, measured on the database's own clock.
+
+    orders.created_at is `timestamp without time zone` filled by server_default now() in a
+    session whose TimeZone is Africa/Nairobi, so it holds LOCAL time. The cancel window used
+    to subtract it from datetime.utcnow(), which made every order look three hours younger
+    than it was — the "7-day" window was really 7 days 3 hours, and a fresh order computed
+    to a negative age. Asking the database for now() in the same local frame avoids
+    depending on either the machine's timezone or Python's.
+    """
+    if order.created_at is None:
+        return timedelta(0)
+    # now() comes back tz-aware in the session's zone (+03:00); dropping the tzinfo leaves the
+    # same local wall-clock time created_at was stored in.
+    now_local = db.exec(select(func.now())).one().replace(tzinfo=None)
+    return now_local - order.created_at
+
+
+def _remap_offcut_selection(db, selection, old_sources) -> list:
+    """Keep a cashier's manual offcut pick valid across an edit that re-cuts the line.
+
+    `offcut_selection` names pooled `offcuts` rows by id, and those ids are not stable: when
+    this line's own cut used an offcut up, its row was deleted, and the reversal that runs
+    first in update_order puts the material back as a NEW row. Re-cutting with the stored id
+    then failed the whole edit with "Offcut #N no longer exists" — something the cashier had
+    no way to fix. This was pre-existing; the old teardown-and-rebuild hit it on ANY edit of
+    such an order, even one touching a different item.
+
+    For each picked row, in order:
+      1. still there with a unit to spare  -> keep it
+      2. otherwise follow the ledger: the round-tripped offcut_sources say which PIECE was
+         consumed from that row, and the reversal released that piece into whatever row
+         now holds it -> point the pick at that row (the same physical piece)
+      3. otherwise drop it. apply_manual_cut_selection tops any shortfall up exactly as the
+         automatic path would, so the cut still happens — it just isn't pinned.
+    """
+    from collections import Counter
+
+    from entities.offcuts import Offcut
+    from core.inventory import offcutLedger as ledger
+
+    pieces_by_row: dict = {}
+    for src in old_sources or []:
+        if isinstance(src, dict) and src.get("source") == "offcut" and src.get("offcut_id"):
+            pieces_by_row.setdefault(int(src["offcut_id"]), []).append(src.get("source_piece_id"))
+
+    claimed: Counter = Counter()
+    out = []
+    for entry in selection or []:
+        if not isinstance(entry, dict) or not entry.get("offcut_id"):
+            continue
+        row_id = int(entry["offcut_id"])
+        need = float(entry.get("length_used") or 0)
+
+        row = db.get(Offcut, row_id)
+        if row is not None and (row.quantity or 0) - claimed[row_id] >= 1:
+            claimed[row_id] += 1
+            out.append(entry)
+            continue
+
+        remapped = None
+        candidates = pieces_by_row.get(row_id) or []
+        while candidates and remapped is None:
+            piece = ledger.get_piece(db, candidates.pop(0))
+            if piece is None or piece.state != "available" or not piece.offcut_row_id:
+                continue
+            new_row = db.get(Offcut, piece.offcut_row_id)
+            if (new_row is not None
+                    and (new_row.quantity or 0) - claimed[new_row.offcutId] >= 1
+                    and (new_row.length or 0) + 0.02 >= need):
+                claimed[new_row.offcutId] += 1
+                remapped = {**entry, "offcut_id": new_row.offcutId}
+
+        if remapped is not None:
+            out.append(remapped)
+        else:
+            logger.info(
+                f"update_order: manual offcut pick #{row_id} is no longer available and could "
+                "not be traced to its replacement; letting the automatic path cover that length"
+            )
+    return out
+
+
+def _match_items(existing_items, item_requests):
+    """Pair the incoming cart against the order as it stands.
+
+    Returns (reused, reversing, unmatched):
+      reused      [(cart_index, request, existing_item)] -- identical, leave the material alone
+      reversing   [existing_item]                        -- changed or removed, reverse and delete
+      unmatched   [(cart_index, request)]                -- new or changed, create and deduct
+
+    The cart index rides along because it is the item's position in the order as the cashier
+    built it, which callers match against positionally and which item_id no longer implies.
+
+    Matching is by _stock_signature and consumes each existing item at most once, so two
+    identical cart lines pair with two existing rows rather than both claiming the same one.
+    """
+    buckets: dict = {}
+    for oi in existing_items:
+        sig = _stock_signature(
+            oi.product_id,
+            oi.variant_id,
+            (oi.details or {}).get("unitType"),
+            (oi.details or {}).get("quantity"),
+            (oi.details or {}).get("lineItems"),
+        )
+        buckets.setdefault(sig, []).append(oi)
+
+    reused, unmatched = [], []
+    for cart_index, req in enumerate(item_requests):
+        sig = _stock_signature(
+            req.productId, req.variantId, req.unitType, req.quantity,
+            (req.details or {}).get("lineItems"),
+        )
+        pool = buckets.get(sig)
+        if pool:
+            reused.append((cart_index, req, pool.pop(0)))
+        else:
+            unmatched.append((cart_index, req))
+
+    reversing = [oi for pool in buckets.values() for oi in pool]
+    return reused, reversing, unmatched
+
+
 def update_order(
     order_id: int,
     order_data: model.OrderEditRequest,
@@ -647,11 +835,28 @@ def update_order(
     """
     Edit an existing order in-place:
       1. Snapshot the before state for audit.
-      2. Restore stock from all old items.
-      3. Delete old items.
-      4. Create new items and deduct stock.
-      5. Recalculate order totals.
+      2. Work out which items actually changed.
+      3. Restore stock from, and delete, only the CHANGED items.
+      4. Create the new/changed items and deduct their stock.
+      5. Recalculate order totals across every item, changed or not.
       6. Write an EditHistory record.
+
+    Step 2 is what keeps an edit from disturbing material it has no business touching. This
+    used to tear down every item and rebuild it, which meant editing one line reversed and
+    re-cut ALL of them — and because a freshly created item starts with
+    cutting_completed=False, an already-cut line went straight back into the cutting queue
+    for the floor to cut a second time.
+
+    Items are matched by _stock_signature: same product, variant, unit and quantity, and the
+    same cut lines ignoring the engines' own bookkeeping. An unchanged item keeps its row,
+    its offcut chain, its provenance and its cutting status; only its price is refreshed.
+    Financials are still recalculated over every item, so a price change alone never moves
+    material.
+
+    Granularity is the item, not the individual cut line. That matches the data (62 of 66
+    cut-bearing items carry exactly one cut line) and is forced for glass anyway, where
+    resolve_glass_cut_lines packs every cut of an item into one sheet as a single batch — so
+    no subset of those lines can be reused independently.
     """
     from core.inventory.inventoryService import (
         deduct_stock_for_order_item,
@@ -660,16 +865,44 @@ def update_order(
     from entities.editHistory import EditHistory
     from entities.products import Product
     from entities.variants import Variant
+    from core.inventory import reversalPlan
 
     require_role(["manager", "ceo", "admin"], current_user)
 
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    # A finished or cancelled order is off limits. This blocked every CUT order too until
+    # mark_cutting_complete_for_orders_batch stopped auto-completing them: reporting a
+    # cutting job done no longer touches the order's workflow status, so "completed" once
+    # again means only what a human set it to, and a cut-but-unfinished order stays
+    # editable through the confirmation flow below.
     if order.status in ("cancelled", "completed"):
         raise HTTPException(status_code=400, detail=f"Cannot edit a {order.status} order")
-    if any(oi.cutting_completed_at is not None for oi in order.orderItems):
-        raise HTTPException(status_code=400, detail="This order has already been cut and can no longer be edited or cancelled.")
+
+    # An order whose cutting was reported used to be refused outright here. Now each cut
+    # line is confirmed independently (see core/inventory/reversalPlan.py): an already-cut
+    # line is never recombined into a whole bar, but the order can still be edited. Lines
+    # that need no judgement fall back to their prefilled default, so editing a fresh
+    # order needs no confirmation payload and behaves exactly as it did before.
+    # Which existing items does the incoming cart still contain unchanged? Those are left
+    # entirely alone; everything else is reversed and rebuilt. Worked out before the
+    # confirmation is validated, so the operator is only ever asked about material this
+    # edit actually disturbs.
+    existing_items = db.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all()
+    reused_items, reversing_items, unmatched_requests = _match_items(existing_items, order_data.items)
+    reversing_item_ids = {oi.item_id for oi in reversing_items}
+
+    reversal_plan = reversalPlan.build_plan(db, order, reversing_item_ids=reversing_item_ids)
+    try:
+        # Phase 4: refuse a confirmation built against a plan the chain has since moved
+        # past, rather than applying a verdict that is no longer true.
+        reversalPlan.assert_plan_fresh(db, reversal_plan, order_data.planToken)
+        cut_decisions = reversalPlan.validate_decisions(reversal_plan, order_data.cutConfirmations)
+    except reversalPlan.PlanStaleError as e:
+        raise HTTPException(status_code=409, detail={"message": str(e), "plan": e.fresh_plan})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     try:
         # ── 1. Snapshot before state ──────────────────────────────────────────
@@ -688,13 +921,20 @@ def update_order(
             "discount": order.discount,
             "payment_status": order.payment_status,
             "items": old_items_snapshot,
+            # What the operator confirmed about each cut line, and what the chain said
+            # about it — the CEO needs this to audit why stock moved the way it did.
+            "cut_confirmations": reversalPlan.decisions_summary(reversal_plan, cut_decisions),
         }
 
         # ── 2. Restore stock from old items ───────────────────────────────────
         # Load into a plain list first so the loop isn't affected by deletions
-        old_items = db.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all()
-        old_item_ids = [oi.item_id for oi in old_items]
-        if old_item_ids:
+        # Lock every piece this reversal will touch, lowest id first, before anything is
+        # written — so a batch of per-line answers applies all-or-nothing and two
+        # overlapping reversals can't deadlock.
+        reversalPlan.lock_decision_pieces(db, reversal_plan)
+
+        doomed_ids = [oi.item_id for oi in reversing_items]
+        if doomed_ids:
             # A pooled/scrap Offcut row can outlive the item that last produced
             # it (restore only decrements its quantity, since other unrelated
             # cuts still own the rest) — leaving offcuts.source_item_id dangling
@@ -702,10 +942,13 @@ def update_order(
             # then refuses. Clear it here; it's provenance metadata only (drives
             # the advisory "still awaiting cutting" notice), never load-bearing
             # for stock accounting, so nulling it for a since-deleted item is safe.
+            # Scoped to the items actually being deleted -- a KEPT item must hold on to its
+            # provenance, or its offcuts stop reporting whose cutting job produced them.
             from entities.offcuts import Offcut
-            db.exec(update(Offcut).where(Offcut.source_item_id.in_(old_item_ids)).values(source_item_id=None))
-        for old_item in old_items:
-            restore_stock_for_order_item(db, old_item)
+            db.exec(update(Offcut).where(Offcut.source_item_id.in_(doomed_ids)).values(source_item_id=None))
+        # Newest first, for the same reason as _restore_and_cancel.
+        for old_item in sorted(reversing_items, key=lambda oi: oi.item_id, reverse=True):
+            restore_stock_for_order_item(db, old_item, decisions=cut_decisions)
             db.delete(old_item)
         db.flush()
         # Expire the order object so its stale orderItems collection is cleared;
@@ -727,10 +970,36 @@ def update_order(
             variants_cache = {v.variantId: v for v in vars_}
 
         # ── 4. Create new items and deduct stock ──────────────────────────────
+        # Every item is repriced, so a tariff change still lands. Only changed ones move stock.
         calculated_subtotal = Decimal("0.00")
         new_items_snapshot = []
 
-        for item_req in order_data.items:
+        for cart_index, item_req, kept_item in reused_items:
+            item_total = ceil_amount(_calculate_complex_item_total(item_req, db, products_cache, variants_cache))
+            store_unit_price = item_total / Decimal(item_req.quantity) if item_req.quantity > 0 else item_total
+
+            # Price only. `details` keeps the STORED copy, because it holds the offcut_sources
+            # this item's real consumption recorded -- the incoming request either lacks them
+            # or carries a stale round-tripped copy. Overwriting would orphan the chain and
+            # break any later reversal of this item.
+            kept_details = dict(kept_item.details or {})
+            kept_details["unitPrice"] = float(store_unit_price)
+            kept_item.details = kept_details
+            flag_modified(kept_item, "details")
+            kept_item.total_price = float(item_total)
+            kept_item.position = cart_index
+            db.add(kept_item)
+
+            calculated_subtotal += item_total
+            new_items_snapshot.append({
+                "position": cart_index,
+                "product_id": kept_item.product_id,
+                "variant_id": kept_item.variant_id,
+                "total_price": float(item_total),
+                "unchanged": True,
+            })
+
+        for cart_index, item_req in unmatched_requests:
             item_total = ceil_amount(_calculate_complex_item_total(item_req, db, products_cache, variants_cache))
 
             store_unit_price = item_total / Decimal(item_req.quantity) if item_req.quantity > 0 else item_total
@@ -738,6 +1007,20 @@ def update_order(
             final_details["quantity"] = item_req.quantity
             final_details["unitType"] = item_req.unitType
             final_details["unitPrice"] = float(store_unit_price)
+            # Drop any offcut_sources the cart round-tripped in from the order it was loaded
+            # from: this is a NEW consumption and the engines record their own. Before they go,
+            # use them to repoint a manual offcut pick at wherever the reversal above put that
+            # piece back (see _remap_offcut_selection).
+            for line in final_details.get("lineItems") or []:
+                if isinstance(line, dict):
+                    if line.get("offcut_selection"):
+                        remapped = _remap_offcut_selection(
+                            db, line["offcut_selection"], line.get("offcut_sources"))
+                        if remapped:
+                            line["offcut_selection"] = remapped
+                        else:
+                            line.pop("offcut_selection")
+                    line.pop("offcut_sources", None)
 
             new_item = OrderItem(
                 order_id=order.orderId,
@@ -745,6 +1028,7 @@ def update_order(
                 variant_id=item_req.variantId,
                 total_price=float(item_total),
                 details=final_details,
+                position=cart_index,
             )
             db.add(new_item)
             db.flush()
@@ -752,10 +1036,15 @@ def update_order(
 
             calculated_subtotal += item_total
             new_items_snapshot.append({
+                "position": cart_index,
                 "product_id": item_req.productId,
                 "variant_id": item_req.variantId,
                 "total_price": float(item_total),
             })
+
+        # Kept items are processed before new ones, so the snapshot is built out of order.
+        # Put it back into cart order — it is the audit record of what the order became.
+        new_items_snapshot.sort(key=lambda r: r.get("position", 0))
 
         # ── 5. Recalculate totals ─────────────────────────────────────────────
         discount_val = Decimal(str(order_data.discount or 0))
@@ -1113,16 +1402,24 @@ def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current
     done, so every still-pending item across the given orders is flipped
     cutting_completed=True/cutting_completed_at=now() (offcuts sourced from them
     stop carrying a pending_source_notice — see glassOffcutService._apply_candidate,
-    which keys off OrderItem.cutting_completed directly), and each order itself
-    is moved to status="completed" in the same pass. Silently skips order ids
+    which keys off OrderItem.cutting_completed directly). Silently skips order ids
     that don't exist.
+
+    Deliberately does NOT touch Order.status. It used to also set status="completed",
+    which conflated two different facts — "the metal has been cut" and "this sale is
+    finished" — and made every cut order permanently uneditable, since update_order
+    refuses a completed order. Nothing ever read status=="completed" (the only status
+    any code compares against is "cancelled"), and this queue filters on
+    OrderItem.cutting_completed rather than the order's status, so orders still leave
+    the queue exactly as before. Completing an order is now only ever a human action,
+    through update_order_status.
     """
     require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
     orders = db.exec(select(Order).where(Order.orderId.in_(order_ids))).all()
     now = datetime.utcnow()
     updated_items = []
-    updated_orders = []
+    updated_orders = []  # orders processed — their workflow status is left untouched
     for order in orders:
         for item in order.orderItems:
             if not item.cutting_completed:
@@ -1130,8 +1427,6 @@ def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current
                 item.cutting_completed_at = now
                 db.add(item)
                 updated_items.append(item.item_id)
-        order.status = "completed"
-        db.add(order)
         updated_orders.append(order.orderId)
 
     db.commit()
@@ -1256,6 +1551,7 @@ def _restore_and_cancel(
     current_user=None,
     refund_method: str | None = None,
     refund_details: dict | None = None,
+    cut_decisions=None,
 ) -> dict:
     """
     Restore stock/offcuts for every item on an order, refund whatever was
@@ -1269,6 +1565,10 @@ def _restore_and_cancel(
     whatever method this order was last paid through if not given, for
     callers that don't collect one.
 
+    cut_decisions: the operator's per-cut-line physical confirmation (Phase 3) — see
+    core/inventory/reversalPlan.py. None means every line falls back to what its chain
+    says on its own.
+
     Returns a small dict of what happened financially, for the caller's audit
     log — {"amount_refunded": float, "refund_method": str | None}.
     """
@@ -1278,9 +1578,14 @@ def _restore_and_cancel(
     if order.status == "cancelled":
         return {"amount_refunded": 0.0, "refund_method": None}
 
-    items = db.exec(select(OrderItem).where(OrderItem.order_id == order.orderId)).all()
+    # Newest item first (item_id is creation order, which position no longer implies): a
+    # later item can be cut from an earlier item's remainder, and undoing it first is what
+    # lets the earlier one recombine a bar that was never actually cut.
+    items = db.exec(
+        select(OrderItem).where(OrderItem.order_id == order.orderId).order_by(OrderItem.item_id.desc())
+    ).all()
     for item in items:
-        restore_stock_for_order_item(db, item)
+        restore_stock_for_order_item(db, item, decisions=cut_decisions)
 
     # Cancelling voids any outstanding balance regardless of whether anything
     # was ever paid — the goods were never delivered, so the customer doesn't
@@ -1323,6 +1628,40 @@ def _restore_and_cancel(
     _sync_credit_for_order(db, order)
 
     return {"amount_refunded": float(amount_paid) if amount_paid > 0.10 else 0.0, "refund_method": resolved_method}
+
+
+def get_reversal_plan(order_id: int, db: Session, current_user, incoming_items=None) -> dict:
+    """What reversing this order's cut lines would do, and what still needs confirming.
+
+    Read-only — builds nothing, writes nothing. The edit/cancel screens call this first
+    so the operator sees the constraints (which bars can come back whole, which are
+    committed to a later order, which need a floor check) before committing to anything,
+    instead of hitting a refusal at save time.
+    """
+    from core.inventory import reversalPlan
+
+    require_role(["manager", "ceo", "admin"], current_user)
+
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    # Given the cart an edit is about to submit, narrow the question to the items that edit
+    # will actually disturb — matched exactly the way update_order will match them, so the
+    # operator is never asked about a line that then turns out not to move (or vice versa).
+    reversing_item_ids = None
+    if incoming_items is not None:
+        existing = db.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all()
+        _, reversing, _ = _match_items(existing, incoming_items)
+        reversing_item_ids = {oi.item_id for oi in reversing}
+
+    plan = reversalPlan.build_plan(db, order, reversing_item_ids=reversing_item_ids)
+    plan["can_cancel"] = (
+        order.status != "cancelled"
+        and _order_age(db, order) <= CANCEL_WINDOW
+    )
+    plan["can_edit"] = order.status not in ("cancelled", "completed")
+    return plan
 
 
 def update_order_status(
@@ -1385,6 +1724,8 @@ def cancel_order_with_pin(
     current_user=Depends(get_current_user),
     refund_method: str | None = None,
     refund_details: dict | None = None,
+    cut_confirmations: dict | None = None,
+    plan_token: str | None = None,
 ) -> model.OrderStatusUpdateResponse:
     """
     Cancel an order from Order History. Requires the CEO-configured 4-digit PIN.
@@ -1393,8 +1734,15 @@ def cancel_order_with_pin(
     already collected — the cashier picks this explicitly when there's
     something to refund (see CancelOrderModal); _restore_and_cancel falls
     back to the order's last payment method if left unset.
+
+    cut_confirmations: {line_ref: {physicalState, resolution}} — the operator's answer
+    per cut line (see core/inventory/reversalPlan.py). An already-cut line is never
+    recombined into a whole bar; what happens to its piece is the operator's choice.
+    Lines needing no judgement fall back to their prefilled default, so cancelling an
+    order nothing has been cut for needs no payload.
     """
     from core.settings.service import verify_cancel_pin, cancel_pin_is_configured
+    from core.inventory import reversalPlan
 
     try:
         require_role(["manager", "ceo", "admin"], current_user)
@@ -1410,13 +1758,28 @@ def cancel_order_with_pin(
         order = db.get(Order, order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
-        if order.status != "cancelled" and any(oi.cutting_completed_at is not None for oi in order.orderItems):
-            raise HTTPException(status_code=400, detail="This order has already been cut and can no longer be edited or cancelled.")
-        if order.status != "cancelled" and datetime.utcnow() - order.created_at > timedelta(days=7):
+        if order.status != "cancelled" and _order_age(db, order) > CANCEL_WINDOW:
             raise HTTPException(status_code=400, detail="This order is more than a week old and can no longer be cancelled.")
 
+        # Already-cut orders used to be refused outright here. They can now be cancelled,
+        # one confirmed cut line at a time — the material just doesn't come back as whole
+        # bars. Skipped for an already-cancelled order, which _restore_and_cancel no-ops on.
+        cut_decisions = None
+        if order.status != "cancelled":
+            reversal_plan = reversalPlan.build_plan(db, order)
+            try:
+                reversalPlan.assert_plan_fresh(db, reversal_plan, plan_token)
+                cut_decisions = reversalPlan.validate_decisions(reversal_plan, cut_confirmations)
+            except reversalPlan.PlanStaleError as e:
+                raise HTTPException(status_code=409, detail={"message": str(e), "plan": e.fresh_plan})
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            # Lock the pieces before any stock moves — see update_order.
+            reversalPlan.lock_decision_pieces(db, reversal_plan)
+
         old_status = order.status
-        result = _restore_and_cancel(db, order, current_user, refund_method, refund_details)
+        result = _restore_and_cancel(db, order, current_user, refund_method, refund_details,
+                                     cut_decisions=cut_decisions)
 
         if old_status != "cancelled":
             refund_note = (
@@ -1433,6 +1796,10 @@ def cancel_order_with_pin(
                     "status": "cancelled",
                     "amount_refunded": result["amount_refunded"],
                     "refund_method": result["refund_method"],
+                    "cut_confirmations": (
+                        reversalPlan.decisions_summary(reversal_plan, cut_decisions)
+                        if cut_decisions is not None else []
+                    ),
                 },
                 notes=f"{current_user.username} — {refund_note}",
             ))

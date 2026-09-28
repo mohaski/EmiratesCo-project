@@ -5,7 +5,7 @@ import { useOrders } from '../context/OrderContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import api from '../services/api';
-import CancelOrderModal from '../components/orders/CancelOrderModal';
+import useCancelOrderFlow from '../hooks/useCancelOrderFlow';
 import CorrectOffcutModal from '../components/orders/CorrectOffcutModal';
 import CorrectProfileOffcutModal from '../components/orders/CorrectProfileOffcutModal';
 import CuttingInstructions from '../components/orders/CuttingInstructions';
@@ -212,8 +212,14 @@ export default function OrderSummaryPage() {
     const { user } = useAuth();
     const { products: PRODUCTS } = useProducts();
     const { cancelOrder } = useOrders();
+    // Same sequence as the Orders list (plan -> cut confirmation -> PIN -> 409 retry).
+    // Called up here, above the `if (!order) return` below: a hook after an early return
+    // runs on some renders and not others, which React rejects.
+    const { startCancel, cancelFlowModals } = useCancelOrderFlow({
+        cancelOrder,
+        onCancelled: () => navigate('/orders'),
+    });
     const showToast = useToast();
-    const [showCancel, setShowCancel] = useState(false);
     const [correcting, setCorrecting] = useState(null); // {itemId, lineIdx, eventIdx, event}
 
     const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
@@ -343,22 +349,20 @@ export default function OrderSummaryPage() {
     const vatAmount = order.VAT_status ? Math.max(0, order.total - (order.subtotal - (order.discount || 0))) : 0;
     // Cashier can view the summary but not edit or cancel — read-only + Add To only
     const canEditOrCancel = ['manager', 'ceo', 'admin'].includes(user?.role);
-    // Once any item has actually been cut, the order can no longer be safely edited/cancelled
-    // (both restore stock for every item, which would fabricate inventory for a piece that's
-    // already been physically cut) — see the backend guard in update_order/cancel_order_with_pin.
-    const anyItemCut = order.items?.some(i => i.cuttingCompletedAt) || false;
+    // An order with cut material CAN be edited and cancelled: each cut line is confirmed on
+    // the floor first (ResolveCutsModal), and an already-cut bar is never credited back whole.
+    // This page used to hide both buttons once anything was cut — a copy of a backend guard
+    // that has since been removed, which left orders with cut material stuck.
     const anyItemPending = order.items?.some(i => i.cuttingCompleted === false) || false;
+    // A completed order is finished business: the backend refuses to edit it (update_order),
+    // though it can still be cancelled inside the window, same as cancel_order_with_pin.
+    const isCompleted = order.status === 'completed';
     // Mirrors the backend's 7-day cutoff in cancel_order_with_pin — cancelling an
     // order that old is no longer allowed, so hide the option before the user tries.
     const orderTooOldToCancel = (new Date() - new Date(order.created_at)) > 7 * 24 * 60 * 60 * 1000;
 
     const handleEdit = () => navigate('/sales', { state: { mode: 'edit', orderData: { ...order, id: order.orderId } } });
 
-    const handleCancelConfirm = async (pin, refund) => {
-        await cancelOrder(order.orderId, pin, refund);
-        setShowCancel(false);
-        navigate('/orders');
-    };
 
     return (
         <div style={{ minHeight: '100%', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
@@ -398,16 +402,16 @@ export default function OrderSummaryPage() {
                                     color: '#4ade80', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
                                 }}>✅ Mark Order Cutting Done</button>
                             )}
-                            {canEditOrCancel && !anyItemCut && (
+                            {canEditOrCancel && (
                                 <>
-                                    <button onClick={handleEdit} style={{
+                                    {!isCompleted && <button onClick={handleEdit} style={{
                                         padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
                                         background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', border: 'none',
                                         color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
                                         boxShadow: '0 2px 12px rgba(59,130,246,0.3)',
-                                    }}>✏️ Edit Order</button>
+                                    }}>✏️ Edit Order</button>}
                                     {!orderTooOldToCancel && (
-                                        <button onClick={() => setShowCancel(true)} style={{
+                                        <button onClick={() => startCancel(order)} style={{
                                             padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
                                             background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)',
                                             color: '#f87171', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
@@ -416,10 +420,10 @@ export default function OrderSummaryPage() {
                                 </>
                             )}
                         </div>
-                        {canEditOrCancel && anyItemCut && (
-                            <span style={{ fontSize: '0.7rem', color: '#475569' }}>Already cut — can no longer be edited or cancelled</span>
+                        {canEditOrCancel && isCompleted && (
+                            <span style={{ fontSize: '0.7rem', color: '#475569' }}>Order is completed — it can no longer be edited</span>
                         )}
-                        {canEditOrCancel && !anyItemCut && orderTooOldToCancel && (
+                        {canEditOrCancel && orderTooOldToCancel && (
                             <span style={{ fontSize: '0.7rem', color: '#475569' }}>Order is over a week old — can no longer be cancelled</span>
                         )}
                     </div>
@@ -507,13 +511,7 @@ export default function OrderSummaryPage() {
                 </div>
             </div>
 
-            {showCancel && (
-                <CancelOrderModal
-                    order={{ id: order.orderId, amountPaid: order.amountPaid }}
-                    onClose={() => setShowCancel(false)}
-                    onConfirm={handleCancelConfirm}
-                />
-            )}
+            {cancelFlowModals}
 
             {correcting && correcting.kind === 'glass' && (
                 <CorrectOffcutModal

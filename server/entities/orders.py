@@ -45,12 +45,15 @@ class Order(SQLModel, table=True):
     source_invoice_id: Optional[int] = Field(default=None, foreign_key="invoices.invoiceId")
 
     # Relationships
-    # order_by pins item order to insertion (item_id) order — orderService creates
-    # OrderItem rows in the same sequence as the incoming cart/items array, and
-    # callers (e.g. the receipt) match items back to that array positionally.
+    # Pinned to the CART order the items were built in, which is what callers such as the
+    # printed cutting worksheet (ReceiptPage) match against positionally. This used to be
+    # ordered by item_id, on the assumption that insertion order is cart order — true only
+    # while every edit recreated every row. update_order now keeps unchanged items at their
+    # original ids, so item_id order can differ from cart order; OrderItem.position records
+    # the real thing. item_id breaks ties for rows predating the column.
     orderItems: List["OrderItem"] = Relationship(
         back_populates="order",
-        sa_relationship_kwargs={"order_by": "OrderItem.item_id"},
+        sa_relationship_kwargs={"order_by": "OrderItem.position, OrderItem.item_id"},
     )
     customer: Optional["Customer"] = Relationship(back_populates="orders")
     user: "User" = Relationship(back_populates="orders")

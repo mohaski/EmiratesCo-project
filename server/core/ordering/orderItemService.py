@@ -88,7 +88,11 @@ def get_orderItems_by_orderId(order_id: int, db: Session = Depends(get_session))
     - Returns a list of order items associated with the given order ID.
     """
     try:
-        statement = select(OrderItem).where(OrderItem.order_id == order_id)
+        # Cart order, same as Order.orderItems — callers match items back to the cart
+        # positionally, and an unordered result is exactly what swapped the cutting
+        # instructions between worksheets on order #190.
+        statement = (select(OrderItem).where(OrderItem.order_id == order_id)
+                     .order_by(OrderItem.position, OrderItem.item_id))
         results = db.exec(statement).all()
         
         if not results:

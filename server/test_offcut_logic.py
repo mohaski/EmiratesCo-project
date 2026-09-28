@@ -8,6 +8,39 @@ from entities.orderItems import OrderItem
 from entities.users import User
 from core.inventory.inventoryService import deduct_stock_for_order_item, apply_manual_cut_selection
 
+def _clear(db, offs):
+    # Through safe_delete_offcut with the ledger's pieces retired first, not a bare
+    # db.delete: a raw delete leaves the pieces 'available' against a row that no longer
+    # exists, which the reversal resolver would then treat as material it can hand back.
+    from core.inventory import offcutLedger as _ledger
+    from core.inventory.poolKey import safe_delete_offcut as _safe_delete
+    for o in offs:
+        _ledger.retire_pieces_for_row(db, o.offcutId, reason="test teardown")
+        _safe_delete(db, o)
+
+
+def _refuse_live_database():
+    """These tests create REAL orders (pending, zero-value, many with cut lines) wherever
+    DATABASE_URL points. Against the live database they land in the floor's cutting queue
+    next to real work — on 2026-09-27 they accounted for 19 of the 50 orders there. Point
+    DATABASE_URL at the throwaway copy instead:
+
+        DATABASE_URL=postgresql+psycopg2://postgres:<pw>@localhost/emiratesco_edit_test
+
+    Set ALLOW_LIVE_TESTS=1 to run against the live database deliberately.
+    """
+    import os
+    from sqlalchemy import text
+    from db.database import engine as _engine
+    with _engine.connect() as c:
+        name = c.execute(text("SELECT current_database()")).scalar()
+    if name == "EmiratesCo_Database" and os.getenv("ALLOW_LIVE_TESTS") != "1":
+        raise SystemExit(
+            f"Refusing to run against the live database ({name}): this suite writes real "
+            "orders into it. Set DATABASE_URL to emiratesco_edit_test, or ALLOW_LIVE_TESTS=1."
+        )
+
+
 def test_logic():
     engine = create_engine(DATABASE_URL)
     with Session(engine) as db:
@@ -46,7 +79,7 @@ def test_logic():
         p.stock_quantity = 10
         db.add(p)
         offs = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        for o in offs: db.delete(o)
+        _clear(db, offs)
         db.commit()
         print(f"Reset Test Product: {p.productId} / Variant {v.variantId} (Stock: {v.stock_quantity})")
 
@@ -109,7 +142,7 @@ def test_logic():
         # over by Tests 1-3 above).
         print("\n--- Test 4: Manual selection (partial offcut + top-up) — need 9ft ---")
         offs = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        for o in offs: db.delete(o)
+        _clear(db, offs)
         v.stock_quantity = 8
         db.add(v)
         db.add(Offcut(product_id=p.productId, variant_id=v.variantId, length=1.0, quantity=1))
@@ -173,7 +206,7 @@ def test_logic():
         # (exact-fit or larger) rather than a fresh bar, when one is available.
         print("\n--- Test 7: Manual selection shortfall prefers an existing offcut over a new bar ---")
         offs = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        for o in offs: db.delete(o)
+        _clear(db, offs)
         v.stock_quantity = 8
         db.add(v)
         db.add(Offcut(product_id=p.productId, variant_id=v.variantId, length=3.0, quantity=1))
@@ -203,6 +236,7 @@ def test_logic():
         print(f"Offcuts remaining: {[(o.length, o.quantity) for o in offcuts]} (Expected [] — both consumed exactly)")
 
 if __name__ == "__main__":
+    _refuse_live_database()
     try:
         test_logic()
         print("\nTest Complete.")

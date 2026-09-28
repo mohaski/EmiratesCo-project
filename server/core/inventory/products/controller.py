@@ -26,7 +26,10 @@ async def create_product(
 @router.get("/", response_model=List[model.ProductResponse])
 def get_products(
     skip: int = 0,
-    limit: int = 100,
+    # No default cap: the UI loads the whole catalogue in one go (ProductContext)
+    # and a default limit silently hid every product past it. Pass ?limit= only
+    # when a caller genuinely wants a page.
+    limit: Optional[int] = None,
     search: Optional[str] = None,
     category_id: Optional[int] = None,
     db: Session = Depends(get_session)
