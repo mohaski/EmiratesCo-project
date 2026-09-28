@@ -98,6 +98,7 @@ def container_usage(container_id: int, db: Session) -> model.ContainerUsageRespo
 
         lines.append(model.ContainerUsageLine(
             order_id=order.orderId,
+            order_no=order.order_no,
             item_id=item.item_id,
             customer_name=order.customer_name,
             served_by=user_names[served_key],

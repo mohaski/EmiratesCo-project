@@ -157,6 +157,7 @@ def _piece_summary(piece: OffcutPiece, db: Session) -> dict:
         order = db.get(Order, piece.consumed_by_order_id)
         holder = {
             "order_id": piece.consumed_by_order_id,
+            "order_no": order.order_no if order else None,
             "customer_name": order.customer_name if order else None,
         }
     return {

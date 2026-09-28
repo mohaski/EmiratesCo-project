@@ -37,7 +37,7 @@ export function CollectDebtTab({ searchQuery = '', onCountChange }) {
 
     const filteredOrders = useMemo(() => {
         const lq = searchQuery.toLowerCase();
-        return orders.filter(o => !lq || String(o.id).toLowerCase().includes(lq) || (o.customer?.name || '').toLowerCase().includes(lq));
+        return orders.filter(o => !lq || String(o.orderNo ?? o.id).toLowerCase().includes(lq) || (o.customer?.name || '').toLowerCase().includes(lq));
     }, [orders, searchQuery]);
 
     useEffect(() => { onCountChange?.(orders.length); }, [orders, onCountChange]);

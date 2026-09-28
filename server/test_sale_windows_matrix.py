@@ -61,8 +61,9 @@ failures = T.failures
 
 
 class Staff:
+    # userId as a string, like the real TokenData from the JWT (see test_sale_windows.FakeUser).
     def __init__(self, user, role):
-        self.userId, self.role, self.username = user.userId, role, user.username
+        self.userId, self.role, self.username = str(user.userId), role, user.username
 
 
 def cashier(u): return Staff(u, "cashier")
@@ -72,7 +73,7 @@ def frozen(u):
     """A plain copy of a user row, safe to hand to another thread (an ORM instance is bound
     to the main session, which is not thread-safe)."""
     from types import SimpleNamespace
-    return SimpleNamespace(userId=u.userId, username=u.username)
+    return SimpleNamespace(userId=str(u.userId), username=u.username)
 def manager(u): return Staff(u, "manager")
 def ceo(u): return Staff(u, "ceo")
 

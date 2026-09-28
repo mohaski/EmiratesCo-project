@@ -10,6 +10,28 @@ import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories'
 import { getProfileColorHex, getContrastText, getCategoryAccent, tileGradient, hexToRgba } from '../utils/colors';
 import api from '../services/api';
 import ResolveCutsModal from '../components/orders/ResolveCutsModal';
+import { useWindows } from '../context/WindowContext';
+import { WindowExpiryNotice } from '../components/sales/WindowTabs';
+
+/** One idempotency key per window, kept until that window is confirmed: a confirm retried
+ * after a dropped connection (or a page reload mid-request) resends the same key, and the
+ * server answers with the order it already made instead of charging twice. */
+const confirmKeyFor = (windowId) => {
+    const storageKey = `emirates_pos_confirm_key_${windowId}`;
+    try {
+        let key = sessionStorage.getItem(storageKey);
+        if (!key) {
+            key = window.crypto?.randomUUID?.() ?? `${windowId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            sessionStorage.setItem(storageKey, key);
+        }
+        return key;
+    } catch {
+        return `${windowId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+};
+const forgetConfirmKey = (windowId) => {
+    try { sessionStorage.removeItem(`emirates_pos_confirm_key_${windowId}`); } catch { /* ignore */ }
+};
 
 function useWindowWidth() {
     const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1280));
@@ -159,23 +181,36 @@ export default function CheckoutPage() {
     const isMobile = windowWidth < 768;
 
     const { user } = useAuth();
-    const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart } = useCart();
+    const {
+        cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart,
+        windowMode, removeFromCart,
+    } = useCart();
+    const { activeWindow, saveWindow, confirmWindow } = useWindows();
     const { addOrder, updateOrder } = useOrders();
     const { mode, originalTotal = 0, originalBalance = 0 } = location.state || {};
     const editOrderId = mode === 'edit' ? (location.state?.orderData?.id ?? location.state?.orderData?.orderId ?? null) : null;
-    // When arriving from invoice-convert or link mode, items & customer come via navigation state
-    const fromInvoice = Boolean(location.state?.cartItems);
-    // Local + mutable so items can be removed right here without losing the sourceInvoiceId
-    // connection (which lives in this page's own closure/state, not in CartContext).
-    const [cartItems, setCartItems] = useState(() => fromInvoice ? location.state.cartItems : ctxCartItems);
-    const customer = fromInvoice ? location.state.customer : ctxCustomer;
-    const enableTax = location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled;
-    const parentOrderId = location.state?.parentOrderId ?? null;
-    const sourceInvoiceId = location.state?.sourceInvoiceId ?? null;
+
+    // A new sale checks out FROM ITS WINDOW: the items, customer, VAT, and any linked order
+    // or quotation are the window's own, as held on the server. Only an order edit still
+    // arrives with its cart in the navigation state.
+    const isWindowSale = windowMode && !editOrderId;
+    const fromInvoice = !isWindowSale && Boolean(location.state?.cartItems);
+    const [localCartItems, setLocalCartItems] = useState(() => fromInvoice ? location.state.cartItems : ctxCartItems);
+    const cartItems = isWindowSale ? ctxCartItems : localCartItems;
+    const customer = isWindowSale ? ctxCustomer : (fromInvoice ? location.state.customer : ctxCustomer);
+    const enableTax = isWindowSale
+        ? ctxTaxEnabled
+        : (location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled);
+    const parentOrderId = isWindowSale ? (activeWindow?.parentOrderId ?? null) : (location.state?.parentOrderId ?? null);
+    const sourceInvoiceId = isWindowSale ? (activeWindow?.sourceInvoiceId ?? null) : (location.state?.sourceInvoiceId ?? null);
 
     const removeItem = useCallback((index) => {
-        setCartItems(prev => prev.filter((_, i) => i !== index));
-    }, []);
+        if (isWindowSale) {
+            removeFromCart(index).catch(() => {});
+            return;
+        }
+        setLocalCartItems(prev => prev.filter((_, i) => i !== index));
+    }, [isWindowSale, removeFromCart]);
 
     // Editing an order that consumed cut material: the confirmation is asked at SUBMIT,
     // not on entry, because only the final cart says which items actually change. An item
@@ -272,14 +307,31 @@ export default function CheckoutPage() {
                 mode: mode || 'new'
             };
 
-            const response = editOrderId
-                ? await updateOrder(editOrderId, orderData)
-                : await addOrder(orderData);
+            let response;
+            if (isWindowSale) {
+                const windowId = activeWindow?.windowId;
+                if (!windowId) throw new Error('No open window to confirm.');
+                // The discount and VAT are the last terms of the sale: save them onto the
+                // window (its stock is untouched by this), then confirm exactly that.
+                await saveWindow(windowId, { discount: discountValue, VAT_status: Boolean(enableTax) });
+                response = await confirmWindow(windowId, {
+                    idempotencyKey: confirmKeyFor(windowId),
+                    amountPaid: netPayment,
+                    paymentMethod: netPayment > 0 ? (paymentMethod || 'cash') : null,
+                    paymentDetails: orderData.payment.details,
+                });
+                forgetConfirmKey(windowId);
+            } else {
+                response = editOrderId
+                    ? await updateOrder(editOrderId, orderData)
+                    : await addOrder(orderData);
+                clearCart();
+            }
 
-            clearCart();
             navigate('/checkout/receipt', {
                 state: {
                     orderId: response?.orderId,
+                    orderNo: response?.orderNo ?? null,
                     cartItems,
                     customer,
                     categories: receiptCategories,
@@ -304,13 +356,24 @@ export default function CheckoutPage() {
             // no such message (a 500, a network failure).
             const status = err?.response?.status;
             const detail = err?.response?.data?.detail;
-            setPaymentError(status >= 400 && status < 500 && typeof detail === 'string'
-                ? detail
+            if (isWindowSale && status === 410) {
+                // Expired or closed: nothing left to sell here. Back to the till.
+                setPaymentError(`${detail?.message ?? 'This window has closed.'} Returning to sales...`);
+                setTimeout(() => navigate('/sales'), 2500);
+                return;
+            }
+            if (isWindowSale && status === 409) {
+                setPaymentError('This window was changed on another screen. Review the items and confirm again.');
+                return;
+            }
+            const text = typeof detail === 'string' ? detail : detail?.message;
+            setPaymentError(status >= 400 && status < 500 && text
+                ? text
                 : 'Failed to process payment. Please try again.');
         } finally {
             setLoading(false);
         }
-    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories]);
+    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories, isWindowSale, activeWindow, saveWindow, confirmWindow]);
 
     // Edit mode: ask the backend what THIS cart would disturb, and confirm every cut line
     // it does — the cutting flags are a prefill, not evidence, so a line the queue still
@@ -340,7 +403,9 @@ export default function CheckoutPage() {
         return (
             <div style={{ minHeight: '100vh', background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
                 <span style={{ fontSize: '3rem' }}>🛒</span>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f1f5f9' }}>Cart is Empty</h2>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f1f5f9' }}>
+                    {isWindowSale && !activeWindow ? 'No open window' : 'Cart is Empty'}
+                </h2>
                 <button onClick={() => navigate('/sales')} style={{ color: '#3b82f6', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '0.875rem' }}>
                     ← Return to Sales
                 </button>
@@ -387,9 +452,11 @@ export default function CheckoutPage() {
                     {/* Back nav */}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem', flexWrap: 'wrap', gap: '0.75rem' }}>
                         <button
-                            onClick={() => sourceInvoiceId
-                                ? navigate('/orders', { state: { activeTab: 'invoices', highlightId: sourceInvoiceId } })
-                                : navigate('/sales', { state: { enableTax, mode: 'back' } })}
+                            onClick={() => isWindowSale
+                                ? navigate('/sales', { state: { mode: 'back' } })
+                                : sourceInvoiceId
+                                    ? navigate('/orders', { state: { activeTab: 'invoices', highlightId: sourceInvoiceId } })
+                                    : navigate('/sales', { state: { enableTax, mode: 'back' } })}
                             style={{
                                 display: 'flex', alignItems: 'center', gap: '0.5rem',
                                 background: 'none', border: 'none', cursor: 'pointer',
@@ -401,12 +468,14 @@ export default function CheckoutPage() {
                             onMouseLeave={e => { e.currentTarget.style.color = '#475569'; }}
                         >
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
-                            {sourceInvoiceId ? 'Back to Order History' : 'Back to Sales'}
+                            {sourceInvoiceId && !isWindowSale ? 'Back to Order History' : 'Back to Sales'}
                         </button>
 
                         {sourceInvoiceId && (
                             <button
-                                onClick={() => navigate('/sales', { state: { mode: 'convert', cartItems, customer, sourceInvoiceId, enableTax } })}
+                                onClick={() => (isWindowSale
+                                    ? navigate('/sales', { state: { mode: 'back' } })
+                                    : navigate('/sales', { state: { mode: 'convert', cartItems, customer, sourceInvoiceId, enableTax } }))}
                                 style={{
                                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                                     background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
@@ -438,8 +507,10 @@ export default function CheckoutPage() {
                             )}
                         </div>
                         <p style={{ color: '#475569', fontSize: '0.875rem' }}>
+                            {isWindowSale && activeWindow ? `${activeWindow.label} · ` : ''}
                             {cartItems.length} item{cartItems.length !== 1 ? 's' : ''} · Review before confirming payment
                         </p>
+                        {isWindowSale && <WindowExpiryNotice window={activeWindow} />}
                     </div>
 
                     {/* Items table */}

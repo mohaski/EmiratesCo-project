@@ -141,6 +141,7 @@ def get_all_outstanding_credits(db: Session = Depends(get_session)) -> list[mode
                 model.OutstandingCreditItem(
                     creditId=credit.creditId,
                     orderId=credit.orderId,
+                    orderNo=order.order_no,
                     customerId=credit.customerId,
                     customerName=customer.name,
                     customerPhone=customer.phoneNumber,

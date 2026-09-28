@@ -16,7 +16,9 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
     // Set while editing a saved order: the stock check then gives that order's own material
     // back first, as the edit will, instead of calling a cut impossible because this very
     // order used its hand-picked offcut up (see CartContext.editingOrderId).
-    const { editingOrderId } = useCart();
+    // In a sale window, the window's held order plays the same part: the check may use
+    // the window's own held leftovers and gives its material back first (CartContext.stockScopeOrderId).
+    const { stockScopeOrderId: editingOrderId } = useCart();
     // Offcut selection is a POS/cutting-floor concern — invoices/quotations are
     // generated before any physical cutting happens, so there's nothing to pick from yet.
     const allowOffcutSelection = source !== 'invoice';

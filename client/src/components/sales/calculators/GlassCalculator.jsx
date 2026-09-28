@@ -21,7 +21,9 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     // Set while editing a saved order: the stock check then gives that order's own material
     // back first, as the edit will, instead of calling a cut impossible because this very
     // order used its hand-picked offcut up (see CartContext.editingOrderId).
-    const { editingOrderId } = useCart();
+    // In a sale window, the window's held order plays the same part: the check may use
+    // the window's own held leftovers and gives its material back first (CartContext.stockScopeOrderId).
+    const { stockScopeOrderId: editingOrderId } = useCart();
 
     const extraAttributes = useMemo(() => {
         const extras = {};

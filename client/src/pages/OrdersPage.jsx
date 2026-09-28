@@ -1,4 +1,7 @@
 import { useOrders } from '../context/OrderContext';
+import { useCart } from '../context/CartContext';
+import { useWindows } from '../context/WindowContext';
+import { mapItemForBackend } from '../utils/orderItemMapping';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect, useCallback, useMemo, useDeferredValue } from 'react';
@@ -57,7 +60,7 @@ export default function OrdersPage() {
     const groupedOrders = useMemo(() => {
         if (activeTab !== 'orders') return [];
         const lq = deferredQuery.toLowerCase();
-        return groupItemsByDate(orders.filter(o => !lq || String(o.id).toLowerCase().includes(lq) || (o.customer?.name || '').toLowerCase().includes(lq)));
+        return groupItemsByDate(orders.filter(o => !lq || String(o.orderNo ?? o.id).toLowerCase().includes(lq) || (o.customer?.name || '').toLowerCase().includes(lq)));
     }, [activeTab, deferredQuery, orders, groupItemsByDate]);
 
     const groupedInvoices = useMemo(() => {
@@ -91,14 +94,23 @@ export default function OrdersPage() {
     }, [navigate]);
 
     const handleViewInvoice = useCallback((invoice) => navigate('/invoice/review', { state: { invoice } }), [navigate]);
-    const handleConvertInvoice = useCallback((invoice) => navigate('/checkout', {
-        state: {
-            cartItems: invoice.items,
-            customer: invoice.customer,
-            enableTax: invoice.vat_enabled ?? false,
+    // Converting a quotation is a new sale: its items go into a sale window, which holds
+    // their stock from this moment, and checkout confirms that window. If the stock isn't
+    // there any more the window is not kept, and the reason is shown.
+    const { openWindowWith } = useWindows();
+    const { setSessionType, setEditingOrderId } = useCart();
+    const handleConvertInvoice = useCallback((invoice) => {
+        setSessionType('sales');
+        setEditingOrderId(null);
+        openWindowWith({
+            items: (invoice.items || []).map(mapItemForBackend),
+            customer: invoice.customer?.id || invoice.customer?.name ? invoice.customer : null,
             sourceInvoiceId: invoice.id,
-        }
-    }), [navigate]);
+            VAT_status: invoice.vat_enabled ?? false,
+        })
+            .then(() => navigate('/checkout', { state: { window: true } }))
+            .catch(() => {});
+    }, [navigate, openWindowWith, setSessionType, setEditingOrderId]);
 
     // CEO doesn't work quotations or the cutting floor — both tabs are
     // manager/cashier/admin only (mirrors '/invoice' + '/invoice/review'

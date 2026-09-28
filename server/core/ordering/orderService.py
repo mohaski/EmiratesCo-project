@@ -1477,6 +1477,7 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
         pending_items = [oi for oi in order.orderItems if not oi.cutting_completed]
         results.append({
             "orderId": order.orderId,
+            "orderNo": order.order_no,
             "customerName": order.customer_name,
             "items": [
                 {"itemId": oi.item_id, "productName": oi.product.name, "details": oi.details}
@@ -1522,11 +1523,21 @@ def get_audit_history(
             usernames[uid] = user.username if user else str(uid)
         return usernames[uid]
 
+    order_nos: dict = {}
+    def _order_no(r):
+        if not (r.entity_type or "").startswith("order"):
+            return None
+        if r.entity_id not in order_nos:
+            order = db.get(Order, r.entity_id)
+            order_nos[r.entity_id] = order.order_no if order else None
+        return order_nos[r.entity_id]
+
     return [
         model.EditHistoryResponse(
             id=r.id,
             entity_type=r.entity_type,
             entity_id=r.entity_id,
+            order_no=_order_no(r),
             edited_by=_username(r.edited_by),
             edited_at=r.edited_at.isoformat(),
             action=r.action,

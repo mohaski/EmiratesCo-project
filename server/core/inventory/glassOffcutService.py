@@ -1016,6 +1016,7 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
                 customer_name = order.customer_name if order is not None else None
                 pending_source_notice = {
                     "order_id": producing_item.order_id, "item_id": producing_item.item_id,
+                    "order_no": order.order_no if order is not None else None,
                     "customer_name": customer_name,
                 }
         # Ledger: pick which piece of this pooled row goes under the cutter, before

@@ -98,7 +98,7 @@ function ActivityRow({ item, expanded, onToggle }) {
                             fontSize: '0.65rem', fontWeight: 700, color: '#64748b',
                             background: 'rgba(255,255,255,0.05)', borderRadius: '4px', padding: '1px 6px',
                             fontFamily: 'var(--font-mono)',
-                        }}>#{item.entity_id}</span>
+                        }}>#{item.order_no ?? item.entity_id}</span>
                     </div>
                     <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '0.3rem' }}>
                         {summary || <span style={{ fontStyle: 'italic', color: '#475569' }}>No summary available</span>}
@@ -214,7 +214,7 @@ export default function ActivityLogPage() {
             const summary = summarizeActivity(r) || '';
             return meta.label.toLowerCase().includes(q)
                 || r.edited_by.toLowerCase().includes(q)
-                || String(r.entity_id).includes(q)
+                || String(r.order_no ?? r.entity_id).includes(q)
                 || summary.toLowerCase().includes(q);
         });
     }, [rows, query]);

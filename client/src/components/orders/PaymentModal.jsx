@@ -63,7 +63,7 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
                     <div>
                         <h2 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Collect Debt</h2>
-                        <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.25rem 0 0' }}>Order #{order.id} · {order.customer?.name}</p>
+                        <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.25rem 0 0' }}>Order #{order.orderNo ?? order.id} · {order.customer?.name}</p>
                     </div>
                     <button onClick={onClose} style={{
                         width: '32px', height: '32px', borderRadius: '8px',

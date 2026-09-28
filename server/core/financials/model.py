@@ -63,6 +63,7 @@ class FinancialSummaryResponse(BaseModel):
 
 
 class OutstandingCreditItem(BaseModel):
+    orderNo: Optional[int] = None   # the order number people see (orders.order_no)
     creditId: int
     orderId: int
     customerId: int

@@ -62,7 +62,7 @@ function ChainView({ chain }) {
                             {p.is_scrap && <span style={{ fontSize: '0.62rem', color: '#f87171' }}>scrap</span>}
                             {consumed && p.holder && (
                                 <span style={{ fontSize: '0.62rem', color: '#f59e0b' }}>
-                                    #{p.holder.order_id}{p.holder.customer_name ? ` ${p.holder.customer_name}` : ''}
+                                    {p.holder.order_no != null ? `#${p.holder.order_no}` : 'an open sale window'}{p.holder.customer_name ? ` ${p.holder.customer_name}` : ''}
                                 </span>
                             )}
                         </div>
@@ -132,7 +132,7 @@ function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates = [] }
                                     fontWeight: 700, padding: '0.15rem 0.4rem', borderRadius: '0.4rem',
                                     background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)',
                                 }}>
-                                    #{b.order_id}{b.customer_name ? ` ${b.customer_name}` : ''}
+                                    {b.order_no != null ? `#${b.order_no}` : 'an open sale window'}{b.customer_name ? ` ${b.customer_name}` : ''}
                                 </span>
                             ))}
                         </div>

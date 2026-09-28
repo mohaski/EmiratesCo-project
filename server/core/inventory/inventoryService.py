@@ -25,7 +25,8 @@ def _pending_source_notice(db: Session, source_item_id: Optional[int]) -> Option
         return None
     order = db.get(Order, producing_item.order_id)
     customer_name = order.customer_name if order is not None else None
-    return {"order_id": producing_item.order_id, "item_id": producing_item.item_id, "customer_name": customer_name}
+    return {"order_id": producing_item.order_id, "order_no": order.order_no if order is not None else None,
+            "item_id": producing_item.item_id, "customer_name": customer_name}
 
 
 # ── Public entry point ────────────────────────────────────────────────────────

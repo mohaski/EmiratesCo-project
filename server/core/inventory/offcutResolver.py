@@ -109,6 +109,7 @@ def _describe_blocker(db: Session, piece: OffcutPiece) -> dict:
     if order_id is not None:
         order = db.get(Order, order_id)
         customer_name = order.customer_name if order else None
+        order_no = order.order_no if order else None
 
     if piece.geom_kind == "2d":
         size = f"{piece.width:.0f}x{piece.height:.0f}mm"
@@ -118,6 +119,7 @@ def _describe_blocker(db: Session, piece: OffcutPiece) -> dict:
     return {
         "piece_id": piece.piece_id,
         "order_id": order_id,
+        "order_no": order_no,
         "item_id": item_id,
         "customer_name": customer_name,
         "size": size,

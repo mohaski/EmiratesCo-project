@@ -8,6 +8,9 @@ import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext';
 import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 import CustomerSelectionOverlay from '../components/sales/CustomerSelectionOverlay';
+import WindowTabs, { WindowExpiryNotice } from '../components/sales/WindowTabs';
+import { useWindows } from '../context/WindowContext';
+import { mapItemForBackend, mapStoredItemToCart } from '../utils/orderItemMapping';
 
 const SearchIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -75,11 +78,23 @@ export default function SalesDashboard() {
         linkedRef,
         setLinkedRef,
         setEditingOrderId,
+        windowMode,
+        taxEnabled: windowTax,
+        setTaxEnabled: setWindowTax,
     } = useCart();
+    const { activeWindow, openWindowWith, loaded: windowsLoaded } = useWindows();
 
-    const [enableTax, setEnableTax] = useState(() =>
+    // A new sale's VAT belongs to its window (saved with it); an order edit keeps its own
+    // local toggle, as before.
+    const [localTax, setLocalTax] = useState(() =>
         location.state?.enableTax !== undefined ? location.state.enableTax : true
     );
+    const enableTax = windowMode ? windowTax : localTax;
+    const setEnableTax = useCallback((value) => {
+        if (windowMode) return setWindowTax(value);
+        setLocalTax(value);
+        return null;
+    }, [windowMode, setWindowTax]);
 
     useEffect(() => {
         if (!location.state?.mode && sessionType !== 'sales') {
@@ -122,54 +137,58 @@ export default function SalesDashboard() {
             const orderData = location.state.orderData;
             const cust = orderData.customer;
 
-            const mappedItems = (orderData.items || []).map(backendItem => {
-                const details = backendItem.details || {};
-                const productId = backendItem.productId ?? details.productId;
-                const product = PRODUCTS.find(p => p.id === productId);
-                return {
-                    id: productId,
-                    productId: productId,
-                    name: product?.name ?? details.name ?? `Product #${productId}`,
-                    category: product?.category ?? null,
-                    totalPrice: backendItem.totalPrice ?? 0,
-                    unit: backendItem.unitType ?? details.unitType ?? 'pcs',
-                    qty: backendItem.quantity ?? details.quantity ?? 1,
-                    price: backendItem.unitPrice ?? details.unitPrice ?? 0,
-                    variantId: backendItem.variantId ?? details.variantId ?? null,
-                    details,
-                };
-            });
+            const mappedItems = (orderData.items || []).map(i => mapStoredItemToCart(i, PRODUCTS));
 
             loadOrder({ ...orderData, items: mappedItems }, {
                 editingOrderId: location.state?.mode === 'edit'
                     ? (orderData.id ?? orderData.orderId ?? null)
                     : null,
             });
-            setEnableTax(orderData.VAT_status ?? (!cust || cust.type === 'corporate'));
+            setLocalTax(orderData.VAT_status ?? (!cust || cust.type === 'corporate'));
         } else if (location.state?.mode === 'link' && location.state?.customer) {
-            if (loadedStateRef.current?.startsWith('link')) return;
-            loadedStateRef.current = stateKey;
-            setSelectedCustomer(location.state.customer);
-            setLinkedRef({ type: 'link', id: location.state.parentOrderId ?? null });
-            setEnableTax(!location.state.customer || location.state.customer.type === 'corporate');
+            // "Add to order": a new sale window tied to the parent order, for its customer.
+            // Keyed by navigation so it opens exactly one window, not one per re-render.
+            if (loadedStateRef.current === location.key) return;
+            loadedStateRef.current = location.key;
+            setEditingOrderId(null);
+            setSessionType('sales');
+            const cust = location.state.customer;
+            openWindowWith({
+                customer: cust,
+                parentOrderId: location.state.parentOrderId ?? null,
+                VAT_status: !cust || cust.type === 'corporate',
+            }).catch(() => {});
+            // Consume the instruction. Router state lives in browser history and survives a
+            // reload, so leaving it there made every refresh of this page open ANOTHER window.
+            navigate(location.pathname, { replace: true, state: null });
         } else if (location.state?.mode === 'convert' && location.state?.cartItems) {
-            // Editing a to-be-converted invoice's items — cartItems are already in
-            // frontend cart-item shape (they round-trip from invoice.items as-is),
-            // so no backend-shape mapping needed here (unlike the edit-order branch above).
-            if (loadedStateRef.current?.startsWith('convert')) return;
-            loadedStateRef.current = stateKey;
-            loadOrder({ items: location.state.cartItems, customer: location.state.customer || null });
-            setLinkedRef({ type: 'convert', id: location.state.sourceInvoiceId ?? null });
-            setEnableTax(location.state.enableTax ?? (!location.state.customer || location.state.customer.type === 'corporate'));
+            // Converting a quotation: its items go into a new window, which HOLDS their stock
+            // from now on. If they can't all be filled the window is closed again - there is
+            // nothing to sell - and the reason is already on screen.
+            if (loadedStateRef.current === location.key) return;
+            loadedStateRef.current = location.key;
+            setEditingOrderId(null);
+            setSessionType('sales');
+            const { cartItems, customer, sourceInvoiceId, enableTax: vat } = location.state;
+            openWindowWith({
+                items: cartItems.map(mapItemForBackend),
+                customer: customer || null,
+                sourceInvoiceId: sourceInvoiceId ?? null,
+                VAT_status: vat ?? (!customer || customer.type === 'corporate'),
+            }).catch(() => {});
+            // Consume it, as above: a reload must not hold the quotation's stock a second time.
+            navigate(location.pathname, { replace: true, state: null });
         } else if (!location.state?.mode) {
             loadedStateRef.current = null;
-            setSelectedCustomer(null);
-            setLinkedRef(null);
+            if (!windowMode) {
+                setSelectedCustomer(null);
+                setLinkedRef(null);
+            }
             // An abandoned edit must not leave its order id behind: a new sale's stock check
             // would then assume that order's material is coming back.
             setEditingOrderId(null);
         }
-    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, setEditingOrderId, PRODUCTS]);
+    }, [location.state, location.key, location.pathname, navigate, loadOrder, setSelectedCustomer, setLinkedRef, setEditingOrderId, setSessionType, PRODUCTS, windowMode, openWindowWith]);
 
     const handleProductClick = useCallback((product) => {
         setSelectedProduct(product);
@@ -191,19 +210,27 @@ export default function SalesDashboard() {
         }
     }, [cart, PRODUCTS]);
 
+    // In a sale window an add is a save: if the server refuses it (not enough stock, the
+    // window expired) the item is simply not added, and the reason is already on screen.
     const handleAddToOrder = useCallback((orderItem) => {
         if (editingIndex !== null) {
-            updateCartItem(editingIndex, orderItem);
+            updateCartItem(editingIndex, orderItem).catch(() => {});
             setEditingIndex(null);
         } else {
-            addToCart(orderItem);
+            addToCart(orderItem).catch(() => {});
         }
     }, [editingIndex, addToCart, updateCartItem]);
 
     const handleCustomerSelect = useCallback((customer) => {
-        setSelectedCustomer(customer);
-        setEnableTax(!customer || customer.type !== 'individual');
-    }, [setSelectedCustomer]);
+        const vat = !customer || customer.type !== 'individual';
+        if (windowMode) {
+            // Customer and its VAT default saved together, in one round trip.
+            setSelectedCustomer(customer, { VAT_status: vat }).catch(() => {});
+        } else {
+            setSelectedCustomer(customer);
+            setLocalTax(vat);
+        }
+    }, [setSelectedCustomer, windowMode]);
 
     const isEditMode = location.state?.mode === 'edit';
 
@@ -258,7 +285,7 @@ export default function SalesDashboard() {
                                     letterSpacing: '0.06em',
                                     textTransform: 'uppercase',
                                 }}>
-                                    Edit: #{String(location.state?.orderData?.id ?? '').slice(-6)}
+                                    Edit: #{String(location.state?.orderData?.orderNo ?? location.state?.orderData?.id ?? '').slice(-6)}
                                 </span>
                             )}
                             {linkedRef?.type === 'link' && (
@@ -471,6 +498,17 @@ export default function SalesDashboard() {
                     )}
                 </div>
 
+                {/* ── Customer Selection Overlay ──
+                    Covers the product browser only, never the cart panel: with sale windows the
+                    tabs must stay usable, so a cashier who opened a window by mistake can switch
+                    back to another one, or close it, without inventing a customer first. */}
+                {!selectedCustomer && (!windowMode || windowsLoaded) && (
+                    <CustomerSelectionOverlay
+                        customers={customers}
+                        onSelectCustomer={handleCustomerSelect}
+                    />
+                )}
+
                 {/* Product Grid */}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem 1.75rem' }} className="scrollbar-hide">
                     {filteredProducts.length === 0 ? (
@@ -539,6 +577,10 @@ export default function SalesDashboard() {
                 background: 'rgba(9,14,26,0.97)',
                 backdropFilter: 'blur(16px)',
             }}>
+                {/* Sale windows (a new sale); an order edit keeps the plain header below */}
+                {windowMode && <WindowTabs />}
+                {windowMode && <WindowExpiryNotice window={activeWindow} />}
+
                 {/* Cart header */}
                 <div style={{
                     minHeight: '64px',
@@ -551,7 +593,9 @@ export default function SalesDashboard() {
                     gap: '0.75rem',
                 }}>
                     <div>
-                        <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#f1f5f9' }}>Order Cart</h2>
+                        <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: '#f1f5f9' }}>
+                            {windowMode ? (activeWindow?.label ?? 'No open window') : 'Order Cart'}
+                        </h2>
                         <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: '2px' }}>
                             {cart.length === 0 ? 'Empty' : `${cart.length} item${cart.length !== 1 ? 's' : ''}`}
                         </div>
@@ -586,16 +630,16 @@ export default function SalesDashboard() {
                 <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
                     <CartSidebar
                         cartItems={cart}
-                        onRemoveItem={(index) => removeFromCart(index)}
+                        onRemoveItem={(index) => { removeFromCart(index).catch(() => {}); }}
                         onEditItem={handleEditCartItem}
                         customer={selectedCustomer}
-                        onChangeCustomer={() => setSelectedCustomer(null)}
+                        onChangeCustomer={() => { Promise.resolve(setSelectedCustomer(null)).catch(() => {}); }}
                         enableTax={enableTax}
                         onToggleTax={setEnableTax}
                         mode={isEditMode ? 'edit' : undefined}
                         originalTotal={0}
                         actionLabel={isEditMode ? 'Update Order' : 'Checkout'}
-                        onAction={isEditMode ? () => {
+                        onAction={windowMode ? () => navigate('/checkout', { state: { window: true } }) : isEditMode ? () => {
                             const od = location.state.orderData;
                             navigate('/checkout', {
                                 state: {
@@ -677,13 +721,6 @@ export default function SalesDashboard() {
                 cartIndex={editingIndex}
             />
 
-            {/* ── Customer Selection Overlay ── */}
-            {!selectedCustomer && (
-                <CustomerSelectionOverlay
-                    customers={customers}
-                    onSelectCustomer={handleCustomerSelect}
-                />
-            )}
         </div>
     );
 }

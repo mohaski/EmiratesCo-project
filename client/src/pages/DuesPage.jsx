@@ -131,7 +131,7 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
                                     </div>
                                     <div style={{ textAlign: 'right', flexShrink: 0 }}>
                                         <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#fbbf24', fontFamily: 'var(--font-mono)' }}>KSH {row.amountDue.toLocaleString()}</div>
-                                        <div style={{ fontSize: '0.75rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>#{row.orderId}</div>
+                                        <div style={{ fontSize: '0.75rem', color: '#60a5fa', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>#{row.orderNo ?? row.orderId}</div>
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', marginTop: '0.75rem' }}>
@@ -188,7 +188,7 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
                                     >
                                         <td style={{ padding: '0.875rem 1rem', fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0' }}>{row.customerName}</td>
                                         <td style={{ padding: '0.875rem 1rem', fontSize: '0.8rem', color: '#94a3b8', fontFamily: 'var(--font-mono)' }}>{row.customerPhone}</td>
-                                        <td style={{ padding: '0.875rem 1rem', fontSize: '0.8rem', color: '#60a5fa', fontFamily: 'var(--font-mono)' }}>#{row.orderId}</td>
+                                        <td style={{ padding: '0.875rem 1rem', fontSize: '0.8rem', color: '#60a5fa', fontFamily: 'var(--font-mono)' }}>#{row.orderNo ?? row.orderId}</td>
                                         <td style={{ padding: '0.875rem 1rem', fontSize: '0.9rem', fontWeight: 800, color: '#fbbf24', fontFamily: 'var(--font-mono)', textAlign: 'right' }}>KSH {row.amountDue.toLocaleString()}</td>
                                         <td style={{ padding: '0.875rem 1rem', textAlign: 'right' }}>
                                             <span style={{

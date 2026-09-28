@@ -103,6 +103,7 @@ class ContainerUsageLine(BaseModel):
     recorded on the order line at checkout time (see
     inventoryService._dispense_from_open_container)."""
     order_id: int
+    order_no: Optional[int] = None   # the order number people see
     item_id: int
     customer_name: Optional[str] = None
     served_by: Optional[str] = None

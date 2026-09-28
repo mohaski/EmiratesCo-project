@@ -14,7 +14,7 @@ import { RECEIPT_THEME, fmtLen, fmtMm, groupCuts, canonicalWH } from '../../util
 // (bold + border only) so it still reads clearly on a plain thermal print.
 const PendingSourceNotice = ({ notice, theme }) => (
     <div style={{ fontSize: '9.5px', fontWeight: 700, color: theme.border, border: `1px solid ${theme.border}`, borderRadius: '3px', padding: '2px 5px', margin: '3px 0' }}>
-        ⚠ Depends on an offcut from Order #{notice.order_id}
+        ⚠ Depends on an offcut from Order #{notice.order_no ?? notice.order_id}
         {notice.customer_name ? ` (${notice.customer_name})` : ''}.
     </div>
 );

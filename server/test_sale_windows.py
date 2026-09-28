@@ -63,8 +63,10 @@ def expect_http(label, status, fn, *args):
 
 
 class FakeUser:
+    # Shaped like the real logged-in user (authService.TokenData), whose userId comes out of
+    # the JWT as a STRING. A UUID here once hid an ownership check that failed in production.
     def __init__(self, user):
-        self.userId = user.userId
+        self.userId = str(user.userId)
         self.role = "cashier"
         self.username = user.username
 

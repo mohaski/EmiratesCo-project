@@ -231,6 +231,7 @@ class PendingCuttingOrder(BaseModel):
     awaiting a cutting report. The queue is checked off order-by-order, not
     item-by-item (see mark_cutting_complete_for_orders_batch)."""
     orderId: int
+    orderNo: Optional[int] = None
     customerName: Optional[str] = None
     items: List[PendingCuttingItem] = []
 
@@ -248,6 +249,8 @@ class ReversalBlocker(BaseModel):
     bar/sheet can't be returned for it."""
     piece_id: Optional[int] = None
     order_id: Optional[int] = None
+    # None while the holder is an open sale window (not an order yet).
+    order_no: Optional[int] = None
     item_id: Optional[int] = None
     customer_name: Optional[str] = None
     size: Optional[str] = None
@@ -333,6 +336,8 @@ class EditHistoryResponse(BaseModel):
     before_snapshot: Dict[str, Any]
     after_snapshot: Dict[str, Any]
     notes: Optional[str] = None
+    # For an order event, that order's number as people know it (entity_id is its internal id).
+    order_no: Optional[int] = None
 
     class Config:
         from_attributes = True

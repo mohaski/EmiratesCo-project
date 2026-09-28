@@ -38,5 +38,8 @@ export const extractErrorMessage = (error) => {
     if (Array.isArray(detail)) {
         return detail.map(e => e.msg || String(e)).filter(Boolean).join(' · ') || 'Validation error.';
     }
+    // Structured details ({ message, plan } on a cut-plan conflict, { message, closeReason }
+    // from a sale window) carry their human-readable text in `message`.
+    if (detail && typeof detail === 'object' && typeof detail.message === 'string') return detail.message;
     return String(detail || data.message || 'An error occurred.');
 };

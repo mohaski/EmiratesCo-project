@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../../../services/api';
+import { useCart } from '../../../context/CartContext';
 
 /**
  * Dry-run preview of how the 2D glass offcut engine would cut the current cart's
@@ -20,13 +21,15 @@ export default function CutPreviewModal({ productId, variantId, cutPieces, onClo
     const [optimization, setOptimization] = useState(null); // multi-strategy search summary
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    // In a sale window the preview may also use the window's own held leftovers.
+    const { holdOrderId } = useCart();
 
     useEffect(() => {
         let cancelled = false;
         setLoading(true);
         setError('');
         const cuts = cutPieces.map(c => ({ l: c.l, w: c.w, qty: c.q, u: c.u }));
-        api.productService.previewGlassCuts(productId, variantId, cuts)
+        api.productService.previewGlassCuts(productId, variantId, cuts, holdOrderId)
             .then(response => {
                 if (cancelled) return;
                 setGroups(response.groups);
@@ -39,7 +42,7 @@ export default function CutPreviewModal({ productId, variantId, cutPieces, onClo
             })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [productId, variantId, cutPieces]);
+    }, [productId, variantId, cutPieces, holdOrderId]);
 
     return (
         <div style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>

@@ -100,12 +100,18 @@ def _with_retry(db: Session, fn, *args):
             time.sleep(0.05 * attempt)
 
 
+def _is_owner(window: SaleWindow, user) -> bool:
+    # The logged-in user comes from the JWT (TokenData), where userId is a STRING; the column
+    # holds a UUID. Compared as text — a bare UUID == str is always False in Python.
+    return str(window.user_id) == str(user.userId)
+
+
 def _lock_window(db: Session, window_id: int, user) -> SaleWindow:
     window = db.exec(
         select(SaleWindow).where(SaleWindow.window_id == window_id).with_for_update()
     ).first()
     # Someone else's window reads as "not found": windows are private to their cashier.
-    if window is None or window.user_id != user.userId:
+    if window is None or not _is_owner(window, user):
         raise HTTPException(status_code=404, detail="Sale window not found")
     return window
 
@@ -216,7 +222,7 @@ def require_own_held_order(db: Session, order_id: Optional[int], user) -> Option
     if order_id is None:
         return None
     window = db.exec(select(SaleWindow).where(SaleWindow.order_id == order_id)).first()
-    if window is None or window.user_id != user.userId or window.closed_at is not None:
+    if window is None or not _is_owner(window, user) or window.closed_at is not None:
         raise HTTPException(status_code=404, detail="Sale window not found")
     return order_id
 
@@ -409,7 +415,7 @@ def list_my_windows(db: Session, user) -> list:
 def get_window(db: Session, window_id: int, user) -> wm.WindowResponse:
     require_role(_ROLES, user)
     window = db.get(SaleWindow, window_id)
-    if window is None or window.user_id != user.userId:
+    if window is None or not _is_owner(window, user):
         raise HTTPException(status_code=404, detail="Sale window not found")
     _require_open(db, window)
     return _window_response(db, window)
