@@ -73,6 +73,9 @@ ORIGIN_MANUAL_ENTRY = "manual_entry"          # keyed in via Stock Control / off
 ORIGIN_RESTORE_CREDIT = "restore_credit"      # credited back by an order edit/cancel
 ORIGIN_CORRECTION = "correction_replacement"  # a manager offcut correction
 ORIGIN_LEGACY = "legacy_bootstrap"            # inferred by the backfill migration
+# An uncut section of a bar put back onto the leftover the bar still has (1D), or uncut glass
+# merged back with the sheet's untouched leftovers along the cuts that were never made (2D).
+ORIGIN_REJOIN = "rejoin"
 
 # OffcutPieceEvent.event
 EVENT_CREATED = "created"
@@ -81,6 +84,12 @@ EVENT_RELEASED = "released"    # the undo of `consumed` — what an edit/cancel 
 EVENT_SCRAPPED = "scrapped"
 EVENT_RETIRED = "retired"
 EVENT_CORRECTED = "corrected"
+# The piece was merged into a rejoined piece (see ORIGIN_REJOIN); superseded_by_piece_id
+# names it. Terminal, like retired.
+EVENT_JOINED = "joined"
+# An undo put the piece back to the state it had before the undone operation. The payload
+# carries both states; the event log stays append-only.
+EVENT_UNDONE = "undone"
 
 GEOM_1D = "1d"   # bars/profiles — `length` only
 GEOM_2D = "2d"   # glass sheets — `width` x `height`
@@ -133,6 +142,11 @@ class OffcutPiece(SQLModel, table=True):
     consumed_by_item_id: Optional[int] = Field(default=None, index=True)
     consumed_by_order_id: Optional[int] = Field(default=None, index=True)
 
+    # The operation (entities/opJournal.StockOperation) that brought this piece into
+    # existence — a sale, an edit's reversal, a stock entry. NULL for pieces older than the
+    # operation journal.
+    produced_by_op_id: Optional[str] = Field(default=None, index=True, max_length=32)
+
     produced_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
     consumed_at: Optional[datetime] = Field(default=None)
 
@@ -168,6 +182,11 @@ class OffcutPieceEvent(SQLModel, table=True):
     actor_id: Optional[UUID] = Field(default=None)
 
     at: datetime = Field(default_factory=datetime.utcnow, nullable=False, index=True)
+
+    # The operation this event was part of, and the piece's state just before it — together
+    # they answer "what did edit X do to this piece, and what was it before?".
+    op_id: Optional[str] = Field(default=None, index=True, max_length=32)
+    from_state: Optional[str] = Field(default=None)
 
     # Cut geometry, the resolution an operator chose, a reversal's plan token,
     # free-form reason text — whatever the emitting call site knows.

@@ -74,7 +74,8 @@ export default function SalesDashboard() {
         setSessionType,
         linkedRef,
         setLinkedRef,
-        setEditingOrderId,
+        editSession,
+        setEditSession,
     } = useCart();
 
     const [enableTax, setEnableTax] = useState(() =>
@@ -107,8 +108,18 @@ export default function SalesDashboard() {
     // Track whether we have already loaded this specific navigation state so
     // cart edits (add/remove) don't trigger a re-load of the original items.
     const loadedStateRef = React.useRef(null);
+    // Which way this page mount picked up an edit: 'fresh' (loaded from the order - may
+    // re-run once the product list arrives, to resolve names) or 'kept' (the same edit was
+    // already in progress - reload, Back from checkout - so the cart is left as it is).
+    const editLoadRef = React.useRef(null);
+    // The load effect below must run only on navigation / products arriving - never on a cart
+    // change (its no-mode branch resets the customer). So it reads these through a ref, kept
+    // current by this effect, which runs before it.
+    const liveRef = React.useRef({});
+    useEffect(() => { liveRef.current = { editSession, cartLength: cart.length, clearCart }; });
 
     useEffect(() => {
+        const { editSession, cartLength, clearCart } = liveRef.current;
         // Key includes whether products are loaded — so the effect re-runs once
         // after products arrive (to resolve names) but not on cart mutations.
         const productsReady = PRODUCTS.length > 0 ? 'ready' : 'empty';
@@ -122,8 +133,37 @@ export default function SalesDashboard() {
             const orderData = location.state.orderData;
             const cust = orderData.customer;
 
+            const isEdit = location.state?.mode === 'edit';
+            const orderId = orderData.id ?? orderData.orderId ?? null;
+            const nonce = location.state?.editNonce ?? null;
+            // The same edit is already in progress (the page was reloaded, or the browser went
+            // back to it): keep the cashier's changes rather than reloading the order as it was
+            // when Edit was pressed.
+            if (isEdit && editLoadRef.current !== 'fresh' && (editLoadRef.current === 'kept' || (
+                editSession && nonce && editSession.orderId === orderId && editSession.nonce === nonce && cartLength > 0))) {
+                editLoadRef.current = 'kept';
+                if (editSession?.vat !== undefined) setEnableTax(editSession.vat);
+                return;
+            }
+            if (isEdit) editLoadRef.current = 'fresh';
             const mappedItems = (orderData.items || []).map(backendItem => {
-                const details = backendItem.details || {};
+                // Edit mode: remember which saved item this line is, so a calculator reopening
+                // it can ask whether its cuts were made (useEditCutAnswers).
+                // `_source` is what the saved item holds - it never changes while the cart is
+                // edited, so reopening the item still compares against, and adds back, the
+                // saved quantities (utils/editHoldings, hooks/useEditCutAnswers).
+                const saved = backendItem.details || {};
+                const details = isEdit && backendItem.itemId
+                    ? {
+                        ...saved,
+                        _sourceItemId: backendItem.itemId,
+                        _source: {
+                            variantId: backendItem.variantId ?? saved.variantId ?? null,
+                            qty: saved.qty ?? null,
+                            lineItems: saved.lineItems || [],
+                        },
+                    }
+                    : saved;
                 const productId = backendItem.productId ?? details.productId;
                 const product = PRODUCTS.find(p => p.id === productId);
                 return {
@@ -140,15 +180,23 @@ export default function SalesDashboard() {
                 };
             });
 
+            const vat = orderData.VAT_status ?? (!cust || cust.type === 'corporate');
             loadOrder({ ...orderData, items: mappedItems }, {
-                editingOrderId: location.state?.mode === 'edit'
-                    ? (orderData.id ?? orderData.orderId ?? null)
-                    : null,
+                editSession: isEdit ? {
+                    orderId,
+                    version: orderData.version ?? null,
+                    nonce,
+                    originalTotal: orderData.amountPayed ?? orderData.amountPaid ?? 0,
+                    originalBalance: orderData.balance ?? 0,
+                    vat,
+                } : null,
             });
-            setEnableTax(orderData.VAT_status ?? (!cust || cust.type === 'corporate'));
+            setEnableTax(vat);
         } else if (location.state?.mode === 'link' && location.state?.customer) {
             if (loadedStateRef.current?.startsWith('link')) return;
             loadedStateRef.current = stateKey;
+            // Adding to another order ends any edit in progress - its lines must not ride along.
+            if (editSession) clearCart();
             setSelectedCustomer(location.state.customer);
             setLinkedRef({ type: 'link', id: location.state.parentOrderId ?? null });
             setEnableTax(!location.state.customer || location.state.customer.type === 'corporate');
@@ -163,13 +211,17 @@ export default function SalesDashboard() {
             setEnableTax(location.state.enableTax ?? (!location.state.customer || location.state.customer.type === 'corporate'));
         } else if (!location.state?.mode) {
             loadedStateRef.current = null;
+            if (editSession) {
+                // An edit is in progress (the cashier went to another page and came back): the
+                // page stays in edit mode - the cart is NOT a new sale. It ends by saving it or
+                // by "Discard edit" on the banner.
+                if (editSession.vat !== undefined) setEnableTax(editSession.vat);
+                return;
+            }
             setSelectedCustomer(null);
             setLinkedRef(null);
-            // An abandoned edit must not leave its order id behind: a new sale's stock check
-            // would then assume that order's material is coming back.
-            setEditingOrderId(null);
         }
-    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, setEditingOrderId, PRODUCTS]);
+    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, PRODUCTS]);
 
     const handleProductClick = useCallback((product) => {
         setSelectedProduct(product);
@@ -205,7 +257,20 @@ export default function SalesDashboard() {
         setEnableTax(!customer || customer.type !== 'individual');
     }, [setSelectedCustomer]);
 
-    const isEditMode = location.state?.mode === 'edit';
+    // Keep the session's tax choice in step with the toggle, so it survives a reload too.
+    useEffect(() => {
+        if (editSession && editSession.vat !== enableTax) setEditSession({ ...editSession, vat: enableTax });
+    }, [enableTax, editSession, setEditSession]);
+
+    // Edit mode is "an edit is in progress", not "arrived here from the Edit button": Back
+    // from checkout, a reload or a detour through another page must not turn the edited
+    // order's lines into a new sale.
+    const isEditMode = !!editSession && ['edit', 'back', undefined].includes(location.state?.mode);
+    const discardEdit = useCallback(() => {
+        if (!window.confirm(`Discard your changes to order #${editSession?.orderId}? Nothing has been saved.`)) return;
+        clearCart();
+        navigate('/sales', { replace: true });
+    }, [editSession, clearCart, navigate]);
 
     return (
         <div style={{
@@ -258,8 +323,17 @@ export default function SalesDashboard() {
                                     letterSpacing: '0.06em',
                                     textTransform: 'uppercase',
                                 }}>
-                                    Edit: #{String(location.state?.orderData?.id ?? '').slice(-6)}
+                                    Edit: #{String(editSession?.orderId ?? '').slice(-6)}
                                 </span>
+                            )}
+                            {isEditMode && (
+                                <button data-testid="discard-edit" onClick={discardEdit} style={{
+                                    fontSize: '0.65rem', fontWeight: 700, padding: '0.2rem 0.6rem',
+                                    background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+                                    borderRadius: '100px', color: '#f87171', cursor: 'pointer',
+                                }}>
+                                    ✕ Discard edit
+                                </button>
                             )}
                             {linkedRef?.type === 'link' && (
                                 <span style={{
@@ -596,7 +670,6 @@ export default function SalesDashboard() {
                         originalTotal={0}
                         actionLabel={isEditMode ? 'Update Order' : 'Checkout'}
                         onAction={isEditMode ? () => {
-                            const od = location.state.orderData;
                             navigate('/checkout', {
                                 state: {
                                     cartItems: cart,
@@ -604,10 +677,10 @@ export default function SalesDashboard() {
                                     enableTax,
                                     mode: 'edit',
                                     // amountPaid = what was already collected (used to compute the delta owed)
-                                    originalTotal: od.amountPayed ?? od.amountPaid ?? 0,
+                                    originalTotal: editSession.originalTotal ?? 0,
                                     // balance = outstanding balance before this edit (shown to the cashier for context)
-                                    originalBalance: od.balance ?? 0,
-                                    orderData: { id: od.id ?? od.orderId },
+                                    originalBalance: editSession.originalBalance ?? 0,
+                                    orderData: { id: editSession.orderId },
                                 },
                             });
                         } : linkedRef?.type === 'link' ? () => {

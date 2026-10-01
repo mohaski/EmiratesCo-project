@@ -1,4 +1,5 @@
 import { useState, useEffect, memo } from 'react';
+import { heldByEditedItem } from '../../../utils/editHoldings';
 
 const StandardCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [qty, setQty] = useState(initialDetails?.qty || 1);
@@ -6,13 +7,15 @@ const StandardCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        const isValid = qty <= stock;
-        setError(!isValid ? `Only ${stock} items available in stock` : null);
+        // Editing: the item's own units come back before the new quantity is taken.
+        const available = stock + heldByEditedItem(initialDetails, null);
+        const isValid = qty <= available;
+        setError(!isValid ? `Only ${available} items available in stock` : null);
 
         const total = qty * product.price;
         const lineItems = [{ type: 'standard', label: product.name || 'Item', qty, rate: product.price, total, meta: { unit: product.unit } }];
         onUpdate(total, { lineItems, attributes: [], qty, unit: product.unit, isValid });
-    }, [qty, product.price, product.unit, product.name, onUpdate, stock]);
+    }, [qty, product.price, product.unit, product.name, onUpdate, stock, initialDetails]);
 
     return (
         <div style={{

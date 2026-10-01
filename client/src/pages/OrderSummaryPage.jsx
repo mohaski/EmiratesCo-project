@@ -2,7 +2,9 @@ import { useMemo, useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
+import OrderChanges from '../components/orders/OrderChanges';
 import { useAuth } from '../context/AuthContext';
+import { ROUTE_ROLES } from '../config/routePermissions';
 import { useToast } from '../context/ToastContext';
 import api from '../services/api';
 import useCancelOrderFlow from '../hooks/useCancelOrderFlow';
@@ -349,6 +351,9 @@ export default function OrderSummaryPage() {
     const vatAmount = order.VAT_status ? Math.max(0, order.total - (order.subtotal - (order.discount || 0))) : 0;
     // Cashier can view the summary but not edit or cancel — read-only + Add To only
     const canEditOrCancel = ['manager', 'ceo', 'admin'].includes(user?.role);
+    // Editing happens in the Sales terminal - a role that can't open it (CEO, admin) would
+    // just be bounced to the dashboard, so it doesn't get the button.
+    const canEdit = canEditOrCancel && ROUTE_ROLES['/sales'].includes(user?.role);
     // An order with cut material CAN be edited and cancelled: each cut line is confirmed on
     // the floor first (ResolveCutsModal), and an already-cut bar is never credited back whole.
     // This page used to hide both buttons once anything was cut — a copy of a backend guard
@@ -361,7 +366,7 @@ export default function OrderSummaryPage() {
     // order that old is no longer allowed, so hide the option before the user tries.
     const orderTooOldToCancel = (new Date() - new Date(order.created_at)) > 7 * 24 * 60 * 60 * 1000;
 
-    const handleEdit = () => navigate('/sales', { state: { mode: 'edit', orderData: { ...order, id: order.orderId } } });
+    const handleEdit = () => navigate('/sales', { state: { mode: 'edit', editNonce: Date.now(), orderData: { ...order, id: order.orderId } } });
 
 
     return (
@@ -404,7 +409,7 @@ export default function OrderSummaryPage() {
                             )}
                             {canEditOrCancel && (
                                 <>
-                                    {!isCompleted && <button onClick={handleEdit} style={{
+                                    {!isCompleted && canEdit && <button onClick={handleEdit} style={{
                                         padding: '0.625rem 1.25rem', borderRadius: '0.75rem',
                                         background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', border: 'none',
                                         color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
@@ -508,6 +513,13 @@ export default function OrderSummaryPage() {
                         <Row label="Paid" value={`KSH ${(order.amountPaid || 0).toFixed(0)}`} />
                         <Row label="Balance Due" value={`KSH ${(order.balance || 0).toFixed(0)}`} strong={order.balance > 0} />
                     </Card>
+
+                    {canEditOrCancel && (
+                        <Card title="Changes to this order">
+                            <OrderChanges orderId={order.orderId} onChanged={refreshOrder}
+                                notify={m => showToast(m, 'success')} />
+                        </Card>
+                    )}
                 </div>
             </div>
 

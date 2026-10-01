@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import api from '../services/api';
+import { UndoDialog, CorrectDialog } from '../components/orders/OrderChanges';
 import { activityMeta, activityMetaForItem, summarizeActivity, diffSnapshot, colorForName, initials, describeStockBatchLine } from '../utils/activityMeta';
 
 const MANAGEABLE_ROLES = new Set(['manager', 'cashier']);
@@ -58,7 +59,31 @@ function StatCard({ label, value, sub, color }) {
     );
 }
 
-function ActivityRow({ item, expanded, onToggle }) {
+// Order edits and cancellations made since change tracking began can be undone, or re-run with
+// corrected cut answers, right from the feed (the same dialogs as the order summary page).
+function OperationActions({ item, onChanged }) {
+    const [dialog, setDialog] = useState(null);
+    const opId = item.after_snapshot?.op_id;
+    if (!opId || !['order', 'order_cancellation'].includes(item.entity_type)) return null;
+    const op = { op_id: opId, kind: item.entity_type === 'order' ? 'edit' : 'cancel', created_at: item.edited_at };
+    const hasCuts = (item.before_snapshot?.cut_confirmations || item.after_snapshot?.cut_confirmations || [])
+        .some(c => c.physical_state);
+    const btn = (color) => ({
+        padding: '0.3rem 0.6rem', borderRadius: '0.5rem', border: `1px solid ${color}55`, background: `${color}1a`,
+        color, fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer',
+    });
+    const done = () => { setDialog(null); onChanged?.(); };
+    return (
+        <div style={{ display: 'flex', gap: '0.375rem', marginTop: '0.4rem' }}>
+            {hasCuts && <button onClick={() => setDialog('correct')} style={btn('#22c55e')}>Correct cut answers</button>}
+            <button onClick={() => setDialog('undo')} style={btn('#f87171')}>Undo</button>
+            {dialog === 'undo' && <UndoDialog op={op} onClose={() => setDialog(null)} onDone={done} />}
+            {dialog === 'correct' && <CorrectDialog op={op} onClose={() => setDialog(null)} onDone={done} />}
+        </div>
+    );
+}
+
+function ActivityRow({ item, expanded, onToggle, onChanged }) {
     const meta = activityMetaForItem(item);
     const summary = summarizeActivity(item);
     const date = new Date(item.edited_at);
@@ -106,6 +131,7 @@ function ActivityRow({ item, expanded, onToggle }) {
                     {item.notes && item.notes !== item.edited_by && (
                         <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: '2px' }}>“{item.notes}”</div>
                     )}
+                    <OperationActions item={item} onChanged={onChanged} />
                 </div>
 
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -316,6 +342,7 @@ export default function ActivityLogPage() {
                                     item={item}
                                     expanded={expandedId === item.id}
                                     onToggle={() => setExpandedId(expandedId === item.id ? null : item.id)}
+                                    onChanged={() => load(0)}
                                 />
                             ))}
                         </div>

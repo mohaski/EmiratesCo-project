@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, memo } from 'react';
+import { heldByEditedItem } from '../../../utils/editHoldings';
 import { useAttributes } from '../../../context/AttributeContext';
 import { useProducts } from '../../../context/ProductContext';
 import { poolSiblings } from '../../../utils/poolKey';
@@ -78,6 +79,12 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
     const [selections, setSelections] = useState(() => {
         if (initialDetails?.selectedAttributes) return initialDetails.selectedAttributes;
+        // Items saved before selectedAttributes was stored: reopen on the variant they were
+        // sold as, not the default one (which reopened a Grey rivet sale as another colour).
+        const savedVariant = hasVariants && initialDetails?.variantId != null
+            ? product.variants.find(v => String(v.variantId ?? v.id) === String(initialDetails.variantId))
+            : null;
+        if (savedVariant?.attributes) return { ...savedVariant.attributes };
         const defaults = {};
         if (hasVariants) {
             const attrKeys = Object.keys(product.variants[0].attributes || {});
@@ -168,6 +175,13 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
             ? [selectedVariant, ...poolSiblings(product.variants, selectedVariant, attributeTypesMap, product.poolIgnoredAttributes)]
             : [activeItem];
         const pooledPieces = poolMembers.reduce((sum, v) => sum + (v.stock || 0), 0);
+        // Editing a saved item: what it already holds of this variant comes back before the
+        // new quantity is taken, so it counts as available (utils/editHoldings).
+        const editVariantId = hasVariants && selectedVariant ? (selectedVariant.variantId || selectedVariant.id) : null;
+        const heldFull = heldByEditedItem(initialDetails, editVariantId, ['accessory-full']);
+        const heldPacks = heldByEditedItem(initialDetails, editVariantId, ['accessory-unit']);
+        const heldPieces = heldByEditedItem(initialDetails, editVariantId, ['accessory-pcs'])
+            + (openContainerMode ? 0 : heldPacks * (activeItem.unitQuantity || 1));
 
         if (trackOffcuts) {
             const pFull = activeItem.priceFull || activeItem.price || 0;
@@ -179,11 +193,11 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
             const l = parseFloat(cutLength) || 0;
             if (l > 0) totalCutPrice = l * pCut;
             total = totalFullPrice + totalHalfPrice + totalCutPrice;
-            if (qtyFull > stock) { finalError = `Insufficient Stock (Full). Have ${stock}`; isValid = false; }
+            if (qtyFull > stock + heldFull) { finalError = `Insufficient Stock (Full). Have ${stock + heldFull}`; isValid = false; }
             if (qtyFull > 0) lineItems.push({ type: 'accessory-full', label: 'Full', qty: qtyFull, rate: pFull, total: totalFullPrice });
             if (qtyHalf > 0) lineItems.push({ type: 'accessory-half', label: 'Half', qty: qtyHalf, rate: pHalf, total: totalHalfPrice });
             if (totalCutPrice > 0) lineItems.push({ type: 'accessory-cut', label: `Cut ${l}${activeItem.unit || ''}`, qty: 1, rate: pCut * l, total: totalCutPrice, meta: { length: l, unit: activeItem.unit || '' } });
-            onUpdate(total, { lineItems, attributes: attributesDetail, qtyFull, qtyHalf, cutLength: l > 0 ? l : null, cutQty: 1, trackOffcuts: true, variantId: hasVariants && selectedVariant ? (selectedVariant.variantId || selectedVariant.id) : null, isValid, warning: finalError });
+            onUpdate(total, { lineItems, attributes: attributesDetail, qtyFull, qtyHalf, cutLength: l > 0 ? l : null, cutQty: 1, trackOffcuts: true, variantId: hasVariants && selectedVariant ? (selectedVariant.variantId || selectedVariant.id) : null, selectedAttributes: selections, isValid, warning: finalError });
         } else {
             const saleOptions = saleOptionsFor(activeItem, openContainerMode);
             const { canSellWholePack, canSellUnits, wholePackPrice } = saleOptions;
@@ -212,7 +226,7 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                             isValid = false;
                         }
                     } else {
-                        const availablePcs = pooledPieces;
+                        const availablePcs = pooledPieces + heldPieces;
                         if (qty > availablePcs) { finalError = `Only ${availablePcs} pcs available`; isValid = false; }
                     }
                     // Labelled by the product's own unit, not a hardcoded "Pieces" —
@@ -236,12 +250,13 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
                     // so dividing by the (nominal, unreliable) pack size would
                     // wrongly shrink what's available -- see the backend's
                     // matching _pieces_per_pack_unit.
-                    const availableOwnUnit = openContainerMode ? stock : stock / (activeItem.unitQuantity || 1);
+                    const availableOwnUnit = (openContainerMode ? stock : stock / (activeItem.unitQuantity || 1)) + heldPacks;
                     // "boxes"/"rolls" only when this variant is actually packaged (a real
                     // pack of N units) — an unpackaged variant's own unit (e.g. "pcs") is
                     // the whole sale unit, not a pack, same distinction the price label
                     // below makes.
-                    const unitLabel = canSellUnits ? packPlural(packNoun) : (activeItem.unit || 'units');
+                    const isPackaged = openContainerMode || (activeItem.unitQuantity || 1) > 1;
+                    const unitLabel = (canSellUnits || isPackaged) ? packPlural(packNoun) : (activeItem.unit || 'units');
                     if (qty > availableOwnUnit) { finalError = `Only ${availableOwnUnit} ${unitLabel} available`; isValid = false; }
                     // A sealed pack with no price of its own can't be sold at zero --
                     // in open-container mode whole packs are the primary sale, so a
@@ -268,10 +283,10 @@ const AccessoryCalculator = memo(({ product, initialDetails, onUpdate }) => {
             const shownAttributes = (openContainerMode && effectiveSaleUnit === 'pcs')
                 ? attributesDetail.filter(a => !packSizeAttrs.has(a.label))
                 : attributesDetail;
-            onUpdate(total, { lineItems, attributes: shownAttributes, qty, salesMode, saleUnit: effectiveSaleUnit, selectedRoll, variantId: activeItem.variantId || activeItem.id, isValid, warning: finalError });
+            onUpdate(total, { lineItems, attributes: shownAttributes, qty, salesMode, saleUnit: effectiveSaleUnit, selectedRoll, variantId: activeItem.variantId || activeItem.id, selectedAttributes: selections, isValid, warning: finalError });
         }
         setError(finalError);
-    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, saleUnit, selectedRoll, hasRollOption, onUpdate, attributeTypesMap, openContainerMode, hasOpenPack]);
+    }, [hasVariants, selectedVariant, product, selections, qtyFull, qtyHalf, cutLength, qty, salesMode, saleUnit, selectedRoll, hasRollOption, onUpdate, attributeTypesMap, openContainerMode, hasOpenPack, initialDetails]);
 
     const handleVariantSelect = (key, val) => setSelections(prev => ({ ...prev, [key]: val }));
     const activeItem = selectedVariant || product;

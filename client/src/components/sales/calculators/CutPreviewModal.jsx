@@ -15,7 +15,9 @@ import api from '../../../services/api';
  *   cutPieces             – the calculator's current cutPieces state: [{l, w, q, u, label}]
  *   onClose                – close callback
  */
-export default function CutPreviewModal({ productId, variantId, cutPieces, onClose }) {
+export default function CutPreviewModal({ productId, variantId, cutPieces, edit = null, onClose }) {
+    // Editing a saved order: { orderId, itemId, answers } - see previewGlassCuts.
+    const editKey = edit ? JSON.stringify(edit) : null;
     const [groups, setGroups] = useState(null); // one merged group per physical sheet/offcut touched
     const [optimization, setOptimization] = useState(null); // multi-strategy search summary
     const [loading, setLoading] = useState(true);
@@ -26,7 +28,7 @@ export default function CutPreviewModal({ productId, variantId, cutPieces, onClo
         setLoading(true);
         setError('');
         const cuts = cutPieces.map(c => ({ l: c.l, w: c.w, qty: c.q, u: c.u }));
-        api.productService.previewGlassCuts(productId, variantId, cuts)
+        api.productService.previewGlassCuts(productId, variantId, cuts, editKey ? JSON.parse(editKey) : null)
             .then(response => {
                 if (cancelled) return;
                 setGroups(response.groups);
@@ -39,7 +41,7 @@ export default function CutPreviewModal({ productId, variantId, cutPieces, onClo
             })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [productId, variantId, cutPieces]);
+    }, [productId, variantId, cutPieces, editKey]);
 
     return (
         <div style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>

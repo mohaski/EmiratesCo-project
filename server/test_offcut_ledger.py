@@ -85,7 +85,9 @@ def make_db() -> Session:
         for name in ("products", "variants", "attribute_classes", "offcuts",
                      "orders", "orderitems", "offcut_pieces", "offcut_piece_events",
                      # safe_delete_offcut detaches Stock Control lines before deleting a row
-                     "stock_input_session_items")
+                     "stock_input_session_items",
+                     # every flush journals into these (core/audit/journal.py)
+                     "stock_operations", "stock_journal")
     ]
     SQLModel.metadata.create_all(engine, tables=tables)
     return Session(engine)

@@ -163,7 +163,7 @@ export const OrderProvider = ({ children }) => {
     }, [fetchOrders]);
 
     const updateOrder = useCallback(async (orderId, orderData) => {
-        const { customer, totals, payment, items: rawItems, servedBy, cutConfirmations, planToken } = orderData;
+        const { customer, totals, payment, items: rawItems, servedBy, cutConfirmations, planToken, orderVersion } = orderData;
         const items = rawItems.map(mapItemForBackend);
 
         const isPaid = totals.balance <= 0.1;
@@ -189,6 +189,9 @@ export const OrderProvider = ({ children }) => {
             // reversal plan said nothing needed confirming, which is the common case.
             cutConfirmations: cutConfirmations || null,
             planToken: planToken || null,
+            // The order's version when the edit was opened - a save over another device's
+            // change is refused (409) instead of silently undoing it.
+            orderVersion: orderVersion ?? null,
         };
 
         const response = await api.orderService.editOrder(orderId, payload);

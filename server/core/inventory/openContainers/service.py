@@ -32,6 +32,8 @@ from core.inventory.inventoryService import (
 )
 from loggiing import logger
 from . import model
+from core.audit.opContext import stock_operation
+from entities.opJournal import OP_OPEN_CONTAINER
 
 
 # -- Shared helpers -----------------------------------------------------------
@@ -251,6 +253,7 @@ def yield_history(variant_id: int, db: Session) -> model.YieldHistoryResponse:
 
 # -- Mutations ----------------------------------------------------------------
 
+@stock_operation(OP_OPEN_CONTAINER, order_arg=None)
 def open_container(
     product_id: int,
     payload: model.OpenContainerCreate,
@@ -315,6 +318,7 @@ def open_container(
     return _to_response(db, container)
 
 
+@stock_operation(OP_OPEN_CONTAINER, order_arg=None)
 def close_container(
     container_id: int,
     payload: model.OpenContainerClose,
@@ -346,6 +350,7 @@ def close_container(
     return _to_response(db, container)
 
 
+@stock_operation(OP_OPEN_CONTAINER, order_arg=None)
 def reopen_container(container_id: int, db: Session, current_user) -> model.OpenContainerResponse:
     """Undo a premature close. Exists because the alternative -- opening a fresh
     pack to keep selling -- wrongly takes another one out of stock, so without
@@ -368,6 +373,7 @@ def reopen_container(container_id: int, db: Session, current_user) -> model.Open
     return _to_response(db, container)
 
 
+@stock_operation(OP_OPEN_CONTAINER, order_arg=None)
 def cancel_container(container_id: int, db: Session, current_user) -> dict:
     """Opened by mistake -- put the pack back on the shelf and delete the row.
 

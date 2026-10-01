@@ -5,6 +5,7 @@ from db.database import get_session
 from core.userManagement.authService import get_current_user
 from ws.manager import manager
 from utils import require_role
+from . import operationsService
 from . import model, orderService, orderItemService
 
 router = APIRouter(prefix="/orders", tags=["Orders"])
@@ -260,6 +261,90 @@ async def cancel_order(
         cut_confirmations=body.cutConfirmations,
         plan_token=body.planToken,
     )
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
+
+@router.post("/{order_id}/items/{item_id}/projected-offcuts")
+def projected_offcuts(
+    order_id: int,
+    item_id: int,
+    body: model.ProjectedOffcutsRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """The offcut pool once this item is reversed with the given cut answers - including the
+    pieces the reversal hands back (joined/own/source). Read-only."""
+    return orderService.projected_offcuts(order_id, item_id, body.answers, body.variantId, db, current_user)
+
+
+@router.get("/{order_id}/operations", response_model=List[model.OrderOperation])
+def list_order_operations(
+    order_id: int,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Every recorded change to this order (sale, edits, cancel, undos), newest first."""
+    return operationsService.list_order_operations(order_id, db, current_user)
+
+
+@router.post("/operations/{op_id}/undo-preview", response_model=model.UndoPreviewResponse)
+def preview_undo_operation(
+    op_id: str,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """What undoing this change would do, or why it can't be undone exactly. Read-only."""
+    return operationsService.preview_undo(op_id, db, current_user)
+
+
+@router.post("/operations/{op_id}/undo")
+async def undo_operation(
+    op_id: str,
+    body: model.UndoRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Undo an order edit or cancellation exactly (manager/CEO, cancel PIN, reason)."""
+    result = operationsService.undo(op_id, body.pin, body.reason, db, current_user, body.moneyHandled)
+    background_tasks.add_task(manager.broadcast, "orders_updated")
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
+
+@router.get("/operations/{op_id}/correction-plan", response_model=model.ReversalPlanResponse)
+def get_correction_plan(
+    op_id: str,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """The cut questions of an edit/cancel, with the answers originally given. Read-only."""
+    return operationsService.correction_plan(op_id, db, current_user)
+
+
+@router.post("/operations/{op_id}/correct-preview", response_model=model.UndoPreviewResponse)
+def preview_correct_operation(
+    op_id: str,
+    body: model.CorrectPreviewRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """What re-running this change with corrected cut answers would do. Read-only."""
+    return operationsService.preview_correction(op_id, body.cutConfirmations, db, current_user)
+
+
+@router.post("/operations/{op_id}/correct")
+async def correct_operation(
+    op_id: str,
+    body: model.CorrectRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Undo this change and re-run it with corrected cut answers, in one transaction."""
+    result = operationsService.correct(op_id, body.pin, body.reason, body.cutConfirmations, db, current_user)
     background_tasks.add_task(manager.broadcast, "orders_updated")
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result

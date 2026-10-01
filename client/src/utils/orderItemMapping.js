@@ -10,6 +10,16 @@
  * Kept out of OrderContext.jsx so that file only exports components/hooks (React fast
  * refresh requires it).
  */
+// Cart-only state: the cut answers given in the calculator (CheckoutPage reads them from the
+// cart). `_sourceItemId` - which saved item the line came from - IS sent: the server pairs
+// the line with that item, which matters when an order has two identical items.
+const stripUiKeys = (details) => {
+    if (!details || typeof details !== 'object') return details;
+    if (!('cutAnswers' in details) && !('_source' in details)) return details;
+    const { cutAnswers, _source, ...rest } = details; // eslint-disable-line no-unused-vars
+    return rest;
+};
+
 export const mapItemForBackend = (item) => {
     const rawQty = parseFloat(item.qty || item.quantity);
     const qty = isNaN(rawQty) ? 1 : rawQty;
@@ -25,6 +35,6 @@ export const mapItemForBackend = (item) => {
         quantity: qty,
         unitPrice: price,
         unitType: item.unit || 'pcs',
-        details: item.details,
+        details: stripUiKeys(item.details),
     };
 };

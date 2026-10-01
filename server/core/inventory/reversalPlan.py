@@ -195,6 +195,16 @@ def _chain_for_line(db: Session, sources: list) -> Optional[dict]:
             lineage[p.piece_id] = p
     if not lineage:
         return None
+    # Pieces an undone operation created never physically existed once it was undone - they
+    # are history, not material, and would only confuse the operator reading this chain.
+    from entities.opJournal import STATUS_UNDONE, StockOperation
+    op_ids = {p.produced_by_op_id for p in lineage.values() if p.produced_by_op_id}
+    undone = set()
+    if op_ids:
+        undone = {o.op_id for o in db.exec(select(StockOperation).where(
+            StockOperation.op_id.in_(op_ids), StockOperation.status == STATUS_UNDONE)).all()}
+    lineage = {pid: p for pid, p in lineage.items()
+               if not (p.state == "retired" and p.produced_by_op_id in undone)}
     ordered = _tree_order(list(lineage.values()))
     return {
         "root_piece_id": ordered[0].root_piece_id or ordered[0].piece_id,
@@ -261,6 +271,74 @@ def _decision_piece_ids(db: Session, sources: list, is_2d: bool) -> List[int]:
     return sorted(set(ids))
 
 
+def _later_cuts_and_returns(db: Session, item: OrderItem, line: dict, sources: list,
+                            reversals: list, is_2d: bool) -> tuple:
+    """Cuts later orders took from this line's leftovers, and - for each possible answer - the
+    pieces that would come back (the same rules the reversal applies)."""
+    later: list = []
+    seen_items = set()
+    back_not_cut: list = []
+    back_cut: list = []
+    owned = [s for s in sources if isinstance(s, dict) and s.get("owns_consumption") is not False]
+    for src, rev in zip(owned, reversals):
+        if rev.is_legacy:
+            continue
+        # What "not cut" gives back is decided by the not-cut verdict (it can differ: a
+        # leftover deleted by hand doesn't hold the source back when nothing was cut).
+        rev = resolver.resolve_source(db, src, item_id=item.item_id, is_2d=is_2d,
+                                      physical_state=PHYS_NOT_CUT)
+        if is_2d:
+            for r in src.get("remainders_created") or []:
+                piece = ledger.get_piece(db, r.get("piece_id"))
+                if piece is not None and piece.state == ledger.STATE_CONSUMED \
+                        and piece.consumed_by_item_id != item.item_id \
+                        and ledger._consumption_is_live(db, piece):
+                    info = resolver.later_cut_info(db, piece)
+                    if info["item_id"] not in seen_items:
+                        seen_items.add(info["item_id"])
+                        later.append(info)
+            cuts = ", ".join(f"{c.get('width', 0):.0f}x{c.get('height', 0):.0f}mm" for c in src.get("cuts") or [])
+            back_cut.append(cuts or "the cut pieces")
+            if rev.reversible:
+                back_not_cut.append("the whole sheet back to stock" if rev.kind == resolver.KIND_FULL_UNIT
+                                    else f"the {rev.source_piece.width:.0f}x{rev.source_piece.height:.0f}mm offcut it came from, whole")
+            else:
+                from core.inventory.glassOffcutService import preview_rejoin_2d
+                rects = preview_rejoin_2d(db, src, item.item_id)
+                back_not_cut.append(", ".join(rects) if rects else (cuts or "the cut pieces"))
+        else:
+            used = float(src.get("length_used") or 0)
+            back_cut.append(f"{used:.2f}")
+            rem = ledger.get_piece(db, src.get("remainder_piece_id"))
+            consumers, leaf = resolver.chain_walk(db, rem, exclude_item_ids={item.item_id}) if rem else ([], None)
+            for c in consumers:
+                info = resolver.later_cut_info(db, c)
+                if info["item_id"] not in seen_items:
+                    seen_items.add(info["item_id"])
+                    later.append(info)
+            if rev.reversible:
+                back_not_cut.append("the whole bar back to stock" if rev.kind == resolver.KIND_FULL_UNIT
+                                    else f"the {rev.source_piece.length:.2f} offcut it came from, whole")
+            elif leaf is not None:
+                back_not_cut.append(f"{leaf.length + used:.2f} ({used:.2f} never cut + {leaf.length:.2f} left on the bar)")
+            else:
+                back_not_cut.append(f"{used:.2f}")
+    # A line whose pieces were packed onto a sheet another line of this item owns: its own
+    # pieces come back if cut; if not, its glass is part of that sheet's answer.
+    for src in sources:
+        if isinstance(src, dict) and src.get("owns_consumption") is False:
+            cuts = ", ".join(f"{c.get('width', 0):.0f}x{c.get('height', 0):.0f}mm" for c in src.get("cuts") or [])
+            back_cut.append(cuts or "the cut pieces")
+            if not owned:
+                back_not_cut.append("rejoined with the rest of its sheet (see the line it shares the sheet with)")
+    returns = {}
+    if back_not_cut:
+        returns[PHYS_NOT_CUT] = back_not_cut
+    if back_cut:
+        returns[PHYS_ALREADY_CUT] = back_cut
+    return later, returns
+
+
 def plan_line(db: Session, item: OrderItem, line_idx: int, line: dict,
               product: Optional[Product], variant: Optional[Variant]) -> dict:
     """Everything the operator needs to decide one cut line, plus everything
@@ -285,11 +363,15 @@ def plan_line(db: Session, item: OrderItem, line_idx: int, line: dict,
     reconstructable = bool(reversals) and all(r.reversible for r in reversals)
 
     default_state = default_physical_state(item)
+    later_cuts, returns = _later_cuts_and_returns(db, item, line, sources, reversals, is_2d)
     requires_answer = (
         default_state == PHYS_UNKNOWN
         or default_state == PHYS_ALREADY_CUT
         or bool(blockers)
         or legacy
+        # Later cuts from the same bar/sheet are always asked about - the answer decides the
+        # cutting instruction and marks those orders cut.
+        or bool(later_cuts)
     )
 
     if legacy:
@@ -335,6 +417,8 @@ def plan_line(db: Session, item: OrderItem, line_idx: int, line: dict,
         # Whether this edit actually disturbs the line. Always True for a cancel; set False
         # by build_plan for an item the incoming cart still contains unchanged.
         "will_reverse": True,
+        "later_cuts": later_cuts,
+        "returns": returns,
         # Internal: the pieces this line's verdict depends on. Feeds the plan token and
         # the row locks. Dropped from the API response by ReversalPlanResponse.
         "_piece_ids": _decision_piece_ids(db, sources, is_2d),
@@ -582,7 +666,7 @@ class ReversalDecisions:
         return bool(self.by_line)
 
 
-def validate_decisions(plan: dict, submitted: Optional[dict]) -> ReversalDecisions:
+def validate_decisions(plan: dict, submitted: Optional[dict], *, lenient: bool = False) -> ReversalDecisions:
     """Turn a submitted {line_ref: {physicalState, resolution}} payload into decisions.
 
     Raises ValueError, which the order endpoints surface as a 422, when:
@@ -627,10 +711,12 @@ def validate_decisions(plan: dict, submitted: Optional[dict]) -> ReversalDecisio
         answered_by = "operator" if state is not None else "default"
 
         if state is None:
-            if line["requires_explicit_answer"]:
+            if line["requires_explicit_answer"] and not lenient:
                 missing.append(f"{line['product_name'] or 'item'} ({line['cut_description']})")
                 continue
             state = line["default_physical_state"]
+            if lenient and state == PHYS_UNKNOWN:
+                state = PHYS_NOT_CUT
 
         if state not in PHYSICAL_STATES:
             raise ValueError(f"Unknown cut status '{state}' for {ref}.")
@@ -648,11 +734,30 @@ def validate_decisions(plan: dict, submitted: Optional[dict]) -> ReversalDecisio
             # dispose of. Normalised away so apply_reversal never reads a stale value.
             resolution = None
 
+        # Later cuts from the same bar/sheet: each one answered cut / not cut.
+        later_answers = {}
+        given = answer.get("laterCuts") or answer.get("later_cuts") or {}
+        for lc in line.get("later_cuts") or []:
+            key = str(lc["item_id"])
+            lc_state = given.get(key) or given.get(lc["item_id"])
+            if lc_state is None:
+                lc_state = lc.get("default_state")
+                if lc_state in (None, PHYS_UNKNOWN):
+                    if lenient:
+                        lc_state = PHYS_NOT_CUT
+                    else:
+                        missing.append(f"order #{lc.get('order_id')}'s {lc.get('cut')} cut from the same material")
+                        continue
+            if lc_state not in (PHYS_NOT_CUT, PHYS_ALREADY_CUT):
+                raise ValueError(f"Unknown cut status '{lc_state}' for order #{lc.get('order_id')}'s cut.")
+            later_answers[lc["item_id"]] = lc_state
+
         by_line[(line["item_id"], line["line_idx"])] = {
             "physical_state": state,
             "resolution": resolution,
             "line_ref": ref,
             "answered_by": answered_by,
+            "later_cuts": later_answers,
         }
 
     if missing:
@@ -683,6 +788,7 @@ def decisions_summary(plan: dict, decisions: ReversalDecisions) -> list:
             # "operator" = confirmed on the floor; "default" = the prefill was applied because
             # no answer was sent. Read the physical_state accordingly.
             "answered_by": d.get("answered_by"),
+            "later_cuts": {str(k): v for k, v in (d.get("later_cuts") or {}).items()},
             "reconstructable": line["reconstructable"],
             "blockers": [
                 {"order_id": b["order_id"], "customer_name": b["customer_name"]}
@@ -691,3 +797,44 @@ def decisions_summary(plan: dict, decisions: ReversalDecisions) -> list:
             "legacy": line["legacy"],
         })
     return out
+
+
+def apply_later_cut_answers(db: Session, plan: Optional[dict], decisions, order_id: int) -> list:
+    """Act on the operator's answers about LATER cuts from the same bar/sheet: a cut confirmed
+    made is marked cut on that other order, so its item leaves the cutting queue instead of
+    being cut a second time. A cut confirmed NOT made is left exactly as it is.
+
+    Each change is written to that order's history, naming the order whose edit/cancel
+    confirmed it. Returns the item ids marked."""
+    from datetime import datetime as _dt
+
+    from entities.editHistory import EditHistory
+    from core.audit.opContext import current as current_op
+
+    if decisions is None:
+        return []
+    op = current_op()
+    marked = []
+    for (_item_id, _line_idx), d in decisions.by_line.items():
+        for later_item_id, state in (d.get("later_cuts") or {}).items():
+            if state != PHYS_ALREADY_CUT or later_item_id in marked:
+                continue
+            later_item = db.get(OrderItem, int(later_item_id))
+            if later_item is None or later_item.cutting_completed:
+                continue
+            later_item.cutting_completed = True
+            later_item.cutting_completed_at = _dt.utcnow()
+            db.add(later_item)
+            marked.append(later_item.item_id)
+            db.add(EditHistory(
+                entity_type="cutting_report",
+                entity_id=later_item.order_id,
+                edited_by=op.actor_id if op else None,
+                action="marked_cut",
+                before_snapshot={"item_id": later_item.item_id, "cutting_completed": False},
+                after_snapshot={"item_id": later_item.item_id, "cutting_completed": True,
+                                "confirmed_during_order": order_id,
+                                "op_id": op.op_id if op else None},
+                notes=f"Confirmed cut while order #{order_id} was being changed",
+            ))
+    return marked

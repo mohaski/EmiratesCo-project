@@ -840,7 +840,8 @@ def _restore_sheet_stock(db: Session, product: Product, variant: Optional[Varian
 def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Variant], width: float, height: float,
                          status: str = "available", source_item_id: Optional[int] = None, pool_key: Optional[str] = None,
                          parent_piece=None, origin: str = ledger.ORIGIN_CUT_REMAINDER,
-                         ledger_notes: Optional[str] = None, ledger_out: Optional[dict] = None) -> int:
+                         ledger_notes: Optional[str] = None, ledger_out: Optional[dict] = None,
+                         ledger_item_id: Optional[int] = None) -> int:
     """Creates or increments a matching offcut row and returns its id — callers
     attach this to the remainder's audit record so later code (e.g. the cut
     preview's consolidation of same-session offcut chains) can tell whether a
@@ -897,7 +898,8 @@ def _upsert_glass_offcut(db: Session, product: Product, variant: Optional[Varian
         geom=ledger.geom_2d(width, height),
         origin=origin,
         parent=parent_piece,
-        produced_by_item_id=source_item_id,
+        # See inventoryService._upsert_offcut: a reversed item goes into the ledger only.
+        produced_by_item_id=source_item_id if source_item_id is not None else ledger_item_id,
         offcut_row_id=row_id,
         is_scrap=(status == "scrap"),
         notes=ledger_notes,
@@ -1039,6 +1041,15 @@ def _apply_candidate(db: Session, product: Product, variant: Optional[Variant], 
         ledger.consume_piece(db, src_piece, item_id=item_id, cut_geom={
             "pieces": [{"width": p["width"], "height": p["height"]} for p in candidate["placed"]],
         })
+
+    # An item re-cut by an edit whose glass is exactly its own already-cut piece, handed back by
+    # the reversal just before, needs no cutting (see inventoryService.deduct_stock_for_order_item).
+    from core.audit.opContext import current as _current_op, note_cut
+    _op = _current_op()
+    exact_own = (candidate["source_kind"] == "offcut" and not candidate["remainders"]
+                 and len(candidate["placed"]) == 1 and _op is not None and src_piece is not None
+                 and src_piece.piece_id in _op.returned_own_piece_ids())
+    note_cut(item_id, exact_own)
 
     remainders_created = []
     for r in candidate["remainders"]:
@@ -1299,6 +1310,7 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
         line["offcut_sources"] = sources_by_line[idx]
 
     sheets_consumed = 0
+    offcuts_consumed = 0
     total_scrap_area = 0.0
     total_remainder_pieces = 0
     total_sellability_score = 0.0
@@ -1308,6 +1320,8 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
                 continue  # shared events don't independently consume/create anything
             if e["source"] == "sheet":
                 sheets_consumed += 1
+            else:
+                offcuts_consumed += 1
             for r in e.get("remainders_created", []):
                 total_remainder_pieces += 1
                 if r.get("status") == "scrap":
@@ -1317,6 +1331,7 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
 
     return {
         "sheets_consumed": sheets_consumed,
+        "offcuts_consumed": offcuts_consumed,
         "total_scrap_area": total_scrap_area,
         "total_sellability_score": total_sellability_score,
         "total_remainder_pieces": total_remainder_pieces,
@@ -1351,6 +1366,18 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
     """
     pool_key = compute_pool_key(db, variant)
 
+    # Offcuts are always offered first, even when a new sheet has to be opened for the rest.
+    # Leaving them whole and cutting everything from the sheet was tried (2026-09-30) and only
+    # grew the offcut backlog: order 201 left its two returned offcuts unused and added two
+    # more leftovers from the new sheet.
+    #
+    # A trial's database work is rolled back, but what it noted in the running operation (which
+    # cuts reused their own already-cut piece - opContext.note_cut) lives in memory: put that
+    # back too, or a losing trial decides whether the item goes back to the cutting queue.
+    from core.audit.opContext import current as _current_op
+    _op = _current_op()
+    _precut = dict(_op.precut_items) if _op is not None else None
+
     trials = []
     for strategy in STRATEGIES:
         trial_lines = [{**line} for line in glass_cut_lines]
@@ -1362,6 +1389,8 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
             pass  # this strategy couldn't fulfil the pool at all — skip it
         finally:
             savepoint.rollback()
+            if _op is not None:
+                _op.precut_items = dict(_precut)
 
     if not trials:
         # No strategy could resolve the pool — re-run the baseline for real so it
@@ -1390,6 +1419,7 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
             {
                 "name": strategy["name"],
                 "sheets_consumed": metrics["sheets_consumed"],
+                "offcuts_consumed": metrics["offcuts_consumed"],
                 "total_scrap_area": metrics["total_scrap_area"],
                 "total_sellability_score": metrics["total_sellability_score"],
                 "total_remainder_pieces": metrics["total_remainder_pieces"],
@@ -1401,7 +1431,8 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
 
 
 def restore_glass_cut_lines(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list,
-                            item_id: Optional[int] = None, decisions: Optional[list] = None) -> None:
+                            item_id: Optional[int] = None, decisions: Optional[list] = None,
+                            line_refs: Optional[list] = None) -> None:
     """Reverses resolve_glass_cut_lines — restores stock/offcuts for an edited or cancelled order.
 
     `item_id` is the OrderItem being reversed, threaded down so the chain resolver
@@ -1417,6 +1448,9 @@ def restore_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
 
     def decision(idx):
         return decisions[idx] if decisions and idx < len(decisions) else (None, None)
+
+    def ref(idx):
+        return line_refs[idx] if line_refs and idx < len(line_refs) else None
 
     # WHETHER A SHEET HAS BEEN CUT IS A FACT ABOUT THE SHEET, NOT ABOUT A LINE.
     # _apply_candidate packs several lines' pieces onto one sheet: one line's event OWNS the
@@ -1451,18 +1485,36 @@ def restore_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
                 # a line on a cut sheet that was not itself cut yet goes back to the pool.
                 res = phys_resolution if phys_state == rp.PHYS_ALREADY_CUT else rp.RES_RETURN_TO_POOL
                 if not src.get("owns_consumption", True):
-                    _credit_shared_pieces(db, product, variant, src, res, pool_key, item_id)
+                    _credit_shared_pieces(db, product, variant, src, res, pool_key, item_id,
+                                          line_ref=ref(idx))
                     continue
                 _restore_one_source(db, product, variant, src, pool_key, item_id=item_id,
-                                    physical_state=rp.PHYS_ALREADY_CUT, resolution=res)
+                                    physical_state=rp.PHYS_ALREADY_CUT, resolution=res,
+                                    line_ref=ref(idx))
                 continue
             _restore_one_source(db, product, variant, src, pool_key, item_id=item_id,
-                                physical_state=phys_state, resolution=phys_resolution)
+                                physical_state=phys_state, resolution=phys_resolution,
+                                line_ref=ref(idx), group_lines=_group_lines(glass_cut_lines, src))
+
+
+def _group_lines(lines: list, src: dict) -> list:
+    """Every event (from any line of this item) on the same physical sheet as `src`."""
+    gid = src.get("group_id")
+    if not gid:
+        return [src]
+    return [s for line in lines for s in (line.get("offcut_sources") or []) if s.get("group_id") == gid]
+
+
+def _returned(line_ref, piece, kind, label):
+    from core.audit.opContext import current as current_op
+    op = current_op()
+    if op is not None:
+        op.add_returned(line_ref, piece, kind, label)
 
 
 def _credit_shared_pieces(db: Session, product: Product, variant: Optional[Variant], src: dict,
                           resolution: Optional[str], pool_key: str,
-                          item_id: Optional[int] = None) -> None:
+                          item_id: Optional[int] = None, line_ref: Optional[str] = None) -> None:
     """Return a SHARED event's own pieces to the pool, for a sheet that has been cut.
 
     A shared event owns no consumption — the sheet and its remainders belong to the owning
@@ -1479,15 +1531,20 @@ def _credit_shared_pieces(db: Session, product: Product, variant: Optional[Varia
         if not w or not h:
             continue
         status = "scrap" if (resolution == rp.RES_SCRAP or _is_scrap((w, h), variant)) else "available"
+        out: dict = {}
         _upsert_glass_offcut(db, product, variant, w, h, status, pool_key=pool_key,
                              parent_piece=parent, origin=ledger.ORIGIN_RESTORE_CREDIT,
-                             ledger_notes="already cut (shared sheet) — this line's own piece")
+                             ledger_notes="already cut (shared sheet) — this line's own piece",
+                             ledger_out=out, ledger_item_id=item_id)
+        _returned(line_ref, ledger.get_piece(db, out.get("piece_id")), "own", f"{w:.0f}x{h:.0f}mm - the cut piece")
 
 
 def _restore_one_source(db: Session, product: Product, variant: Optional[Variant], src: dict,
                         pool_key: Optional[str] = None, item_id: Optional[int] = None,
                         physical_state: Optional[str] = None,
-                        resolution: Optional[str] = None) -> None:
+                        resolution: Optional[str] = None,
+                        line_ref: Optional[str] = None,
+                        group_lines: Optional[list] = None) -> None:
     if not src.get("owns_consumption", True):
         # A "shared" event — this line's pieces came from a sheet/offcut another
         # line in this same OrderItem owns the consumption for. That owning event
@@ -1510,11 +1567,15 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
         _return_pooled_unit_for_piece,
     )
 
+    from core.inventory import reversalPlan as rp
+
     rev = resolver.resolve_source(db, src, item_id=item_id, is_2d=True,
                                   physical_state=physical_state, resolution=resolution)
     if not rev.is_legacy:
         if rev.reversible:
             for p in rev.remainder_pieces:
+                if p.state != ledger.STATE_AVAILABLE:
+                    continue  # a leftover already deleted by hand - nothing in the pool
                 _drop_pooled_unit_for_piece(db, product, variant, p, pool_key)
                 ledger.retire_piece(db, p, item_id=item_id,
                                     reason="remainder reversed by an order edit/cancel")
@@ -1529,6 +1590,14 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
                 _return_pooled_unit_for_piece(db, product, variant, rev.source_piece, pool_key)
                 ledger.release_piece(db, rev.source_piece, item_id=item_id,
                                      reason="order edit/cancel restored this cut")
+                _returned(line_ref, rev.source_piece, "source",
+                          f"{rev.source_piece.width:.0f}x{rev.source_piece.height:.0f}mm offcut this cut came from")
+        elif (physical_state == rp.PHYS_NOT_CUT and not rev.retire_source
+              and rejoin_uncut_2d(db, product, variant, src, group_lines or [src], rev, pool_key,
+                                  item_id, line_ref)):
+            # Never cut, but a later order has cut into this sheet's leftovers: the uncut glass
+            # is put back together with the untouched leftovers along the cuts never made.
+            pass
         else:
             # Either part of this sheet is committed to a later live order, or the operator
             # confirmed the glass has already been cut. Only the piece(s) THIS line cut can
@@ -1550,10 +1619,16 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
                         continue
                     status = ("scrap" if (rev.credit_as_scrap or _is_scrap((w, h), variant))
                               else "available")
+                    out: dict = {}
                     _upsert_glass_offcut(db, product, variant, w, h, status, pool_key=pool_key,
                                         parent_piece=rev.source_piece,
                                         origin=ledger.ORIGIN_RESTORE_CREDIT,
-                                        ledger_notes=f"partial credit — {rev.detail}")
+                                        ledger_notes=f"partial credit — {rev.detail}",
+                                        ledger_out=out, ledger_item_id=item_id)
+                    is_cut = physical_state == rp.PHYS_ALREADY_CUT
+                    _returned(line_ref, ledger.get_piece(db, out.get("piece_id")),
+                              "own" if is_cut else "uncut",
+                              f"{w:.0f}x{h:.0f}mm - {'the cut piece' if is_cut else 'this cut'}")
         return
 
     if src.get("source") == "offcut":
@@ -1858,3 +1933,173 @@ def correct_glass_offcut_event(
         "replacement_events": replacement_events,
         "replacement_events_by_line": replacement_events_by_line,
     }
+
+
+
+
+# ── Glass that was never cut: put it back together along the cuts never made ──────────
+#
+# When a glass line is confirmed NOT cut but a later order has already cut into one of the
+# sheet's leftovers, the sheet can't come back whole - but the uncut glass is still attached
+# to whatever parts of the sheet nobody has touched. Which parts is a matter of geometry:
+# the cut layout is a guillotine layout (every cut runs edge to edge of the piece it splits),
+# so it forms a tree of straight cuts. A cut can be "unmade" exactly when nothing on either
+# side of it has been taken away; anything a later order took had to be cut out, so every
+# cut above it in the tree was really made. Merging bottom-up along that tree gives the
+# pieces that physically exist - never more glass than is there, never an L-shape.
+#
+# Order 182's 4mm sheet (1830x2440): its half (1830x1220) and 457x830 were never cut, order
+# 201 took the 1373x1220 block, the 457x390 strip was untouched -> 1830x1220 + 457x1220.
+
+_EPS = 1.0  # mm
+
+
+class _Leaf:
+    __slots__ = ("x", "y", "w", "h", "free", "piece", "uncut")
+
+    def __init__(self, x, y, w, h, free, piece=None, uncut=False):
+        self.x, self.y, self.w, self.h = float(x), float(y), float(w), float(h)
+        self.free, self.piece, self.uncut = free, piece, uncut
+
+
+def _split(rect, leaves):
+    """Find an edge-to-edge cut of `rect` that no leaf crosses. Returns (a, b) leaf groups."""
+    x0, y0, w, h = rect
+    for axis in ("x", "y"):
+        cuts = set()
+        for lf in leaves:
+            for v in ((lf.x, lf.x + lf.w) if axis == "x" else (lf.y, lf.y + lf.h)):
+                lo, hi = (x0, x0 + w) if axis == "x" else (y0, y0 + h)
+                if lo + _EPS < v < hi - _EPS:
+                    cuts.add(round(v, 1))
+        for c in sorted(cuts):
+            a, b, ok = [], [], True
+            for lf in leaves:
+                start, size = (lf.x, lf.w) if axis == "x" else (lf.y, lf.h)
+                if start + size <= c + _EPS:
+                    a.append(lf)
+                elif start >= c - _EPS:
+                    b.append(lf)
+                else:
+                    ok = False
+                    break
+            if ok and a and b:
+                if axis == "x":
+                    return (x0, y0, c - x0, h), a, (c, y0, x0 + w - c, h), b
+                return (x0, y0, w, c - y0), a, (x0, c, w, y0 + h - c), b
+    return None
+
+
+def _free_regions(rect, leaves, out):
+    """Maximal regions of the guillotine tree whose leaves are all free. False if the leaves
+    do not form a guillotine tiling of `rect` (then nothing is merged - see caller)."""
+    if all(lf.free for lf in leaves):
+        out.append((rect, leaves))
+        return True
+    if len(leaves) == 1:
+        return True
+    parts = _split(rect, leaves)
+    if parts is None:
+        return False
+    ra, la, rb, lb = parts
+    return _free_regions(ra, la, out) and _free_regions(rb, lb, out)
+
+
+def _sheet_layout(db: Session, src: dict, group_srcs: list, item_id: Optional[int]):
+    """Leaves of one consumed sheet/offcut: this item's cuts (uncut, free) and the source's
+    leftovers (free if still in the pool, otherwise taken). None if positions are missing or
+    the leaves don't tile the source."""
+    from core.inventory import offcutResolver as resolver
+
+    sw, sh = src.get("offcut_width"), src.get("offcut_height")
+    if not sw or not sh:
+        return None
+    leaves = []
+    for ev in group_srcs:
+        for c in ev.get("cuts") or []:
+            if c.get("x") is None or c.get("y") is None:
+                return None
+            leaves.append(_Leaf(c["x"], c["y"], c["width"], c["height"], True, uncut=True))
+    for r in src.get("remainders_created") or []:
+        if r.get("x") is None or r.get("y") is None:
+            return None
+        piece = ledger.get_piece(db, r.get("piece_id"))
+        # A leftover only deleted by hand is still glass on this sheet if nothing was cut
+        # (see offcutResolver.vanished_leftover); one another order took is not.
+        free = piece is not None and (piece.state == ledger.STATE_AVAILABLE
+                                      or resolver.vanished_leftover(db, piece))
+        leaves.append(_Leaf(r["x"], r["y"], r["width"], r["height"], free, piece=piece))
+    area = sum(lf.w * lf.h for lf in leaves)
+    if abs(area - float(sw) * float(sh)) > max(1.0, 0.001 * float(sw) * float(sh)):
+        return None
+    return (0.0, 0.0, float(sw), float(sh)), leaves
+
+
+def _rejoin_plan(db: Session, src: dict, group_srcs: list, item_id: Optional[int]):
+    layout = _sheet_layout(db, src, group_srcs, item_id)
+    if layout is None:
+        return None
+    rect, leaves = layout
+    regions: list = []
+    if not _free_regions(rect, leaves, regions):
+        return None
+    # Only regions that contain this item's uncut glass change anything.
+    return [(r, lvs) for r, lvs in regions if any(lf.uncut for lf in lvs)]
+
+
+def rejoin_uncut_2d(db, product, variant, src, group_srcs, rev, pool_key, item_id, line_ref) -> bool:
+    """A sheet confirmed NOT cut, part of which a later order has taken (see above).
+    Returns False when the layout can't be reconstructed (no stored positions on an old cut,
+    or they don't tile the sheet) - the caller then credits the uncut pieces one by one."""
+    from core.inventory.inventoryService import _drop_pooled_unit_for_piece
+
+    plan = _rejoin_plan(db, src, group_srcs, item_id)
+    if plan is None:
+        return False
+    outputs = []
+    for (x, y, w, h), leaves in plan:
+        parts = [lf.piece for lf in leaves if lf.piece is not None]
+        merged = len(leaves) > 1
+        status = "scrap" if _is_scrap((w, h), variant) else "available"
+        for part in parts:
+            if part.state == ledger.STATE_AVAILABLE:   # a hand-deleted leftover has no unit left
+                _drop_pooled_unit_for_piece(db, product, variant, part, pool_key)
+        out: dict = {}
+        _upsert_glass_offcut(
+            db, product, variant, w, h, status, pool_key=pool_key, parent_piece=rev.source_piece,
+            origin=ledger.ORIGIN_REJOIN if merged else ledger.ORIGIN_RESTORE_CREDIT,
+            ledger_out=out, ledger_item_id=item_id,
+            ledger_notes=("rejoined along cuts never made: " +
+                          " + ".join(f"{lf.w:.0f}x{lf.h:.0f}" for lf in leaves)) if merged
+                         else "never cut - returned as it is",
+        )
+        new_piece = ledger.get_piece(db, out.get("piece_id"))
+        if parts:
+            ledger.join_into(db, parts, new_piece, item_id=item_id,
+                             reason="glass confirmed not cut - rejoined with the untouched part of the sheet")
+        label = (f"{w:.0f}x{h:.0f}mm = " + " + ".join(f"{lf.w:.0f}x{lf.h:.0f}" for lf in leaves)) if merged \
+            else f"{w:.0f}x{h:.0f}mm - never cut"
+        _returned(line_ref, new_piece, "joined" if merged else "uncut", label)
+        outputs.append(f"{w:.0f}x{h:.0f}")
+    # The source sheet no longer exists as one piece; its material now lives in the outputs
+    # and in whatever later orders took.
+    ledger.retire_piece(db, rev.source_piece, item_id=item_id,
+                        reason="not cut - uncut glass rejoined as " + ", ".join(outputs))
+    return True
+
+
+def preview_rejoin_2d(db, src, item_id) -> list:
+    """Labels of the pieces a 'not cut' answer would give back for this sheet - the same
+    computation rejoin_uncut_2d applies, without writing anything. [] = can't reconstruct."""
+    from entities.orderItems import OrderItem as _OI
+
+    item = db.get(_OI, item_id) if item_id else None
+    group = [src]
+    if item is not None and src.get("group_id"):
+        group = [e for line in (item.details or {}).get("lineItems") or []
+                 for e in (line.get("offcut_sources") or []) if e.get("group_id") == src["group_id"]]
+    plan = _rejoin_plan(db, src, group, item_id)
+    if plan is None:
+        return []
+    return [(f"{w:.0f}x{h:.0f}mm (" + " + ".join(f"{lf.w:.0f}x{lf.h:.0f}" for lf in lvs) + ")")
+            if len(lvs) > 1 else f"{w:.0f}x{h:.0f}mm" for (x, y, w, h), lvs in plan]

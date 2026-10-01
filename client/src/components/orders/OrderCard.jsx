@@ -108,7 +108,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, h
                 onMouseLeave={e => { e.currentTarget.style.background = 'rgba(59,130,246,0.1)'; }}
                 >➕ Add To</button>
             )}
-            {!isCancelled && !isCompleted && canManage && (
+            {!isCancelled && !isCompleted && canManage && onEdit && (
                 <button onClick={() => onEdit(order)} style={{
                     padding: '0.5rem 1rem', borderRadius: '0.625rem',
                     background: 'linear-gradient(135deg, #3b82f6, #06b6d4)', border: 'none',

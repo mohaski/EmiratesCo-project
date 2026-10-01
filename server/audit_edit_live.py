@@ -47,9 +47,26 @@ class Manager:
 
 # ── The frontend round trip ───────────────────────────────────────────────────
 
+def as_browser(value):
+    """A value after FastAPI -> JSON -> JavaScript -> JSON -> Python.
+
+    JavaScript has one number type, so a whole-number float the backend stored (1650.0)
+    comes back as an int (1650). A Python-only json round trip keeps the float, which is
+    how this audit once passed while every half-sheet glass item failed to match live.
+    """
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {k: as_browser(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [as_browser(v) for v in value]
+    return value
+
+
 def frontend_request(resp_item) -> model.OrderItemRequest:
     """SalesDashboard (edit mode) -> cart item -> OrderContext.mapItemForBackend."""
-    details = json.loads(json.dumps(resp_item.details or {}, default=str))
+    details = as_browser(json.loads(json.dumps(resp_item.details or {}, default=str)))
+    details["_sourceItemId"] = resp_item.itemId   # SalesDashboard, edit mode
     unit = resp_item.unitType if resp_item.unitType is not None else details.get("unitType", "pcs")
     qty = resp_item.quantity if resp_item.quantity is not None else details.get("quantity", 1)
     price = resp_item.unitPrice if resp_item.unitPrice is not None else details.get("unitPrice", 0)
@@ -288,6 +305,19 @@ def check_cancel_already_cut(order_id, user):
     net.subtract(pool_before)
     net = {k: v for k, v in net.items() if v}
     want_net = {k: v for k, v in expected_pieces.items() if v}
+    # The pool files a piece under an existing row within 1mm (OFFCUT_MATCH_TOLERANCE_MM), so a
+    # 304x609 cut piece lands in a 305x610 row. Match within that tolerance before comparing.
+    for key in list(want_net):
+        if net.get(key) == want_net[key]:
+            continue
+        for other in list(net):
+            if other != key and len(other) == len(key) and all(
+                    abs(float(a or 0) - float(b or 0)) <= 1.0 for a, b in zip(other, key)):
+                moved = min(net[other], want_net[key] - net.get(key, 0))
+                if moved > 0:
+                    net[other] -= moved
+                    net[key] = net.get(key, 0) + moved
+        net = {k: v for k, v in net.items() if v}
     problems = []
     if net != want_net:
         extra = {k: v for k, v in net.items() if want_net.get(k, 0) != v}

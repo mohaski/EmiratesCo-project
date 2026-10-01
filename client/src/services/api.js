@@ -37,7 +37,11 @@ api.interceptors.response.use(
             return Promise.reject(error);
         }
         if (status === 403) {
-            showToast('You do not have permission to perform this action.', 'warning');
+            // A 403 with its own reason (e.g. "Incorrect PIN.") says so; only the bare role
+            // check falls back to the generic message.
+            const detail = error.response?.data?.detail;
+            showToast(typeof detail === 'string' && detail !== 'Operation not permitted'
+                ? detail : 'You do not have permission to perform this action.', 'warning');
             return Promise.reject(error);
         }
 
@@ -113,6 +117,43 @@ export const OrderService = {
      * cashier is handing back whatever was already collected. Omit when nothing was paid.
      * cutConfirmations: { [line_ref]: { physicalState, resolution } } from
      * ResolveCutsModal — omit when the plan said nothing needed confirming. */
+    /** The offcut pool as it will be once this item of an order being edited is reversed
+     * with the given cut answers - including the pieces the edit hands back (the joined
+     * piece, the line's own cut piece...). Each returned row carries `returned[].ref`,
+     * sent back on an offcut pick as `returned_ref`. Read-only. */
+    projectedOffcuts: async (orderId, itemId, answers, variantId = null) => {
+        const response = await api.post(`/orders/${orderId}/items/${itemId}/projected-offcuts`, {
+            answers: answers || {},
+            variantId,
+        });
+        return response.data;
+    },
+    /** Every recorded change to an order (sale, edits, cancel, undos), newest first. */
+    getOperations: async (orderId) => {
+        const response = await api.get(`/orders/${orderId}/operations`);
+        return response.data;
+    },
+    undoPreview: async (opId) => {
+        const response = await api.post(`/orders/operations/${opId}/undo-preview`);
+        return response.data;
+    },
+    /** moneyHandled: asked only when the change moved money - did it really change hands? */
+    undoOperation: async (opId, pin, reason, moneyHandled = null) => {
+        const response = await api.post(`/orders/operations/${opId}/undo`, { pin, reason, moneyHandled });
+        return response.data;
+    },
+    getCorrectionPlan: async (opId) => {
+        const response = await api.get(`/orders/operations/${opId}/correction-plan`);
+        return response.data;
+    },
+    correctPreview: async (opId, cutConfirmations) => {
+        const response = await api.post(`/orders/operations/${opId}/correct-preview`, { cutConfirmations });
+        return response.data;
+    },
+    correctOperation: async (opId, pin, reason, cutConfirmations) => {
+        const response = await api.post(`/orders/operations/${opId}/correct`, { pin, reason, cutConfirmations });
+        return response.data;
+    },
     cancelOrder: async (id, pin, refund = null, cutConfirmations = null, planToken = null) => {
         const response = await api.put(`/orders/${id}/cancel`, {
             pin,
@@ -260,8 +301,15 @@ export const ProductService = {
      * merged entry per physical sheet/offcut touched; optimization summarizes the
      * multi-strategy search (which packing heuristics were tried and which won).
      */
-    previewGlassCuts: async (productId, variantId, cuts) => {
-        const response = await api.post(`/products/${productId}/glass-cut-preview`, { variant_id: variantId, cuts });
+    /** `edit` (optional): { orderId, itemId, answers } while editing a saved order - the
+     * preview then gives that item's material back first, as the edit will. */
+    previewGlassCuts: async (productId, variantId, cuts, edit = null) => {
+        const response = await api.post(`/products/${productId}/glass-cut-preview`, {
+            variant_id: variantId, cuts,
+            edit_order_id: edit?.orderId ?? null,
+            edit_item_id: edit?.itemId ?? null,
+            edit_answers: edit?.answers ?? null,
+        });
         return response.data;
     },
     /**
@@ -275,13 +323,16 @@ export const ProductService = {
      * routine "not enough stock yet" state shouldn't trigger the global
      * error-toast interceptor above.
      */
-    checkCutFeasibility: async (productId, variantId, lineItems, editOrderId = null) => {
+    checkCutFeasibility: async (productId, variantId, lineItems, editOrderId = null, editItemId = null, editAnswers = null) => {
         const response = await api.post(`/products/${productId}/cut-feasibility`, {
             variant_id: variantId,
             line_items: lineItems,
             // Set while editing a saved order: the check then gives that order's own
-            // material back first, as the edit will.
+            // material back first, as the edit will - the item open in the calculator
+            // reversed with the cut answers given there.
             edit_order_id: editOrderId ?? null,
+            edit_item_id: editItemId ?? null,
+            edit_answers: editAnswers ?? null,
         });
         return response.data;
     },

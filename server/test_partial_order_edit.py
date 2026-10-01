@@ -57,7 +57,8 @@ def make_db() -> Session:
         SQLModel.metadata.tables[t].dialect_options["sqlite"]["autoincrement"] = True
     names = ("products", "variants", "attribute_classes", "offcuts", "orders", "orderitems",
              "offcut_pieces", "offcut_piece_events", "stock_input_session_items",
-             "edit_history", "payments", "credits", "customers")
+             "edit_history", "payments", "credits", "customers",
+             "stock_operations", "stock_journal")
     SQLModel.metadata.create_all(engine, tables=[SQLModel.metadata.tables[n] for n in names])
     return Session(engine)
 

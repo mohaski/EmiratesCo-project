@@ -70,7 +70,7 @@ def make_db() -> Session:
     names = ("products", "variants", "attribute_classes", "offcuts", "orders",
              "orderitems", "offcut_pieces", "offcut_piece_events",
              "stock_input_session_items")
-    SQLModel.metadata.create_all(engine, tables=[SQLModel.metadata.tables[n] for n in names])
+    SQLModel.metadata.create_all(engine, tables=[SQLModel.metadata.tables[n] for n in tuple(names) + ("stock_operations", "stock_journal")])
     return Session(engine)
 
 

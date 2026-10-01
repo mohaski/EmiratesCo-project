@@ -10,10 +10,16 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
     const [total, setTotal] = useState(0);
     const [details, setDetails] = useState(null);
 
+    // Editing a saved order: whatever the calculator reports, the line stays linked to the
+    // saved item it came from (see SalesDashboard's edit-mode mapping).
+    const sourceItemId = initialDetails?._sourceItemId;
+    const sourceSnapshot = initialDetails?._source;
     const handleUpdate = useCallback((newTotal, newDetails) => {
         setTotal(newTotal);
-        setDetails(newDetails);
-    }, []);
+        setDetails(sourceItemId && newDetails
+            ? { ...newDetails, _sourceItemId: sourceItemId, _source: sourceSnapshot }
+            : newDetails);
+    }, [sourceItemId, sourceSnapshot]);
 
     // Attributes the calculator refuses to default (glass thickness) and the
     // cashier hasn't picked yet.

@@ -1,8 +1,11 @@
 import { memo, useState, useMemo, useEffect, useRef } from 'react';
+import { heldByEditedItem } from '../../../utils/editHoldings';
 import { mmToSquareFeet, inchesToSquareFeet, roundToHalfWithRule } from '../../../utils/calculations';
 import CutPreviewModal from './CutPreviewModal';
 import api from '../../../services/api';
 import { useCart } from '../../../context/CartContext';
+import { useEditCutAnswers } from '../../../hooks/useEditCutAnswers';
+import EditCutPanel from '../../orders/EditCutPanel';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -187,12 +190,20 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         return items;
     }, [fullQty, halfQty, halfSide, cutPieces, pricing]);
 
+    // Editing a saved order: was the original glass cut? Asked before the new cuts are
+    // resolved - glass that was never cut is rejoined with the untouched part of its sheet.
+    const editCuts = useEditCutAnswers({ initialDetails, variantId: pricing.variantId, lineItems });
+    const apiAnswersKey = JSON.stringify(editCuts.apiAnswers);
+
     useEffect(() => {
         let syncValid = missingRequired.length === 0;
-        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setError(`Only ${pricing.availableStock} Full Sheets available`); syncValid = false; }
+        // Editing: the item's own full sheets come back before the new quantity is taken.
+        const fullAvailable = pricing.availableStock !== undefined
+            ? pricing.availableStock + heldByEditedItem(initialDetails, pricing.variantId, ['sheet-full']) : undefined;
+        if (fullAvailable !== undefined && fullQty > fullAvailable) { setError(`Only ${fullAvailable} Full Sheets available`); syncValid = false; }
         else setError(null);
 
-        const isValid = syncValid && !feasibility.checking && feasibility.ok;
+        const isValid = syncValid && !feasibility.checking && feasibility.ok && editCuts.complete;
 
         const fullTotal = fullQty * pricing.priceFull;
         const halfTotal = halfQty * pricing.priceHalf;
@@ -200,8 +211,10 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         const attributes = [];
         if (extraSelections['Thickness']) attributes.push({ label: 'Thickness', value: extraSelections['Thickness'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Thickness') attributes.push({ label: key, value: val }); });
-        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, missingAttributes: missingRequired, checkingStock: feasibility.checking, stockError: feasibility.message });
-    }, [fullQty, halfQty, halfSide, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired]);
+        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, missingAttributes: missingRequired, checkingStock: feasibility.checking,
+            stockError: feasibility.message || (!editCuts.complete ? 'Answer whether the original glass was cut.' : null),
+            _sourceItemId: initialDetails?._sourceItemId, cutAnswers: editCuts.cartAnswers });
+    }, [fullQty, halfQty, halfSide, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired, editCuts.complete, editCuts.cartAnswers, initialDetails]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current sheet stock/offcuts? Reuses the exact real checkout deduction
@@ -218,7 +231,8 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         }
         // The cheap synchronous check already flagged a problem — no need to
         // hit the network for something the user already sees an error for.
-        if (error) {
+        // Same while the edit's cut questions are unanswered: what comes back isn't known yet.
+        if (error || (editCuts.active && !editCuts.complete)) {
             setFeasibility({ checking: false, ok: true, message: null });
             return;
         }
@@ -230,7 +244,8 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
         const timer = setTimeout(() => {
             api.productService
-                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId)
+                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId,
+                    editCuts.sourceItemId, apiAnswersKey ? JSON.parse(apiAnswersKey) : null)
                 .then(res => {
                     if (feasibilitySeqRef.current !== mySeq) return; // superseded by a newer check
                     setFeasibility({ checking: false, ok: !!res.ok, message: res.ok ? null : (res.message || 'Insufficient stock for this configuration.') });
@@ -244,7 +259,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         }, 400);
 
         return () => clearTimeout(timer);
-    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems, missingRequired, editingOrderId]);
+    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems, missingRequired, editingOrderId, apiAnswersKey, editCuts.active, editCuts.complete, editCuts.sourceItemId]);
 
     const getArea = (l, w, u) => {
         if (u === 'ft') { const rl = roundToHalfWithRule(l), rw = roundToHalfWithRule(w); return rl * rw; }
@@ -319,6 +334,8 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
 
     return (
         <div>
+            <EditCutPanel editCuts={editCuts} />
+
             {/* Attribute selectors */}
             {Object.entries(extraAttributes).length > 0 && (
                 <div style={missingRequired.length > 0
@@ -492,6 +509,10 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                     productId={product.id}
                     variantId={pricing.variantId}
                     cutPieces={cutPieces}
+                    edit={editingOrderId ? {
+                        orderId: editingOrderId, itemId: editCuts.sourceItemId,
+                        answers: apiAnswersKey ? JSON.parse(apiAnswersKey) : null,
+                    } : null}
                     onClose={() => setShowCutPreview(false)}
                 />
             )}

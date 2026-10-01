@@ -4,6 +4,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
 import { mapItemForBackend } from '../utils/orderItemMapping';
+import { answersComplete, answersPayload } from '../utils/cutAnswers';
 import { useCartTotals } from '../hooks/useCartTotals';
 import { ceilAmount } from '../utils/money';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
@@ -159,7 +160,7 @@ export default function CheckoutPage() {
     const isMobile = windowWidth < 768;
 
     const { user } = useAuth();
-    const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart } = useCart();
+    const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart, editSession } = useCart();
     const { addOrder, updateOrder } = useOrders();
     const { mode, originalTotal = 0, originalBalance = 0 } = location.state || {};
     const editOrderId = mode === 'edit' ? (location.state?.orderData?.id ?? location.state?.orderData?.orderId ?? null) : null;
@@ -187,6 +188,8 @@ export default function CheckoutPage() {
     // Why the confirmation reopened (a 409: the material moved while it was being answered).
     // Shown inside the modal, where the cashier is looking — not on the page behind it.
     const [cutsNotice, setCutsNotice] = useState(null);
+    // Cut answers already given in the calculators, pre-filled into the dialog.
+    const [cutsInitial, setCutsInitial] = useState(null);
 
     const [loading, setLoading] = useState(false);
     const [paymentError, setPaymentError] = useState(null);
@@ -263,6 +266,7 @@ export default function CheckoutPage() {
                 totals: { subtotal, tax, total, discount: discountValue, paid: netPayment, balance },
                 cutConfirmations: cutConfirmations || null,
                 planToken: planToken || null,
+                orderVersion: editSession && editSession.orderId === editOrderId ? editSession.version : null,
                 payment: {
                     method: paymentMethod, isPartial,
                     details: paymentMethod === 'split'
@@ -310,7 +314,7 @@ export default function CheckoutPage() {
         } finally {
             setLoading(false);
         }
-    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories]);
+    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, editSession, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories]);
 
     // Edit mode: ask the backend what THIS cart would disturb, and confirm every cut line
     // it does — the cutting flags are a prefill, not evidence, so a line the queue still
@@ -329,7 +333,17 @@ export default function CheckoutPage() {
             console.error('Failed to preview the reversal plan', err);
             return submitOrder(null, null);
         }
-        if (plan?.lines?.some(l => l.will_reverse !== false)) {
+        const reversing = (plan?.lines || []).filter(l => l.will_reverse !== false);
+        if (reversing.length) {
+            // Answered in the calculators while the items were being changed. When they cover
+            // every line this edit disturbs, there is nothing left to ask; otherwise (an item
+            // removed outright, or answers from before a stale reload) the dialog opens with
+            // them pre-filled and asks only for the rest.
+            const known = Object.assign({}, ...cartItems.map(i => i.details?.cutAnswers || {}));
+            if (answersComplete(reversing, known)) {
+                return submitOrder(answersPayload(reversing, known), plan?.plan_token ?? null);
+            }
+            setCutsInitial(known);
             setCutsPlan(plan);
             return undefined;
         }
@@ -369,6 +383,7 @@ export default function CheckoutPage() {
                 <ResolveCutsModal
                     plan={cutsPlan}
                     notice={cutsNotice}
+                    initialAnswers={cutsInitial}
                     onClose={() => { setCutsPlan(null); setCutsNotice(null); }}
                     onConfirm={(confirmations) => {
                         const token = cutsPlan.plan_token ?? null;

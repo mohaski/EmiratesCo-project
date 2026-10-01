@@ -16,6 +16,7 @@ from .editHistory import EditHistory
 from .settings import SystemSetting
 from .tools import Tool, ToolLoan, ToolLoanItem
 from .stockInputSession import StockInputSession, StockInputSessionItem
+from .opJournal import StockOperation, JournalEntry, StockBaseline
 
 __all__ = [
     "User",
@@ -42,4 +43,11 @@ __all__ = [
     "ToolLoanItem",
     "StockInputSession",
     "StockInputSessionItem",
+    "StockOperation",
+    "JournalEntry",
+    "StockBaseline",
 ]
+
+# Registers the after_flush hook that journals every stock-affecting row change. Imported
+# here, after every entity, so no session can flush before the hook exists.
+from core.audit import journal as _journal  # noqa: E402,F401

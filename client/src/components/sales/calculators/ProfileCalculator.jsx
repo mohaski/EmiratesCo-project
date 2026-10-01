@@ -1,7 +1,10 @@
 import { useState, useEffect, useMemo, useRef, memo } from 'react';
+import { heldByEditedItem } from '../../../utils/editHoldings';
 import OffcutSelectorModal from './OffcutSelectorModal';
 import api from '../../../services/api';
 import { useCart } from '../../../context/CartContext';
+import { useEditCutAnswers } from '../../../hooks/useEditCutAnswers';
+import EditCutPanel from '../../orders/EditCutPanel';
 
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
@@ -122,21 +125,43 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         return items;
     }, [fullQty, halfQty, feet, pricing, extraSelections, offcutSelection]);
 
+    // Editing a saved order: was the original cut made? Asked before material is chosen.
+    const editCuts = useEditCutAnswers({ initialDetails, variantId: pricing.variantId, lineItems });
+    const apiAnswersKey = JSON.stringify(editCuts.apiAnswers);
+    // A pick of a returned piece only exists under the answers it was made with: when the
+    // answers change, drop it (adjusting state during render, not in an effect). The first
+    // real answers - the plan finishing loading - are not a change.
+    const [answersSeen, setAnswersSeen] = useState(apiAnswersKey);
+    if (answersSeen !== apiAnswersKey) {
+        setAnswersSeen(apiAnswersKey);
+        if (answersSeen !== 'null' && offcutSelection?.some(e => e.returned_ref)) setOffcutSelection(null);
+    }
+
     useEffect(() => {
         let syncValid = true;
-        if (pricing.availableStock !== undefined && fullQty > pricing.availableStock) { setfullLengtherror(`Only ${pricing.availableStock} full lengths available`); syncValid = false; }
+        // Editing: the item's own full lengths come back before the new quantity is taken.
+        const fullAvailable = pricing.availableStock !== undefined
+            ? pricing.availableStock + heldByEditedItem(initialDetails, pricing.variantId, ['profile-full']) : undefined;
+        if (fullAvailable !== undefined && fullQty > fullAvailable) { setfullLengtherror(`Only ${fullAvailable} full lengths available`); syncValid = false; }
         else if (pricing.availableStock !== undefined && feet > selectedLengthNum) { setcuterror(`Feet cannot exceed ${selectedLengthNum}`); syncValid = false; }
         else { setfullLengtherror(null); setcuterror(null); }
 
-        const isValid = syncValid && !feasibility.checking && feasibility.ok;
+        const isValid = syncValid && !feasibility.checking && feasibility.ok && editCuts.complete;
 
         const total = (fullQty * pricing.priceFull) + (halfQty * pricing.priceHalf) + (feet * pricing.priceFoot);
         const attributes = [];
         if (color) attributes.push({ label: 'Color', value: color });
         if (extraSelections['Length']) attributes.push({ label: 'Length', value: extraSelections['Length'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Length' && key !== 'Color') attributes.push({ label: key, value: val }); });
-        onUpdate(total, { lineItems, attributes, full: fullQty, half: halfQty, feet, color: color || 'White', extras: extraSelections, variantId: pricing.variantId, offcutSelection, isValid, checkingStock: feasibility.checking, stockError: feasibility.message });
-    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, onUpdate, lineItems, feasibility]);
+        onUpdate(total, {
+            lineItems, attributes, full: fullQty, half: halfQty, feet, color: color || 'White', extras: extraSelections,
+            variantId: pricing.variantId, offcutSelection, isValid, checkingStock: feasibility.checking,
+            stockError: feasibility.message || (!editCuts.complete ? 'Answer whether the original cut was made.' : null),
+            // Edit mode: which saved item this is, and the cut answers given for it here.
+            _sourceItemId: initialDetails?._sourceItemId,
+            cutAnswers: editCuts.cartAnswers,
+        });
+    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, onUpdate, lineItems, feasibility, editCuts.complete, editCuts.cartAnswers, initialDetails]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current stock/offcuts? Reuses the real checkout deduction logic on the
@@ -151,7 +176,9 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         }
         // The cheap synchronous checks already flagged a problem — no need to
         // hit the network for something the user already sees an error for.
-        if (fullLengtherror || cuterror) {
+        // ...nor while the edit's cut questions are unanswered: until they are, it isn't known
+        // what material comes back.
+        if (fullLengtherror || cuterror || (editCuts.active && !editCuts.complete)) {
             setFeasibility({ checking: false, ok: true, message: null });
             return;
         }
@@ -163,7 +190,8 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
 
         const timer = setTimeout(() => {
             api.productService
-                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId)
+                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId,
+                    editCuts.sourceItemId, apiAnswersKey ? JSON.parse(apiAnswersKey) : null)
                 .then(res => {
                     if (feasibilitySeqRef.current !== mySeq) return; // superseded by a newer check
                     setFeasibility({ checking: false, ok: !!res.ok, message: res.ok ? null : (res.message || 'Insufficient stock for this configuration.') });
@@ -177,7 +205,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         }, 400);
 
         return () => clearTimeout(timer);
-    }, [fullQty, halfQty, feet, pricing.variantId, offcutSelection, product.id, fullLengtherror, cuterror, lineItems, editingOrderId]);
+    }, [fullQty, halfQty, feet, pricing.variantId, offcutSelection, product.id, fullLengtherror, cuterror, lineItems, editingOrderId, apiAnswersKey, editCuts.active, editCuts.complete, editCuts.sourceItemId]);
 
     const handleExtraChange = (key, val) => setExtraSelections(prev => ({ ...prev, [key]: val }));
     const chipBtn = (active) => ({
@@ -190,6 +218,8 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
 
     return (
         <div>
+            <EditCutPanel editCuts={editCuts} />
+
             {/* Dynamic attribute selectors */}
             {Object.entries(extraAttributes).length > 0 && (
                 <div style={sectionStyle}>
@@ -258,7 +288,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                             {offcutSelection && offcutSelection.length > 0 ? (
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
                                     <span style={{ fontSize: '0.68rem', color: '#4ade80', fontFamily: 'var(--font-mono)' }}>
-                                        {offcutSelection.map(s => `${parseFloat(s.length_used).toFixed(1)}ft`).join(' + ')}
+                                        {offcutSelection.map(s => `${parseFloat(s.length_used).toFixed(1)}ft${s.returned_ref ? ' (returned)' : ''}`).join(' + ')}
                                         {offcutSelection.reduce((s, o) => s + (parseFloat(o.length_used) || 0), 0) < feet - 0.01 ? ' + auto-fill rest' : ' ✓'}
                                     </span>
                                     <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
@@ -267,7 +297,11 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                                     </div>
                                 </div>
                             ) : (
-                                <button onClick={() => setShowOffcutModal(true)} style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', padding: 0 }}>
+                                <button
+                                    onClick={() => setShowOffcutModal(true)}
+                                    disabled={editCuts.active && !editCuts.complete}
+                                    title={editCuts.active && !editCuts.complete ? 'Answer the cut questions above first' : undefined}
+                                    style={{ background: 'none', border: 'none', color: editCuts.active && !editCuts.complete ? '#475569' : '#60a5fa', fontSize: '0.7rem', fontWeight: 600, cursor: editCuts.active && !editCuts.complete ? 'not-allowed' : 'pointer', padding: 0 }}>
                                     🔍 Choose offcuts for this cut
                                 </button>
                             )}
@@ -295,6 +329,10 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                     initialSelection={offcutSelection}
                     cart={cart}
                     cartIndex={cartIndex}
+                    projection={editCuts.active && editCuts.complete ? {
+                        orderId: editingOrderId, itemId: editCuts.sourceItemId,
+                        answers: apiAnswersKey ? JSON.parse(apiAnswersKey) : null,
+                    } : null}
                     onConfirm={setOffcutSelection}
                     onClose={() => setShowOffcutModal(false)}
                 />

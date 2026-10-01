@@ -14,10 +14,16 @@ import api from '../../../services/api';
  *                           by OTHER cart lines that haven't been submitted yet — nothing
  *                           is actually deducted from stock until the order is created, so
  *                           without this the same offcut could be picked twice in one order.
- *   onConfirm(selection)  – called with the chosen [{offcut_id, length_used}]
+ *   projection            – editing a saved order: { orderId, itemId, answers }. The list is
+ *                           then the pool as it will be once that item is reversed with those
+ *                           cut answers, including the pieces the edit hands back (the uncut
+ *                           length joined onto what's left of the bar, the cut piece itself...).
+ *                           A pick of one of those carries `returned_ref`, which the edit
+ *                           resolves to the piece it actually produces.
+ *   onConfirm(selection)  – called with the chosen [{offcut_id, length_used, returned_ref?}]
  *   onClose               – close callback
  */
-export default function OffcutSelectorModal({ productId, variantId, requiredLength, initialSelection, cart = [], cartIndex = null, onConfirm, onClose }) {
+export default function OffcutSelectorModal({ productId, variantId, requiredLength, initialSelection, cart = [], cartIndex = null, projection = null, onConfirm, onClose }) {
     const [offcuts, setOffcuts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -25,9 +31,13 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
     // Selection state: { [offcutId]: lengthUsed (string) }
     const [selected, setSelected] = useState(() => {
         const init = {};
-        (initialSelection || []).forEach(s => { init[s.offcut_id] = String(s.length_used); });
+        (initialSelection || []).forEach(s => {
+            if (s.returned_ref) init[`ref:${s.returned_ref}`] = String(s.length_used);
+            else init[s.offcut_id] = String(s.length_used);
+        });
         return init;
     });
+    const projectionKey = projection ? JSON.stringify(projection) : null;
 
     // How many units of each offcut are already spoken for by other cart lines
     // (each offcut_selection entry consumes exactly one unit of that offcut).
@@ -47,18 +57,30 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
     useEffect(() => {
         let cancelled = false;
         setLoading(true);
-        api.productService.getOffcuts(productId, variantId)
+        const proj = projectionKey ? JSON.parse(projectionKey) : null;
+        const load = proj
+            ? api.orderService.projectedOffcuts(proj.orderId, proj.itemId, proj.answers, variantId).then(res =>
+                (res.offcuts || []).map(r => ({
+                    ...r,
+                    // Rows the reversal creates have no id yet; they are picked by returned_ref.
+                    offcutId: r.returned?.length ? `ref:${r.returned[0].ref}` : r.offcutId,
+                    realOffcutId: r.offcutId,
+                })))
+            : api.productService.getOffcuts(productId, variantId);
+        load
             .then(data => {
                 if (cancelled) return;
                 const adjusted = (data || [])
-                    .map(oc => ({ ...oc, quantity: oc.quantity - (claimedElsewhere[oc.offcutId] || 0) }))
-                    .filter(oc => oc.quantity > 0);
+                    .map(oc => ({ ...oc, quantity: oc.quantity - (claimedElsewhere[oc.realOffcutId ?? oc.offcutId] || 0) }))
+                    .filter(oc => oc.quantity > 0)
+                    // Pieces this edit hands back first - the ones the cashier is thinking of.
+                    .sort((a, b) => (b.returned?.length ? 1 : 0) - (a.returned?.length ? 1 : 0));
                 setOffcuts(adjusted);
             })
             .catch(() => { if (!cancelled) setError('Failed to load offcuts — please try again.'); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [productId, variantId, claimedElsewhere]);
+    }, [productId, variantId, claimedElsewhere, projectionKey]);
 
     const toggle = (oc) => {
         setSelected(prev => {
@@ -100,7 +122,15 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
     const handleConfirm = () => {
         if (!canSubmit) return;
         const selection = Object.entries(selected)
-            .map(([id, len]) => ({ offcut_id: parseInt(id), length_used: parseFloat(len) }))
+            .map(([id, len]) => {
+                const row = offcuts.find(o => String(o.offcutId) === String(id));
+                const back = row?.returned?.[0];
+                if (back) {
+                    return { offcut_id: row.realOffcutId ?? null, length_used: parseFloat(len),
+                             returned_ref: back.ref, returned_label: back.label };
+                }
+                return { offcut_id: parseInt(id), length_used: parseFloat(len) };
+            })
             .filter(s => s.length_used > 0);
         onConfirm(selection);
         onClose();
@@ -202,6 +232,11 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                                                 <span style={{ fontSize: '0.72rem', color: '#475569', marginLeft: '0.5rem' }}>
                                                     qty: {oc.quantity}
                                                 </span>
+                                                {oc.returned?.length > 0 && (
+                                                    <div data-testid="returned-offcut" style={{ fontSize: '0.66rem', color: '#22c55e', fontWeight: 700, marginTop: '2px' }}>
+                                                        ↩ returned by this edit: {oc.returned[0].label}
+                                                    </div>
+                                                )}
                                             </div>
 
                                             {/* Length input when selected */}

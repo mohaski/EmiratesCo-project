@@ -423,9 +423,9 @@ def test_engine_written_keys_ignored(db, cat, user):
 def test_quantity_and_price(db, cat, user):
     """A price field in the request is not a change; quantity is.
 
-    Totals are always recomputed from DB prices (_calculate_complex_item_total), so the
-    unitPrice a client submits is advisory and never echoed back — which is exactly why
-    price is excluded from _stock_signature: it cannot describe a different consumption.
+    An untouched item keeps the price it was SOLD at (since 2026-09-30 - it used to be
+    repriced from today's price list on every edit, silently changing what the customer owed
+    for items nobody touched). A client-submitted unitPrice is never trusted either way.
     """
     print("\n--- 7. Price vs quantity ---")
     prod, var = seed_product(db, cat, "Matrix Price", kind="bar")
@@ -438,7 +438,7 @@ def test_quantity_and_price(db, cat, user):
     survivors = items_of(db, order)
     priced_from_db = survivors[item.item_id].total_price
     check("the row survives an edit that changes nothing", item.item_id in survivors, True)
-    check("priced from the DB: 1.2ft x 50/ft", priced_from_db, 60.0)
+    check("an untouched item keeps the price it was sold at", priced_from_db, 400.0)
 
     edit(db, order, user, [req_from_item(item, price=999.0)])
     survivors = items_of(db, order)
@@ -850,6 +850,98 @@ def test_history_shows_only_the_lines_lineage(db, cat, user):
           small.get("piece_id") in b_ids, False)
 
 
+def as_browser(value):
+    """A value after FastAPI -> JSON -> JavaScript -> JSON -> Python: one number type, so a
+    whole-number float (1650.0) comes back an int (1650). req_from_item hands the stored
+    dict straight back, which hid exactly this."""
+    import json
+    value = json.loads(json.dumps(value, default=str))
+
+    def walk(v):
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+    return walk(value)
+
+
+def browser_req(item, **kw):
+    req = req_from_item(item, **kw)
+    req.details = as_browser(req.details)
+    return req
+
+
+def test_half_sheet_glass_survives_unrelated_edit(db, cat, user):
+    """Live report: changing only a silicone's colour asked to confirm the glass cuts.
+
+    The engine writes a half-sheet line's meta l/w as floats (1650.0); through the browser
+    they come back as ints, so the untouched glass item never matched itself and was put
+    in front of the operator -- and reversed on the (wrong) answer.
+    """
+    print("\n--- 21. Half-sheet glass is untouched by an unrelated accessory edit ---")
+    glass, gvar = seed_product(db, cat, "Matrix Half Glass", kind="glass")
+    acc, avar = seed_product(db, cat, "Matrix Silicone", kind="bar")
+    _, avar2 = seed_product(db, cat, "Matrix Silicone Clear", kind="bar")
+    order = new_order(db, user)
+
+    half = {"type": "sheet-half", "qty": 1, "meta": {"halfSide": "width"},
+            "label": "Half Sheet", "rate": 60.0, "total": 60.0}
+    cut = dict(line_cut_2d(600, 500), meta={**line_cut_2d(600, 500)["meta"], "rateSqFt": 12})
+    glass_item = add_item(db, order, glass, gvar, [half, cut])
+    acc_item = add_item(db, order, acc, avar, [line_full(1)])
+    glass_item.cutting_completed = True
+    db.add(glass_item)
+    db.commit()
+
+    stored_meta = glass_item.details["lineItems"][0]["meta"]
+    check("the engine enriched the half sheet with float dimensions",
+          all(isinstance(stored_meta.get(k), float) for k in ("l", "w")), True)
+
+    glass_stock, glass_pool = stock_of(db, gvar), pool_of(db, glass)
+    # The colour change: same accessory line, different variant.
+    changed_acc = browser_req(acc_item)
+    changed_acc.variantId = avar2.variantId
+
+    plan = orderService.get_reversal_plan(
+        order.orderId, db, FakeUser(user.userId),
+        incoming_items=[browser_req(glass_item), changed_acc])
+    check("no glass line is put to the operator",
+          [l["will_reverse"] for l in plan["lines"] if l["item_id"] == glass_item.item_id],
+          [False, False])
+    check("so the confirmation modal would not open",
+          any(l["will_reverse"] is not False for l in plan["lines"]), False)
+
+    edit(db, order, user, [browser_req(glass_item), changed_acc])
+    survivors = items_of(db, order)
+    check("the glass item survived untouched", glass_item.item_id in survivors, True)
+    check("and is still marked cut", survivors[glass_item.item_id].cutting_completed, True)
+    check("glass stock is unchanged", stock_of(db, gvar), glass_stock)
+    check("the glass pool is unchanged", pool_of(db, glass), glass_pool)
+
+    # Reopening the glass item and saving it unchanged regenerates its lines the way the
+    # calculator writes them: half sheet with meta {halfSide} only, a new sq-ft rate.
+    reopened = [dict(half), dict(cut, meta={**cut["meta"], "rateSqFt": 15})]
+    fresh_glass = survivors[glass_item.item_id]
+    plan = orderService.get_reversal_plan(
+        order.orderId, db, FakeUser(user.userId),
+        incoming_items=[browser_req(fresh_glass, lines=reopened),
+                        browser_req(survivors[max(k for k in survivors if k != glass_item.item_id)])])
+    check("reopening and saving the glass unchanged is still not an edit",
+          [l["will_reverse"] for l in plan["lines"]], [False, False])
+
+    # A real change of the half sheet must still count.
+    other_side = [dict(half, meta={"halfSide": "length"}), cut]
+    plan = orderService.get_reversal_plan(
+        order.orderId, db, FakeUser(user.userId),
+        incoming_items=[browser_req(fresh_glass, lines=other_side),
+                        browser_req(survivors[max(k for k in survivors if k != glass_item.item_id)])])
+    check("changing the split side is an edit",
+          [l["will_reverse"] for l in plan["lines"]], [True, True])
+
+
 def main():
     engine = engine_for_test_db()
     with Session(engine) as db:
@@ -866,7 +958,8 @@ def main():
                    test_shared_sheet_is_cut_if_any_line_is,
                    test_shared_sheet_all_cut_keeps_every_piece,
                    test_legacy_already_cut_is_honoured, test_plan_labels_and_tree,
-                   test_calculator_check_during_edit, test_history_shows_only_the_lines_lineage):
+                   test_calculator_check_during_edit, test_history_shows_only_the_lines_lineage,
+                   test_half_sheet_glass_survives_unrelated_edit):
             fn(db, cat, user)
 
     print("\n" + "=" * 68)

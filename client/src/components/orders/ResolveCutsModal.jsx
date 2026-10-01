@@ -1,20 +1,21 @@
 import { useMemo, useState } from 'react';
+import { lineAnswered, answersPayload } from '../../utils/cutAnswers';
 
 /**
- * Confirm, one cut line at a time, whether the cutting has physically been done.
+ * Confirm, one cut line at a time, whether the cutting has physically been done - and, when
+ * later orders have cut from the same bar/sheet, whether each of THEIR cuts has been made too.
  *
- * Shown for ANY order with cut material, whatever the cutting flags say — a bar is
- * routinely cut hours before anyone reports it, so `cutting_completed` is a prefill, not
- * evidence. Lines the flags say are uncut arrive pre-answered, so the common case is one
- * tap; every line stays visible and overridable.
+ * Already cut: the bar/sheet is never recombined; the cut piece goes back to the offcut pool.
+ * Not cut: the material comes back - the whole bar/sheet if nobody else has touched it, or,
+ * if a later order has cut into its leftover, the uncut length/glass joined back onto what is
+ * left. A later cut confirmed made is marked cut on that order.
  *
- * Already cut means the bar is never recombined and its own cut size goes back into the
- * offcut pool. Scrapping or writing off the piece is not offered here — the backend still
- * accepts those values, but `allowed_resolutions` advertises only return_to_pool, so this
- * renders no choice for it. Re-offering one is a change in reversalPlan.OFFERED_RESOLUTIONS.
+ * Fed by the reversal plan (GET/POST /orders/{id}/reversal-plan). Produces the
+ * `cutConfirmations` payload the edit and cancel endpoints take:
+ *   { "<line_ref>": { physicalState, resolution, laterCuts: { "<item_id>": state } } }
  *
- * Fed by GET /orders/{id}/reversal-plan. Produces the `cutConfirmations` payload the edit
- * and cancel endpoints take: { "<line_ref>": { physicalState, resolution } }
+ * `CutQuestions` is the same list without the dialog, used inside the calculators (edit
+ * mode) and the Correct-answers dialog.
  */
 
 const PHYSICAL_STATES = [
@@ -22,6 +23,7 @@ const PHYSICAL_STATES = [
     { id: 'already_cut', label: 'Already cut', icon: '✂️', color: '#f59e0b' },
     { id: 'unknown', label: 'Needs check', icon: '❓', color: '#64748b' },
 ];
+const LATER_STATES = PHYSICAL_STATES.slice(0, 2);
 
 const stateMeta = id => PHYSICAL_STATES.find(s => s.id === id) || PHYSICAL_STATES[2];
 
@@ -36,8 +38,7 @@ const microLabel = {
     letterSpacing: '0.08em', textTransform: 'uppercase',
 };
 
-/** The physical chain this cut came out of — one row per piece, indented by depth, so a
- *  bar cut down through several orders reads as the tree it actually is. */
+/** The physical chain this cut came out of - one row per piece, indented by depth. */
 function ChainView({ chain }) {
     if (!chain?.pieces?.length) return null;
     return (
@@ -59,6 +60,7 @@ function ChainView({ chain }) {
                                 fontVariantNumeric: 'tabular-nums',
                             }}>{p.size}</span>
                             {p.origin === 'stock_unit' && <span style={{ fontSize: '0.62rem', color: '#475569' }}>whole</span>}
+                            {p.origin === 'rejoin' && <span style={{ fontSize: '0.62rem', color: '#22c55e' }}>rejoined</span>}
                             {p.is_scrap && <span style={{ fontSize: '0.62rem', color: '#f87171' }}>scrap</span>}
                             {consumed && p.holder && (
                                 <span style={{ fontSize: '0.62rem', color: '#f59e0b' }}>
@@ -73,19 +75,54 @@ function ChainView({ chain }) {
     );
 }
 
-function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates = [] }) {
-    const state = answer?.physicalState ?? line.default_physical_state;
+function StateButtons({ states, value, onPick, small = false }) {
+    return (
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+            {states.map(s => {
+                const active = value === s.id;
+                return (
+                    <button
+                        key={s.id}
+                        type="button"
+                        data-state={s.id}
+                        onClick={() => onPick(s.id)}
+                        style={{
+                            flex: 1, display: 'flex', flexDirection: small ? 'row' : 'column', alignItems: 'center',
+                            justifyContent: 'center', gap: '0.25rem',
+                            padding: small ? '0.35rem 0.375rem' : '0.5rem 0.375rem', borderRadius: '0.75rem', cursor: 'pointer',
+                            border: active ? `1px solid ${s.color}80` : '1px solid rgba(255,255,255,0.08)',
+                            background: active ? `${s.color}1f` : 'rgba(255,255,255,0.03)',
+                            color: active ? s.color : '#64748b', transition: 'all 0.15s ease',
+                        }}
+                    >
+                        <span style={{ fontSize: small ? '0.8rem' : '1rem' }}>{s.icon}</span>
+                        <span style={{ fontSize: '0.66rem', fontWeight: 700 }}>{s.label}</span>
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
+export function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates = [] }) {
+    const state = answer?.physicalState ?? (line.requires_explicit_answer ? null : line.default_physical_state);
     const meta = stateMeta(state);
-    const needsCheck = state === 'unknown';
-    const answered = !!answer?.physicalState;
+    const answered = lineAnswered(line, answer);
+    const laterCuts = line.later_cuts || [];
+    const returns = line.returns || {};
+    const setLater = (itemId, value) => onAnswer({
+        physicalState: answer?.physicalState ?? null,
+        resolution: answer?.resolution ?? null,
+        laterCuts: { ...(answer?.laterCuts || {}), [String(itemId)]: value },
+    });
 
     return (
-        <div style={{ ...card, overflow: 'hidden', borderColor: needsCheck ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)' }}>
+        <div data-line-ref={line.line_ref} style={{ ...card, overflow: 'hidden', borderColor: answered ? 'rgba(255,255,255,0.07)' : 'rgba(245,158,11,0.3)' }}>
             <button onClick={onToggle} style={{
                 width: '100%', display: 'flex', alignItems: 'center', gap: '0.75rem',
                 padding: '0.875rem 1rem', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
             }}>
-                <span style={{ fontSize: '1rem' }}>{meta.icon}</span>
+                <span style={{ fontSize: '1rem' }}>{state ? meta.icon : '•'}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{
                         fontSize: '0.82rem', fontWeight: 700, color: '#f1f5f9',
@@ -97,6 +134,7 @@ function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates = [] }
                     <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '0.1rem' }}>
                         {line.cut_description}
                         {line.legacy && <span style={{ color: '#a855f7' }}> · no history</span>}
+                        {laterCuts.length > 0 && <span style={{ color: '#fbbf24' }}> · {laterCuts.length} later cut{laterCuts.length > 1 ? 's' : ''} from it</span>}
                         {sheetMates.length > 0 && (
                             <span style={{ color: '#22d3ee' }}> · same sheet as {sheetMates.join(', ')}</span>
                         )}
@@ -105,9 +143,11 @@ function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates = [] }
                 <span style={{
                     fontSize: '0.62rem', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
                     padding: '0.25rem 0.5rem', borderRadius: '0.5rem', flexShrink: 0,
-                    color: meta.color, background: `${meta.color}1f`, border: `1px solid ${meta.color}44`,
+                    color: answered ? meta.color : '#f59e0b',
+                    background: answered ? `${meta.color}1f` : 'rgba(245,158,11,0.12)',
+                    border: `1px solid ${answered ? meta.color : '#f59e0b'}44`,
                 }}>
-                    {answered ? meta.label : `${meta.label}?`}
+                    {answered ? meta.label : 'Answer'}
                 </span>
                 <span style={{ color: '#475569', fontSize: '0.7rem', flexShrink: 0 }}>{expanded ? '▲' : '▼'}</span>
             </button>
@@ -119,150 +159,128 @@ function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates = [] }
                 }}>
                     <ChainView chain={line.chain} />
 
-                    {/* Which order holds part of this material — the fact, not a sentence
-                        about it. This is why a whole bar can't come back for the line. */}
-                    {line.blockers.length > 0 && (
-                        <div style={{
-                            display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.375rem',
-                            fontSize: '0.7rem', color: '#fbbf24',
-                        }}>
-                            <span style={{ ...microLabel, color: '#b45309' }}>Committed to</span>
-                            {line.blockers.map((b, i) => (
-                                <span key={b.piece_id ?? i} style={{
-                                    fontWeight: 700, padding: '0.15rem 0.4rem', borderRadius: '0.4rem',
-                                    background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)',
-                                }}>
-                                    #{b.order_id}{b.customer_name ? ` ${b.customer_name}` : ''}
-                                </span>
-                            ))}
+                    <span style={microLabel}>This cut ({line.cut_description}) - was it made?</span>
+                    <StateButtons
+                        states={PHYSICAL_STATES}
+                        value={state}
+                        onPick={id => onAnswer({
+                            physicalState: id,
+                            resolution: id === 'already_cut' ? (line.default_resolution || 'return_to_pool') : null,
+                            laterCuts: { ...(answer?.laterCuts || {}) },
+                        })}
+                    />
+                    {state && returns[state]?.length > 0 && (
+                        <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+                            <span style={{ color: '#475569' }}>Comes back: </span>
+                            <span style={{ color: '#22d3ee', fontWeight: 700 }}>{returns[state].join(' · ')}</span>
                         </div>
                     )}
 
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        {PHYSICAL_STATES.map(s => {
-                            const active = state === s.id;
-                            return (
-                                <button
-                                    key={s.id}
-                                    type="button"
-                                    onClick={() => onAnswer({
-                                        physicalState: s.id,
-                                        // Already-cut material always goes back to the offcut pool.
-                                        resolution: s.id === 'already_cut' ? (line.default_resolution || 'return_to_pool') : null,
-                                    })}
-                                    style={{
-                                        flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem',
-                                        padding: '0.5rem 0.375rem', borderRadius: '0.75rem', cursor: 'pointer',
-                                        border: active ? `1px solid ${s.color}80` : '1px solid rgba(255,255,255,0.08)',
-                                        background: active ? `${s.color}1f` : 'rgba(255,255,255,0.03)',
-                                        color: active ? s.color : '#64748b', transition: 'all 0.15s ease',
-                                    }}
-                                >
-                                    <span style={{ fontSize: '1rem' }}>{s.icon}</span>
-                                    <span style={{ fontSize: '0.66rem', fontWeight: 700 }}>{s.label}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
+                    {laterCuts.map(lc => (
+                        <div key={lc.item_id} data-later-cut={lc.item_id} style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', paddingTop: '0.375rem', borderTop: '1px dashed rgba(255,255,255,0.06)' }}>
+                            <span style={{ ...microLabel, color: '#b45309' }}>
+                                Later cut from the same {line.is_2d ? 'sheet' : 'bar'}: order #{lc.order_id}{lc.customer_name ? ` ${lc.customer_name}` : ''} - {lc.cut}. Was it made?
+                            </span>
+                            <StateButtons small states={LATER_STATES} value={answer?.laterCuts?.[String(lc.item_id)]}
+                                onPick={id => setLater(lc.item_id, id)} />
+                        </div>
+                    ))}
                 </div>
             )}
         </div>
     );
 }
 
-export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel = 'Continue', notice = null }) {
-    // Pre-answer the lines the backend says are safe to take on trust, so only the ones
-    // that genuinely need a human are left blank.
-    const [answers, setAnswers] = useState(() => {
-        const seed = {};
-        (plan?.lines || []).filter(l => l.will_reverse !== false).forEach(l => {
-            if (!l.requires_explicit_answer) {
-                seed[l.line_ref] = { physicalState: l.default_physical_state, resolution: null };
-            }
-        });
-        return seed;
-    });
-    // Open the first line that needs a human; failing that the first line, so a fully
-    // pre-answered order doesn't present as a wall of collapsed rows.
+/** The question list on its own. `answers` is { [line_ref]: answer }; onChange(next). */
+export function CutQuestions({ lines, answers, onChange, initiallyExpanded = 'first-unanswered' }) {
     const [expanded, setExpanded] = useState(() => {
-        const shown = (plan?.lines || []).filter(l => l.will_reverse !== false);
-        const first = shown.find(l => l.requires_explicit_answer) || shown[0];
+        if (initiallyExpanded !== 'first-unanswered') return initiallyExpanded;
+        const first = (lines || []).find(l => !lineAnswered(l, answers?.[l.line_ref])) || (lines || [])[0];
         return first ? first.line_ref : null;
     });
 
-    // Lines an edit leaves untouched come back flagged will_reverse:false — their material
-    // never moves, so asking about them would be noise. A cancel reverses everything and
-    // never sets the flag, so nothing is filtered there.
-    const lines = (plan?.lines || []).filter(l => l.will_reverse !== false);
-
-    const { unanswered, unknown } = useMemo(() => {
-        const u = [], k = [];
-        lines.forEach(l => {
-            const a = answers[l.line_ref];
-            if (!a?.physicalState) u.push(l);
-            else if (a.physicalState === 'unknown') k.push(l);
-        });
-        return { unanswered: u, unknown: k };
-    }, [lines, answers]);
-
-    const canSubmit = unanswered.length === 0 && unknown.length === 0;
-
     // Lines cut from the same physical sheet (same sheet_group) are one piece of glass, so
-    // they take ONE cut/not-cut answer: answering any of them answers all. Two lines on one
-    // sheet answered differently is how order 201 put an already-cut 5mm sheet back in stock.
-    const setAnswer = (ref, value) => setAnswers(prev => {
+    // they take ONE cut/not-cut answer: answering any of them answers all.
+    const setAnswer = (ref, value) => {
         const group = lines.find(l => l.line_ref === ref)?.sheet_group;
-        if (!group) return { ...prev, [ref]: value };
-        const next = { ...prev };
-        lines.filter(l => l.sheet_group === group).forEach(l => {
-            next[l.line_ref] = {
-                physicalState: value.physicalState,
-                resolution: value.physicalState === 'already_cut'
-                    ? (l.line_ref === ref ? value.resolution : (l.default_resolution || 'return_to_pool'))
-                    : null,
-            };
-        });
-        return next;
-    });
+        const next = { ...(answers || {}) };
+        if (!group) {
+            next[ref] = value;
+        } else {
+            lines.filter(l => l.sheet_group === group).forEach(l => {
+                const prev = next[l.line_ref] || {};
+                next[l.line_ref] = {
+                    ...prev,
+                    physicalState: value.physicalState,
+                    resolution: value.physicalState === 'already_cut'
+                        ? (l.line_ref === ref ? value.resolution : (l.default_resolution || 'return_to_pool'))
+                        : null,
+                    laterCuts: l.line_ref === ref ? value.laterCuts : { ...(prev.laterCuts || {}), ...(value.laterCuts || {}) },
+                };
+            });
+        }
+        onChange(next);
+    };
 
-    // Short labels of the other lines on each shared sheet, for the "same sheet" hint.
     const sheetMates = ref => {
         const group = lines.find(l => l.line_ref === ref)?.sheet_group;
         return group ? lines.filter(l => l.sheet_group === group && l.line_ref !== ref)
             .map(l => l.cut_description) : [];
     };
 
-    const handleConfirm = () => {
-        if (!canSubmit) return;
-        const payload = {};
-        Object.entries(answers).forEach(([ref, a]) => {
-            payload[ref] = {
-                physicalState: a.physicalState,
-                resolution: a.physicalState === 'already_cut' ? (a.resolution || 'return_to_pool') : null,
-            };
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+            {(lines || []).map(line => (
+                <LineRow
+                    key={line.line_ref}
+                    line={line}
+                    sheetMates={sheetMates(line.line_ref)}
+                    answer={answers?.[line.line_ref]}
+                    onAnswer={v => setAnswer(line.line_ref, v)}
+                    expanded={expanded === line.line_ref}
+                    onToggle={() => setExpanded(expanded === line.line_ref ? null : line.line_ref)}
+                />
+            ))}
+        </div>
+    );
+}
+
+export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel = 'Continue', notice = null, initialAnswers = null }) {
+    // Lines an edit leaves untouched come back flagged will_reverse:false - their material
+    // never moves, so asking about them would be noise.
+    const lines = (plan?.lines || []).filter(l => l.will_reverse !== false);
+
+    // Answers given in the calculators arrive pre-filled; lines the backend says are safe to
+    // take on trust are pre-answered from their default. Everything else is left blank.
+    const [answers, setAnswers] = useState(() => {
+        const seed = {};
+        lines.forEach(l => {
+            if (initialAnswers?.[l.line_ref]) {
+                seed[l.line_ref] = initialAnswers[l.line_ref];
+            } else if (!l.requires_explicit_answer) {
+                seed[l.line_ref] = { physicalState: l.default_physical_state, resolution: null, laterCuts: {} };
+            }
         });
-        onConfirm(payload);
-    };
+        return seed;
+    });
 
-    if (!plan) return null;
+    const unanswered = useMemo(() => lines.filter(l => !lineAnswered(l, answers[l.line_ref])), [lines, answers]);
+    const canSubmit = unanswered.length === 0;
 
+    if (!plan || !lines.length) return null;
     const hasLegacy = lines.some(l => l.legacy);
-    // Nothing this action disturbs — caller shouldn't have opened it, but don't show an
-    // empty dialog if it did.
-    if (!lines.length) return null;
 
     return (
         <div style={{
             position: 'fixed', inset: 0, zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
             background: 'rgba(9,14,26,0.85)', backdropFilter: 'blur(12px)',
         }} onClick={onClose}>
-            <div onClick={e => e.stopPropagation()} style={{
+            <div data-testid="resolve-cuts-modal" onClick={e => e.stopPropagation()} style={{
                 width: '100%', maxWidth: '520px', maxHeight: '90vh', display: 'flex', flexDirection: 'column',
                 background: 'linear-gradient(145deg, rgba(13,20,38,0.99), rgba(9,14,26,0.99))',
                 border: '1px solid rgba(34,211,238,0.2)', borderRadius: '1.5rem', overflow: 'hidden',
                 boxShadow: '0 32px 80px rgba(0,0,0,0.7)', animation: 'fadeInScale 0.2s ease',
             }}>
-                {/* Header */}
                 <div className="modal-header-pad" style={{
                     padding: '1.25rem 1.75rem', borderBottom: '1px solid rgba(255,255,255,0.07)',
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexShrink: 0,
@@ -289,10 +307,7 @@ export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel
                     }}>✕</button>
                 </div>
 
-                {/* Body */}
-                <div className="modal-body-pad" style={{ padding: '1.25rem 1.75rem', overflowY: 'auto', flex: 1 }}>
-                    {/* Why the modal reopened: the material moved since it was last answered
-                        (a 409 from the server). Without this it just looks like a glitch. */}
+                <div className="modal-body-pad" style={{ padding: '1.25rem 1.75rem', overflowY: 'auto', flex: 1, minHeight: 0 }}>
                     {notice && (
                         <div style={{
                             marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: 'rgba(245,158,11,0.1)',
@@ -307,38 +322,19 @@ export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel
                             color: '#c4b5fd', fontSize: '0.7rem', fontWeight: 600,
                         }}>No offcut history on some lines — check the material.</div>
                     )}
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
-                        {lines.map(line => (
-                            <LineRow
-                                key={line.line_ref}
-                                line={line}
-                                sheetMates={sheetMates(line.line_ref)}
-                                answer={answers[line.line_ref]}
-                                onAnswer={v => setAnswer(line.line_ref, v)}
-                                expanded={expanded === line.line_ref}
-                                onToggle={() => setExpanded(expanded === line.line_ref ? null : line.line_ref)}
-                            />
-                        ))}
-                    </div>
+                    <CutQuestions lines={lines} answers={answers} onChange={setAnswers} />
                 </div>
 
-                {/* Footer */}
                 <div style={{
                     padding: '1rem 1.75rem 1.25rem', borderTop: '1px solid rgba(255,255,255,0.07)',
                     flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem',
                 }}>
-                    {unknown.length > 0 && (
-                        <div style={{ fontSize: '0.72rem', color: '#f87171', fontWeight: 600 }}>
-                            {unknown.length} {unknown.length === 1 ? 'line needs' : 'lines need'} a floor check.
-                        </div>
-                    )}
                     <div style={{ display: 'flex', gap: '0.625rem' }}>
                         <button type="button" onClick={onClose} style={{
                             flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.1)',
                             background: 'rgba(255,255,255,0.04)', color: '#94a3b8', fontWeight: 700, fontSize: '0.875rem', cursor: 'pointer',
                         }}>Back</button>
-                        <button type="button" onClick={handleConfirm} disabled={!canSubmit} style={{
+                        <button type="button" data-testid="confirm-cuts" onClick={() => canSubmit && onConfirm(answersPayload(lines, answers))} disabled={!canSubmit} style={{
                             flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: 'none',
                             cursor: canSubmit ? 'pointer' : 'not-allowed',
                             background: canSubmit ? 'linear-gradient(135deg, #22d3ee, #0891b2)' : 'rgba(34,211,238,0.25)',

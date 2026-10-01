@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, memo } from 'react';
+import { heldByEditedItem } from '../../../utils/editHoldings';
 
 const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const attributeKeys = Object.keys(product.attributes || {});
@@ -44,14 +45,16 @@ const DynamicCalculator = memo(({ product, initialDetails, onUpdate }) => {
     useEffect(() => {
         let isValid = true;
         if (activeVariant && stockCount !== undefined) {
-            if (qty > stockCount) { setError(`Only ${stockCount} items available in stock`); isValid = false; }
+            // Editing: the item's own units come back before the new quantity is taken.
+            const available = stockCount + heldByEditedItem(initialDetails, activeVariant.variantId || activeVariant.id);
+            if (qty > available) { setError(`Only ${available} items available in stock`); isValid = false; }
             else setError(null);
         } else setError(null);
 
         const total = qty * currentPrice;
         const variantName = attributeKeys.map(k => selections[k]).join(' - ');
         onUpdate(total, { selections, qty, variantId: activeVariant?.variantId || activeVariant?.id, description: variantName, isDynamic: true, isValid });
-    }, [qty, currentPrice, selections, activeVariant, onUpdate, attributeKeys, stockCount]);
+    }, [qty, currentPrice, selections, activeVariant, onUpdate, attributeKeys, stockCount, initialDetails]);
 
     const labelStyle = { fontSize: '0.62rem', fontWeight: 700, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase' };
     const sectionStyle = { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '0.875rem', padding: '1rem', marginBottom: '0.75rem' };

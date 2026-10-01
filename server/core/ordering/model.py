@@ -61,7 +61,9 @@ class OrderResponse(BaseModel):
     total: float = 0.0
     source_invoice_id: Optional[int] = None
     items: List["OrderItemResponse"] = []
-    
+    # Latest change to the order (a stock operation id, or "none"); see OrderEditRequest.
+    version: Optional[str] = None
+
 class OrderUpdateRequest(BaseModel):
     amountPaid: Optional[float] = None
     totalAmount: Optional[float] = None    
@@ -143,6 +145,10 @@ class OrderEditRequest(BaseModel):
     # See OrderCancelRequest.cutConfirmations / planToken — same shape, same rules.
     cutConfirmations: Optional[Dict[str, Dict[str, Any]]] = None
     planToken: Optional[str] = None
+    # The order's version when it was opened for editing (OrderResponse.version). A save made
+    # against an older version - another device changed the order meanwhile - is refused
+    # instead of silently undoing that change. Omitted by callers that don't track it.
+    orderVersion: Optional[str] = None
 
 class OffcutRemainderInput(BaseModel):
     """One corrected remainder piece (width/height in mm). status defaults to
@@ -267,6 +273,19 @@ class ReversalChain(BaseModel):
     pieces: List[ReversalChainPiece] = []
 
 
+class LaterCut(BaseModel):
+    """A cut a LATER order made from the same bar/sheet as a line being reversed. The
+    operator is asked whether it has been made too: it decides the cutting instruction for
+    what comes back, and a "yes" marks that order's item as cut."""
+    item_id: int
+    order_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    product_name: Optional[str] = None
+    cut: Optional[str] = None
+    default_state: str
+    piece_id: Optional[int] = None
+
+
 class ReversalPlanLine(BaseModel):
     """One cut line awaiting physical confirmation before an edit or cancel."""
     line_ref: str
@@ -295,6 +314,12 @@ class ReversalPlanLine(BaseModel):
     # Lines cut from the same physical sheet share this value (None when a line has its
     # sheet to itself). They are one piece of glass, so they take one cut/not-cut answer.
     sheet_group: Optional[str] = None
+    # Cuts later orders took from this line's leftover, in the order they were made.
+    later_cuts: List[LaterCut] = []
+    # What comes back for each answer, in pieces - e.g. {"not_cut": ["13.00 (6.00 + 7.00)"]}.
+    returns: Dict[str, List[str]] = {}
+    # Correction screen only: what was answered for this line originally.
+    previous_answer: Optional[Dict[str, Any]] = None
 
 
 class ReversalPlanRequest(BaseModel):
@@ -334,3 +359,54 @@ class EditHistoryResponse(BaseModel):
         from_attributes = True
 
 
+
+
+
+# ── Order change history, undo and correction ────────────────────────────────
+
+class OrderOperation(BaseModel):
+    op_id: str
+    kind: str
+    status: str
+    created_at: str
+    actor_name: Optional[str] = None
+    notes: Optional[str] = None
+    cut_confirmations: List[Dict[str, Any]] = []
+    undoes_op_id: Optional[str] = None
+    undone_by_op_id: Optional[str] = None
+    can_undo: bool = False
+
+
+class UndoRequest(BaseModel):
+    pin: str
+    reason: str
+    # Only asked when the change moved money: did that money really change hands? False
+    # records a correcting payment so the order goes back to how it was paid before.
+    moneyHandled: Optional[bool] = None
+
+
+class CorrectPreviewRequest(BaseModel):
+    cutConfirmations: Dict[str, Dict[str, Any]] = {}
+
+
+class CorrectRequest(BaseModel):
+    pin: str
+    reason: str
+    cutConfirmations: Dict[str, Dict[str, Any]] = {}
+
+
+class UndoPreviewResponse(BaseModel):
+    undoable: bool
+    reasons: List[str] = []
+    lines: List[str] = []
+    items_added: List[str] = []
+    items_removed: List[str] = []
+    money_note: Optional[str] = None
+    # Money the change being undone recorded (+ collected, - refunded); 0 when none.
+    money_moved: float = 0.0
+
+
+
+class ProjectedOffcutsRequest(BaseModel):
+    answers: Dict[str, Dict[str, Any]] = {}
+    variantId: Optional[int] = None

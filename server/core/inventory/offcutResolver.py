@@ -125,6 +125,19 @@ def _describe_blocker(db: Session, piece: OffcutPiece) -> dict:
     }
 
 
+def vanished_leftover(db: Session, piece: OffcutPiece) -> bool:
+    """A leftover taken out of the books by hand: retired with no replacement, and never
+    consumed by an order, merged into another piece or corrected into a new one."""
+    from sqlmodel import select as _select
+    from entities.offcutLedger import OffcutPieceEvent
+
+    if piece.state != "retired" or piece.superseded_by_piece_id is not None:
+        return False
+    events = {e.event for e in db.exec(_select(OffcutPieceEvent).where(
+        OffcutPieceEvent.piece_id == piece.piece_id)).all()}
+    return not (events & {ledger.EVENT_CONSUMED, ledger.EVENT_JOINED, ledger.EVENT_CORRECTED})
+
+
 def _remainder_pieces_for(db: Session, src: dict, is_2d: bool) -> tuple:
     """The remainder piece(s) this consumption recorded producing.
 
@@ -234,6 +247,14 @@ def resolve_source(
     # A remainder that is no longer available was consumed, scrapped or retired by
     # something else; either way the material is not ours to hand back.
     not_available = [p for p in remainder_pieces if p.state != STATE_AVAILABLE]
+    if physical_state == plan.PHYS_NOT_CUT:
+        # ...except a leftover that was only DELETED (Offcut Management, a reconcile) - not
+        # cut by another order, not merged into another piece. If the cut was never made,
+        # that leftover never existed as a separate piece; its material is still part of the
+        # source, so its deletion is no reason to hold the source back. Order 201: its
+        # 633x480 leftover was deleted by hand, and "not cut" returned the 1373x1220 offcut
+        # in two rejoined parts instead of whole.
+        not_available = [p for p in not_available if not vanished_leftover(db, p)]
 
     intact = not blockers and not not_available and all_ids_present
 
@@ -338,3 +359,81 @@ def log_divergence(reversal: Reversal, legacy_intact: bool, context: str) -> Non
             f"offcut resolver [{context}]: size matching found no intact remainder, but the "
             f"chain says this reversal is clean ({reversal.detail}). Crediting the whole unit."
         )
+
+
+# -- Following a bar forward: later cuts and where the rest of it is now ---------
+
+def chain_walk(db: Session, remainder: Optional[OffcutPiece], *, exclude_item_ids=()) -> tuple:
+    """Follow a cut's leftover forward through every later order that cut from it.
+
+    Returns (consumers, leaf):
+      consumers  the pieces later orders consumed along this bar, in the order they were cut
+      leaf       the piece that holds what is left of the bar NOW (available), or None when
+                 nothing is left (cut away exactly, retired, or consumed by the item being
+                 reversed itself)
+
+    In one dimension every cut leaves at most one remainder, so this is a single path:
+    a consumed piece continues at the remainder its consumer produced, a piece merged into a
+    rejoined one continues at that piece (superseded_by_piece_id).
+    """
+    from core.inventory.offcutLedger import children
+
+    excluded = set(exclude_item_ids or ())
+    consumers: List[OffcutPiece] = []
+    current = remainder
+    seen = set()
+    while current is not None and current.piece_id not in seen:
+        seen.add(current.piece_id)
+        if current.state == STATE_AVAILABLE:
+            return consumers, current
+        if current.state == "retired":
+            if current.superseded_by_piece_id:
+                current = ledger.get_piece(db, current.superseded_by_piece_id)
+                continue
+            return consumers, None
+        # consumed
+        if current.consumed_by_item_id in excluded or not ledger._consumption_is_live(db, current):
+            return consumers, None
+        consumers.append(current)
+        nxt = None
+        for child in sorted(children(db, current.piece_id), key=lambda p: p.piece_id):
+            if (child.produced_by_item_id == current.consumed_by_item_id
+                    and child.origin in (ledger.ORIGIN_CUT_REMAINDER, ledger.ORIGIN_REJOIN)):
+                nxt = child
+                break
+        current = nxt
+    return consumers, None
+
+
+def later_cut_info(db: Session, consumed: OffcutPiece) -> dict:
+    """What the operator is shown about one later cut: whose order, what size, and whether
+    that order's cutting was already reported."""
+    from core.inventory import reversalPlan as rp
+    from entities.products import Product
+    from sqlmodel import select as _select
+    from entities.offcutLedger import OffcutPieceEvent
+
+    item = db.get(OrderItem, consumed.consumed_by_item_id) if consumed.consumed_by_item_id else None
+    order_id = consumed.consumed_by_order_id or (item.order_id if item else None)
+    order = db.get(Order, order_id) if order_id else None
+    product = db.get(Product, consumed.product_id)
+    ev = db.exec(_select(OffcutPieceEvent).where(
+        OffcutPieceEvent.piece_id == consumed.piece_id,
+        OffcutPieceEvent.event == ledger.EVENT_CONSUMED,
+    ).order_by(OffcutPieceEvent.seq.desc())).first()
+    cut = ((ev.payload or {}).get("cut") or {}) if ev else {}
+    if consumed.geom_kind == ledger.GEOM_2D:
+        pieces = cut.get("pieces") or []
+        label = ", ".join(f"{p.get('width', 0):.0f}x{p.get('height', 0):.0f}mm" for p in pieces) or "glass cut"
+    else:
+        length = cut.get("length")
+        label = f"{float(length):.2f}" if length else "cut"
+    return {
+        "item_id": item.item_id if item else consumed.consumed_by_item_id,
+        "order_id": order_id,
+        "customer_name": order.customer_name if order else None,
+        "product_name": product.name if product else None,
+        "cut": label,
+        "default_state": rp.default_physical_state(item) if item else rp.PHYS_UNKNOWN,
+        "piece_id": consumed.piece_id,
+    }

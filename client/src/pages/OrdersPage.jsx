@@ -1,5 +1,6 @@
 import { useOrders } from '../context/OrderContext';
 import { useAuth } from '../context/AuthContext';
+import { ROUTE_ROLES } from '../config/routePermissions';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useState, useEffect, useCallback, useMemo, useDeferredValue } from 'react';
 import OrderCard from '../components/orders/OrderCard';
@@ -72,11 +73,11 @@ export default function OrdersPage() {
         try {
             // Fetch the full order including items (list endpoint returns items=[])
             const full = await import('../services/api').then(m => m.default.orderService.getOrder(order.id));
-            navigate('/sales', { state: { mode: 'edit', orderData: { ...full, id: full.orderId, customer: order.customer } } });
+            navigate('/sales', { state: { mode: 'edit', editNonce: Date.now(), orderData: { ...full, id: full.orderId, customer: order.customer } } });
         } catch (err) {
             console.error('Failed to fetch order for editing', err);
             // Fallback with shallow data
-            navigate('/sales', { state: { mode: 'edit', orderData: order } });
+            navigate('/sales', { state: { mode: 'edit', editNonce: Date.now(), orderData: order } });
         }
     }, [navigate]);
     const handleViewOrder = useCallback(async (order) => {
@@ -212,7 +213,7 @@ export default function OrdersPage() {
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                                     {group.items.map(order => (
-                                        <OrderCard key={order.id} order={order} onAddTo={isCeo ? undefined : handleAddTo} onEdit={handleEdit} onCancel={startCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} canManage={canManageOrders} />
+                                        <OrderCard key={order.id} order={order} onAddTo={isCeo ? undefined : handleAddTo} onEdit={ROUTE_ROLES['/sales'].includes(user?.role) ? handleEdit : undefined} onCancel={startCancel} onView={handleViewOrder} highlighted={String(order.id) === String(highlightId)} canManage={canManageOrders} />
                                     ))}
                                 </div>
                             </div>

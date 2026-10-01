@@ -247,7 +247,10 @@ def preview_glass_cuts(
     same scoring/batching as a real sale, but nothing is persisted. Lets a cashier
     or manager check the optimization before committing to an order.
     """
-    return service.preview_glass_cuts(product_id, payload.cuts, db, payload.variant_id)
+    return service.preview_glass_cuts(product_id, payload.cuts, db, payload.variant_id,
+                                      edit_order_id=payload.edit_order_id,
+                                      edit_item_id=payload.edit_item_id,
+                                      edit_answers=payload.edit_answers)
 
 @router.post("/{product_id}/offcut-replacement-preview")
 def preview_offcut_replacement(
@@ -282,7 +285,9 @@ def check_cut_feasibility(
     preview (glass-cut-preview) which surfaces failures as 422.
     """
     return service.check_cut_feasibility(product_id, payload.line_items, db, payload.variant_id,
-                                         edit_order_id=payload.edit_order_id)
+                                         edit_order_id=payload.edit_order_id,
+                                         edit_item_id=payload.edit_item_id,
+                                         edit_answers=payload.edit_answers)
 
 @router.get("/{product_id}/availability", response_model=model.StockAvailabilityResponse)
 def check_availability(

@@ -11,6 +11,8 @@ from core.userManagement.authService import get_current_user
 from loggiing import logger
 from utils import require_role
 from core.inventory.openContainers.service import convert_product_stock_mode
+from core.audit.opContext import stock_operation
+from entities.opJournal import OP_OFFCUT_ADMIN, OP_OFFCUT_ENTRY, OP_RESTOCK
 
 
 def create_product(
@@ -149,6 +151,7 @@ def getAllProducts(
         logger.error(f"Get Products Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch products")
 
+@stock_operation(OP_RESTOCK, order_arg=None)
 def update_product(
     product_id: int, 
     update_data: model.ProductUpdateRequest, 
@@ -320,6 +323,7 @@ def add_variants_bulk(product_id: int, variants_data: List[model.VariantCreate],
         logger.error(f"Add Variants Bulk Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@stock_operation(OP_RESTOCK, order_arg=None)
 def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Session = Depends(get_session), current_user=None):
     try:
         variant = db.get(Variant, variant_id)
@@ -499,6 +503,7 @@ def add_subcategory(category_id: int, name: str, db: Session = Depends(get_sessi
 
 # --- STOCK ---
 
+@stock_operation(OP_RESTOCK, order_arg=None)
 def update_simple_product_stock(product_id: int, stock_change: int, db: Session, current_user=None) -> dict:
     """
     Add or remove stock from a simple (non-variant) product.
@@ -610,6 +615,7 @@ def get_offcuts_for_product(
     return db.exec(stmt).all()
 
 
+@stock_operation(OP_OFFCUT_ENTRY, order_arg=None)
 def add_offcuts_bulk(
     product_id: int,
     offcuts_data: List["model.OffcutCreate"],
@@ -751,6 +757,7 @@ def list_all_offcuts(
     ]
 
 
+@stock_operation(OP_OFFCUT_ADMIN, order_arg=None)
 def update_offcut_admin(
     offcut_id: int,
     payload: "model.OffcutAdminUpdate",
@@ -867,6 +874,7 @@ def update_offcut_admin(
     )
 
 
+@stock_operation(OP_OFFCUT_ADMIN, order_arg=None)
 def bulk_delete_offcuts(
     offcut_ids: List[int],
     db: Session,
@@ -910,6 +918,15 @@ def bulk_delete_offcuts(
                 "quantity": offcut.quantity,
                 "status": offcut.status,
             })
+            # The pieces this row projected are declared physically gone too. Without this
+            # they stayed `available` in the ledger with no row behind them (order 182's 06:00
+            # delete left four such phantoms), and a later reversal could treat them as
+            # material it can hand back.
+            from core.inventory import offcutLedger as ledger
+            ledger.retire_pieces_for_row(
+                db, offcut.offcutId, reason="deleted in Offcut Management",
+                actor_id=getattr(current_user, "userId", None),
+            )
             safe_delete_offcut(db, offcut)
 
         if current_user is not None:
@@ -1023,6 +1040,9 @@ def preview_glass_cuts(
     cuts: List["model.GlassCutPreviewCut"],
     db: Session,
     variant_id: Optional[int] = None,
+    edit_order_id: Optional[int] = None,
+    edit_item_id: Optional[int] = None,
+    edit_answers: Optional[Dict[str, Any]] = None,
 ):
     """
     Dry-run the 2D glass offcut decision engine for a hypothetical set of cuts —
@@ -1047,17 +1067,27 @@ def preview_glass_cuts(
     variant = db.get(Variant, variant_id) if variant_id else None
     pool_key = compute_pool_key(db, variant)
 
-    pre_existing_stmt = select(Offcut.offcutId).where(Offcut.product_id == product_id, Offcut.pool_key == pool_key)
-    pre_existing_ids = set(db.exec(pre_existing_stmt).all())
+    from core.audit.opContext import operation
+    from core.inventory.inventoryService import _simulate_edit_return
+    from entities.opJournal import OP_EDIT
 
     lines = [
         {"type": "glass-cut", "qty": c.qty, "meta": {"l": c.l, "w": c.w, "u": c.u}}
         for c in cuts
     ]
     try:
-        optimization = resolve_glass_cut_lines(db, product, variant, lines)
-        all_events = [e for line in lines for e in line.get("offcut_sources", [])]
-        groups = _consolidate_preview_events(all_events, pre_existing_ids)
+        with operation(db, OP_EDIT, order_id=edit_order_id, persist=False):
+            # Editing a saved order: give its own material back first, with the cut answers
+            # given in the calculator - exactly what the edit does before re-cutting - so the
+            # preview can use the offcuts this order is about to return (rolled back below).
+            if edit_order_id:
+                _simulate_edit_return(db, product, edit_order_id, lines,
+                                      item_id=edit_item_id, answers=edit_answers)
+            pre_existing_stmt = select(Offcut.offcutId).where(Offcut.product_id == product_id, Offcut.pool_key == pool_key)
+            pre_existing_ids = set(db.exec(pre_existing_stmt).all())
+            optimization = resolve_glass_cut_lines(db, product, variant, lines)
+            all_events = [e for line in lines for e in line.get("offcut_sources", [])]
+            groups = _consolidate_preview_events(all_events, pre_existing_ids)
         return {"groups": groups, "optimization": optimization}
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -1105,6 +1135,8 @@ def check_cut_feasibility(
     db: Session,
     variant_id: Optional[int] = None,
     edit_order_id: Optional[int] = None,
+    edit_item_id: Optional[int] = None,
+    edit_answers: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """
     Dry-run whether the given line items — profile full/half/custom-cut
@@ -1124,7 +1156,8 @@ def check_cut_feasibility(
         raise HTTPException(status_code=404, detail="Product not found")
     variant = db.get(Variant, variant_id) if variant_id else None
 
-    return check_line_items_feasible(db, product, variant, line_items, edit_order_id=edit_order_id)
+    return check_line_items_feasible(db, product, variant, line_items, edit_order_id=edit_order_id,
+                                     edit_item_id=edit_item_id, edit_answers=edit_answers)
 
 
 def check_stock_availability(product_id: int, qty: int, db: Session = Depends(get_session), variant_id: Optional[int] = None):

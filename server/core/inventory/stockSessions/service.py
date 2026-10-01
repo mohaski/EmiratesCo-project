@@ -14,6 +14,8 @@ from core.inventory.poolKey import compute_pool_key
 from loggiing import logger
 from utils import require_role
 from . import model
+from core.audit.opContext import stock_operation
+from entities.opJournal import OP_STOCK_SESSION
 
 
 def _username(db: Session, user_id: UUID) -> str:
@@ -162,6 +164,7 @@ def _apply_offcut_line(db: Session, session_id: int, line: "model.OffcutLineCrea
     )
 
 
+@stock_operation(OP_STOCK_SESSION, order_arg=None)
 def finalize_stock_input_session(
     payload: model.StockInputSessionCreate,
     db: Session,
@@ -289,6 +292,7 @@ def get_stock_input_session(session_id: int, db: Session) -> model.StockInputSes
     )
 
 
+@stock_operation(OP_STOCK_SESSION, order_arg=None)
 def correct_stock_input_session_item(
     session_id: int,
     item_id: int,
@@ -473,6 +477,7 @@ def _correct_offcut_line(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@stock_operation(OP_STOCK_SESSION, order_arg=None)
 def delete_stock_input_session_offcut(
     session_id: int,
     item_id: int,

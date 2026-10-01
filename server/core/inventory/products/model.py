@@ -279,6 +279,11 @@ class GlassCutPreviewCut(BaseModel):
 class GlassCutPreviewRequest(BaseModel):
     variant_id: Optional[int] = None
     cuts: List[GlassCutPreviewCut]
+    # Editing a saved order: the preview reverses that item with these cut answers first,
+    # as the edit will (see LineItemsFeasibilityRequest).
+    edit_order_id: Optional[int] = None
+    edit_item_id: Optional[int] = None
+    edit_answers: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class OffcutReplacementPreviewPiece(BaseModel):
@@ -303,6 +308,10 @@ class LineItemsFeasibilityRequest(BaseModel):
     # Set when the item belongs to an order being EDITED: the dry run first gives that
     # order's own material back, as the edit itself will (inventoryService._simulate_edit_return).
     edit_order_id: Optional[int] = None
+    # The item of that order being changed, and the cut answers given for it in the
+    # calculator: the dry run reverses it exactly as the edit will (joined pieces included).
+    edit_item_id: Optional[int] = None
+    edit_answers: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class LineItemsFeasibilityResponse(BaseModel):

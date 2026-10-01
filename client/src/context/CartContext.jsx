@@ -64,6 +64,31 @@ export const CartProvider = ({ children }) => {
         }
     });
 
+    // The saved order this cart is an edit of, or null for a new sale:
+    //   { orderId, version, nonce, originalTotal, originalBalance, vat }
+    // Persisted with the cart, so a reload, "Back" from checkout or a trip to another page
+    // keeps the edit (and the cashier's changes) instead of turning the cart into a new
+    // sale or reloading the order as it was. Cleared only by saving, discarding, or loading
+    // something else into the cart. `version` is sent with the save: an order changed on
+    // another device since is refused rather than overwritten.
+    const [editSession, setEditSession] = useState(() => {
+        try {
+            const saved = localStorage.getItem('emirates_pos_edit_session');
+            return saved ? JSON.parse(saved) : null;
+        } catch {
+            return null;
+        }
+    });
+    useEffect(() => {
+        try {
+            if (editSession) localStorage.setItem('emirates_pos_edit_session', JSON.stringify(editSession));
+            else localStorage.removeItem('emirates_pos_edit_session');
+        } catch { /* storage unavailable - the edit just won't survive a reload */ }
+    }, [editSession]);
+    // The calculators' stock check sends it along so the dry run first gives that order's
+    // own material back, as the edit will.
+    const editingOrderId = editSession?.orderId ?? null;
+
     // 2. Auto-save to LocalStorage whenever state changes
     useEffect(() => {
         localStorage.setItem('emirates_pos_cart', JSON.stringify(cartItems));
@@ -80,6 +105,7 @@ export const CartProvider = ({ children }) => {
             setCustomer(null);
             setSessionType('sales');
             setLinkedRef(null);
+            setEditSession(null);
         };
         window.addEventListener('pos:logout', handleLogout);
         return () => window.removeEventListener('pos:logout', handleLogout);
@@ -103,27 +129,21 @@ export const CartProvider = ({ children }) => {
         setCartItems(prev => prev.filter((_, i) => i !== index));
     }, []);
 
-    // The order this cart is an edit of, or null for a new sale. The calculators' stock
-    // check sends it along so the dry run first gives that order's own material back, as
-    // the edit will — otherwise a cut whose hand-picked offcut this very order used up is
-    // reported as impossible ("Offcut #N no longer exists") and Add to Order is disabled.
-    // Not persisted: SalesDashboard sets it from the navigation state on every load.
-    const [editingOrderId, setEditingOrderId] = useState(null);
 
     const clearCart = useCallback(() => {
         setCartItems([]);
         setCustomer(null);
         setLinkedRef(null);
-        setEditingOrderId(null);
+        setEditSession(null);
         // We typically keep tax settings even after clearing
     }, []);
 
-    // Used when editing a historical order (and resuming one). `editingOrderId` is passed
-    // only for a real edit of a saved order.
-    const loadOrder = useCallback((orderData, { editingOrderId: editing = null } = {}) => {
+    // Used when editing a historical order (and resuming one). `editSession` is passed only
+    // for a real edit of a saved order; anything else loaded ends any edit in progress.
+    const loadOrder = useCallback((orderData, { editSession: session = null } = {}) => {
         setCartItems(orderData.items || []);
         setCustomer(orderData.customer || null);
-        setEditingOrderId(editing);
+        setEditSession(session);
     }, []);
 
     const value = {
@@ -142,7 +162,8 @@ export const CartProvider = ({ children }) => {
         clearCart,
         loadOrder,
         editingOrderId,
-        setEditingOrderId,
+        editSession,
+        setEditSession,
     };
 
     return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

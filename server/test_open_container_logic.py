@@ -11,6 +11,7 @@ Covers the dispatcher paths in core/inventory/inventoryService.py that a real
 checkout goes through (_process_line_items / _restore_line_items), since those
 are where a mistake would silently corrupt stock.
 """
+from entities.opJournal import JournalEntry, StockOperation
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -56,7 +57,9 @@ def fresh_db():
                    # Needed even though open containers are not piece-tracked:
                    # safe_delete_offcut detaches the offcut ledger's advisory
                    # back-pointers before deleting any pooled row.
-                   OffcutPiece, OffcutPieceEvent):
+                   OffcutPiece, OffcutPieceEvent,
+                   # Every flush journals into these (core/audit/journal.py).
+                   StockOperation, JournalEntry):
         entity.__table__.create(engine, checkfirst=True)
     with Session(engine) as db:
         db.exec(text(

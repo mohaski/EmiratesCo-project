@@ -40,15 +40,18 @@ from entities.offcutLedger import (
     EVENT_CONSUMED,
     EVENT_CORRECTED,
     EVENT_CREATED,
+    EVENT_JOINED,
     EVENT_RELEASED,
     EVENT_RETIRED,
     EVENT_SCRAPPED,
+    EVENT_UNDONE,
     GEOM_1D,
     GEOM_2D,
     ORIGIN_CORRECTION,
     ORIGIN_CUT_REMAINDER,
     ORIGIN_LEGACY,
     ORIGIN_MANUAL_ENTRY,
+    ORIGIN_REJOIN,
     ORIGIN_RESTORE_CREDIT,
     ORIGIN_STOCK_UNIT,
     STATE_AVAILABLE,
@@ -136,13 +139,27 @@ def _log(
     order_id: Optional[int] = None,
     actor_id: Optional[UUID] = None,
     payload: Optional[dict] = None,
+    from_state: Optional[str] = None,
 ) -> OffcutPieceEvent:
+    # Stamp the running operation (core/audit/opContext) onto every event: who did it, as
+    # part of which order's action, and which operation. Explicit arguments win; the context
+    # only fills in what the call site didn't know.
+    from core.audit.opContext import current as _current_op
+
+    op = _current_op()
+    order_id = _resolve_order_id(db, item_id, order_id)
+    if order_id is None and op is not None:
+        order_id = op.order_id
+    if actor_id is None and op is not None:
+        actor_id = op.actor_id
     row = OffcutPieceEvent(
         piece_id=piece.piece_id,
         seq=_next_seq(db, piece.piece_id),
         event=event,
         item_id=item_id,
         order_id=order_id,
+        op_id=op.op_id if op is not None else None,
+        from_state=from_state,
         # Call sites disagree about the type: some hold current_user.userId as a
         # UUID, others as the string form (products/service.py's add_offcuts_bulk
         # does UUID(current_user.userId)). Normalize rather than make every caller
@@ -185,7 +202,12 @@ def mint_piece(
     if not ledger_enabled():
         return None
 
+    from core.audit.opContext import current as _current_op
+
+    op = _current_op()
     produced_by_order_id = _resolve_order_id(db, produced_by_item_id, produced_by_order_id)
+    if produced_by_order_id is None and op is not None:
+        produced_by_order_id = op.order_id
     piece = OffcutPiece(
         parent_piece_id=parent.piece_id if parent else None,
         depth=(parent.depth + 1) if parent else 0,
@@ -199,6 +221,7 @@ def mint_piece(
         produced_by_order_id=produced_by_order_id,
         offcut_row_id=offcut_row_id,
         notes=notes,
+        produced_by_op_id=op.op_id if op is not None else None,
         **geom,
     )
     db.add(piece)
@@ -231,6 +254,7 @@ def consume_piece(
     if not ledger_enabled() or piece is None:
         return
     order_id = _resolve_order_id(db, item_id, order_id)
+    prior = piece.state
     piece.state = STATE_CONSUMED
     piece.consumed_by_item_id = item_id
     piece.consumed_by_order_id = order_id
@@ -240,7 +264,7 @@ def consume_piece(
     if cut_geom:
         body["cut"] = cut_geom
     _log(db, piece, EVENT_CONSUMED, item_id=item_id, order_id=order_id, actor_id=actor_id,
-         payload=body or None)
+         payload=body or None, from_state=prior)
 
 
 def release_piece(
@@ -256,13 +280,14 @@ def release_piece(
     `released` event is appended after it."""
     if not ledger_enabled() or piece is None:
         return
+    prior = piece.state
     piece.state = STATE_AVAILABLE
     piece.consumed_by_item_id = None
     piece.consumed_by_order_id = None
     piece.consumed_at = None
     db.add(piece)
     _log(db, piece, EVENT_RELEASED, item_id=item_id, actor_id=actor_id,
-         payload={"reason": reason} if reason else None)
+         payload={"reason": reason} if reason else None, from_state=prior)
 
 
 def retire_piece(
@@ -277,10 +302,12 @@ def retire_piece(
     this is not expected to be released again."""
     if not ledger_enabled() or piece is None:
         return
+    prior = piece.state
     piece.state = STATE_RETIRED
     piece.consumed_at = piece.consumed_at or datetime.utcnow()
     db.add(piece)
-    _log(db, piece, EVENT_RETIRED, item_id=item_id, actor_id=actor_id, payload={"reason": reason})
+    _log(db, piece, EVENT_RETIRED, item_id=item_id, actor_id=actor_id, payload={"reason": reason},
+         from_state=prior)
 
 
 def record_correction(
@@ -296,10 +323,11 @@ def record_correction(
     if not ledger_enabled() or old_piece is None:
         return
     replacements = [p for p in new_pieces if p is not None]
+    prior = old_piece.state
     old_piece.superseded_by_piece_id = replacements[0].piece_id if replacements else None
     old_piece.state = STATE_RETIRED
     db.add(old_piece)
-    _log(db, old_piece, EVENT_CORRECTED, actor_id=actor_id, payload={
+    _log(db, old_piece, EVENT_CORRECTED, actor_id=actor_id, from_state=prior, payload={
         "replaced_by": [p.piece_id for p in replacements],
         "notes": notes,
     })
@@ -526,7 +554,7 @@ def resync_row_pieces(db: Session, offcut: Offcut, *, reason: str,
                 setattr(piece, k, v)
             piece.is_scrap = (offcut.status == "scrap")
             db.add(piece)
-            _log(db, piece, EVENT_CORRECTED, actor_id=actor_id,
+            _log(db, piece, EVENT_CORRECTED, actor_id=actor_id, from_state=piece.state,
                  payload={"reason": reason, "geom": geom})
             updated += 1
 
@@ -701,9 +729,15 @@ def rebuild_piece_state(db: Session, piece_id: int) -> Optional[str]:
             state, item_id, order_id, consumed_at = STATE_CONSUMED, e.item_id, e.order_id, e.at
         elif e.event == EVENT_RELEASED:
             state, item_id, order_id, consumed_at = STATE_AVAILABLE, None, None, None
-        elif e.event in (EVENT_RETIRED, EVENT_CORRECTED):
+        elif e.event in (EVENT_RETIRED, EVENT_CORRECTED, EVENT_JOINED):
             state = STATE_RETIRED
             consumed_at = consumed_at or e.at
+        elif e.event == EVENT_UNDONE:
+            to = (e.payload or {}).get("to") or {}
+            state = to.get("state", state)
+            item_id = to.get("consumed_by_item_id")
+            order_id = to.get("consumed_by_order_id")
+            consumed_at = None if state == STATE_AVAILABLE else (consumed_at or e.at)
 
     if (piece.state, piece.consumed_by_item_id) != (state, item_id):
         logger.warning(
@@ -714,3 +748,58 @@ def rebuild_piece_state(db: Session, piece_id: int) -> Optional[str]:
     piece.consumed_by_order_id, piece.consumed_at = order_id, consumed_at
     db.add(piece)
     return state
+
+
+# -- Rejoin and undo ------------------------------------------------------------
+
+def join_into(db: Session, parts: Iterable[OffcutPiece], joined: OffcutPiece, *,
+              reason: str, item_id: Optional[int] = None) -> None:
+    """Mark pieces as merged into `joined` - the uncut rest of a bar put back together.
+
+    Each part is retired with a `joined` event and points at the joined piece through
+    superseded_by_piece_id, so a later reversal walking this bar's chain follows the link
+    to wherever the material now is (see offcutResolver.chain_leaf)."""
+    if not ledger_enabled() or joined is None:
+        return
+    for part in parts:
+        if part is None:
+            continue
+        prior = part.state
+        part.state = STATE_RETIRED
+        part.superseded_by_piece_id = joined.piece_id
+        part.consumed_at = part.consumed_at or datetime.utcnow()
+        db.add(part)
+        _log(db, part, EVENT_JOINED, item_id=item_id, from_state=prior,
+             payload={"joined_into": joined.piece_id, "reason": reason})
+
+
+PIECE_UNDO_FIELDS = ("state", "consumed_by_item_id", "consumed_by_order_id", "consumed_at",
+                     "offcut_row_id", "superseded_by_piece_id", "is_scrap",
+                     "length", "width", "height")
+
+
+def undo_piece(db: Session, piece: OffcutPiece, target: dict, *, undoes_op_id: str,
+               reason: str) -> None:
+    """Put a piece back to `target` (its image before the operation being undone).
+
+    The piece row is updated - it is a cached fold - but the log only grows: an `undone`
+    event records both states, and rebuild_piece_state knows how to fold it."""
+    before = {k: _plain(getattr(piece, k)) for k in PIECE_UNDO_FIELDS}
+    for key in PIECE_UNDO_FIELDS:
+        if key not in target:
+            continue
+        value = target[key]
+        if key == "consumed_at" and isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        setattr(piece, key, value)
+    db.add(piece)
+    after = {k: _plain(getattr(piece, k)) for k in PIECE_UNDO_FIELDS}
+    _log(db, piece, EVENT_UNDONE, from_state=before["state"], payload={
+        "undoes_op": undoes_op_id, "reason": reason, "from": before, "to": after,
+    })
+
+
+def _plain(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value

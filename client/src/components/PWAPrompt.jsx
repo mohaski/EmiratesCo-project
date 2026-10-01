@@ -13,8 +13,13 @@ export default function PWAPrompt() {
         updateServiceWorker,
     } = useRegisterSW({
         onRegistered(sw) {
-            // Poll for updates every hour
-            sw && setInterval(() => sw.update(), 60 * 60 * 1000);
+            if (!sw) return;
+            // Check for a new version every 5 minutes and whenever the app comes back into
+            // view. A long-open tab used to run old code for up to an hour after a deploy.
+            setInterval(() => sw.update(), 5 * 60 * 1000);
+            const onVisible = () => { if (document.visibilityState === 'visible') sw.update(); };
+            document.addEventListener('visibilitychange', onVisible);
+            window.addEventListener('focus', () => sw.update());
         },
         onRegisterError(err) {
             console.warn('[PWA] SW registration failed:', err);
