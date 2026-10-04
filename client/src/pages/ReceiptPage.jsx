@@ -151,14 +151,22 @@ export default function ReceiptPage() {
     // broken feature that still shows the dialog, so this is the only reliable silent
     // route; if QZ Tray isn't installed/running on this till, fall back to the browser
     // print dialog so printing still works, just not silently.
+    // Slips QZ Tray already printed before failing part-way: left out of the browser
+    // fallback (hidden in @media print), which used to print every slip again.
+    const [skipBuckets, setSkipBuckets] = useState([]);
     const handlePrint = useCallback(async () => {
-        const nodes = visibleBuckets.map(b => tapeRefs.current.get(b)).filter(Boolean);
+        const buckets = visibleBuckets.filter(b => tapeRefs.current.get(b));
+        const nodes = buckets.map(b => tapeRefs.current.get(b));
         if (nodes.length === 0) return;
         try {
+            setSkipBuckets([]);
             await printTapesViaQZ(nodes);
         } catch (err) {
             console.warn('QZ Tray print failed, falling back to browser print dialog', err);
-            window.print();
+            const done = buckets.slice(0, err?.printedCount || 0);
+            setSkipBuckets(done);
+            // Let the hidden slips render before the dialog snapshots the page.
+            setTimeout(() => window.print(), 50);
         }
     }, [visibleBuckets]);
 
@@ -166,13 +174,18 @@ export default function ReceiptPage() {
     // to click through — cutting/checking staff just tear off what the printer produces.
     // Guarded with a ref (not just isLoading) so it fires exactly once per visit, not on
     // every re-render once loading settles.
+    // Also once per ORDER across reloads (sessionStorage): an app update or a refresh on
+    // this page used to print every slip again. "Print" still reprints on demand.
     const hasAutoPrintedRef = useRef(false);
     useEffect(() => {
         if (!isLoading && !hasAutoPrintedRef.current && visibleBuckets.length > 0) {
             hasAutoPrintedRef.current = true;
-            handlePrint();
+            const key = `emirates_pos_auto_printed_${orderId}`;
+            let already = false;
+            try { already = sessionStorage.getItem(key) === '1'; sessionStorage.setItem(key, '1'); } catch { /* storage blocked */ }
+            if (!already) handlePrint();
         }
-    }, [isLoading, visibleBuckets.length, handlePrint]);
+    }, [isLoading, visibleBuckets.length, handlePrint, orderId]);
 
     if (!orderId || !cartItems) {
         return (
@@ -197,6 +210,7 @@ export default function ReceiptPage() {
                 .receipt-tape { box-shadow: none !important; width: 100% !important; }
                 .receipt-section { width: 100% !important; page-break-after: always; break-after: page; }
                 .receipt-section:last-of-type { page-break-after: auto; break-after: auto; }
+                .receipt-section[data-skip-print="true"] { display: none !important; }
             `}</style>
 
             {/* Action Bar */}
@@ -235,7 +249,7 @@ export default function ReceiptPage() {
                 {visibleBuckets.map((bucket, sheetIdx) => {
                     const meta = BUCKET_META[bucket];
                     return (
-                        <div key={bucket} className="receipt-section">
+                        <div key={bucket} className="receipt-section" data-skip-print={skipBuckets.includes(bucket) ? 'true' : undefined}>
                             <div
                                 ref={setTapeRef(bucket)}
                                 className="receipt-tape print:shadow-none"

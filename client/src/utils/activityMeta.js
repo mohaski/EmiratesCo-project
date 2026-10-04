@@ -1,3 +1,4 @@
+import { parseServerDate } from './dates';
 // Shared lookup/formatting for rendering edit_history rows (GET /orders/audit/history) —
 // used by both the CeoDashboard "Activity" widget and the full ActivityLogPage.
 // entity_type values come from server/entities/editHistory.py writers across
@@ -14,6 +15,10 @@ export const ACTIVITY_META = {
     offcut_admin: { icon: '✂️', color: '#f59e0b', label: 'Offcut pool edited' },
     profile_offcut_correction: { icon: '✂️', color: '#f59e0b', label: 'Profile offcut corrected' },
     open_container: { icon: '📦', color: '#fbbf24', label: 'Pack opened/closed' },
+    // Written by the backend but missing here, so they showed as a generic "Activity".
+    cutting_report: { icon: '🪚', color: '#06b6d4', label: 'Cut confirmed' },
+    order_undo: { icon: '↩️', color: '#ef4444', label: 'Change undone' },
+    product_update: { icon: '🔁', color: '#a855f7', label: 'Stock mode changed' },
 };
 
 export const DEFAULT_ACTIVITY_META = { icon: '🔧', color: '#a855f7', label: 'Activity' };
@@ -55,7 +60,7 @@ export const activityMetaForItem = (item) => {
 };
 
 export const timeAgo = (iso) => {
-    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    const mins = Math.floor((Date.now() - parseServerDate(iso).getTime()) / 60000);
     if (mins < 1) return 'just now';
     if (mins < 60) return `${mins}m ago`;
     const hours = Math.floor(mins / 60);
@@ -84,6 +89,14 @@ export const summarizeActivity = (item) => {
     const before = item.before_snapshot || {};
     const after = item.after_snapshot || {};
     switch (item.entity_type) {
+        case 'cutting_report':
+            return after.confirmed_during_order
+                ? `Item #${after.item_id} confirmed cut while order #${after.confirmed_during_order} was changed`
+                : `Item #${after.item_id} confirmed cut`;
+        case 'order_undo':
+            return `Undid a ${String(before.kind || 'change').replace(/_/g, ' ')}${item.notes ? ` — ${item.notes}` : ''}${after.money_note ? `. ${after.money_note}` : ''}`;
+        case 'product_update':
+            return `Stock now counted as ${after.unit_stock_mode === 'open_container' ? 'whole packs' : 'pieces'} (was ${before.unit_stock_mode === 'open_container' ? 'whole packs' : 'pieces'})`;
         case 'order':
             return after.financial_note || `Total now ${money(after.total)}`;
         case 'order_status':

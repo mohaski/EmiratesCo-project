@@ -87,9 +87,12 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         });
     }, [product, extraAttributes]);
 
-    const selectedLengthNum = useMemo(() => {
-        if (extraSelections['Length']) return parseInt(String(extraSelections['Length']).replace(/\D/g, '')) || 0;
-        return 0;
+    // The bar length a custom cut can't exceed. Taken further down from the matching
+    // variant's stored length (what the server cuts against); the Length label is only a
+    // fallback. Parsing the label alone dropped the decimal point ("19.5ft" -> 195).
+    const labelLengthNum = useMemo(() => {
+        if (!extraSelections['Length']) return 0;
+        return parseFloat(String(extraSelections['Length']).replace(/[^\d.]/g, '')) || 0;
     }, [extraSelections]);
 
     const pricing = useMemo(() => {
@@ -103,9 +106,12 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
             priceFoot: matchingVariant.priceUnit || product.priceFoot || 0,
             availableStock: matchingVariant.stock ?? product.stock ?? 0,
             variantId: matchingVariant.variantId,
+            fullLength: Number(matchingVariant.length) || 0,
         };
         return { priceFull: product.priceFull || 0, priceHalf: product.priceHalf || 0, priceFoot: product.priceFoot || 0, availableStock: product.stock || 0 };
     }, [product, color, extraSelections]);
+
+    const selectedLengthNum = pricing.fullLength || labelLengthNum;
 
     // Clear a stale offcut selection if the required length or variant it was picked for changes
     const prevCutKey = useRef(`${feet}|${pricing.variantId}`);
@@ -148,12 +154,15 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         const fullAvailable = pricing.availableStock !== undefined
             ? pricing.availableStock + heldByEditedItem(initialDetails, pricing.variantId, ['profile-full']) : undefined;
         if (fullAvailable !== undefined && fullQty > fullAvailable) { setfullLengtherror(`Only ${fullAvailable} full lengths available`); syncValid = false; }
-        else if (pricing.availableStock !== undefined && feet > selectedLengthNum) { setcuterror(`Feet cannot exceed ${selectedLengthNum}`); syncValid = false; }
+        // No known bar length (0) means no limit to check, not "nothing can be cut".
+        else if (selectedLengthNum > 0 && feet > selectedLengthNum) { setcuterror(`Feet cannot exceed ${selectedLengthNum}`); syncValid = false; }
         else { setfullLengtherror(null); setcuterror(null); }
 
         const isValid = syncValid && !feasibility.checking && feasibility.ok && editCuts.complete;
 
-        const total = (fullQty * pricing.priceFull) + (halfQty * pricing.priceHalf) + (feet * pricing.priceFoot);
+        // The same lines the server prices (non-positive quantities are left out of them), so
+        // the total shown is the total charged.
+        const total = lineItems.reduce((sum, l) => sum + (l.total || 0), 0);
         const attributes = [];
         if (color) attributes.push({ label: 'Color', value: color });
         if (extraSelections['Length']) attributes.push({ label: 'Length', value: extraSelections['Length'] });
@@ -167,7 +176,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
             _sourceItemId: initialDetails?._sourceItemId,
             cutAnswers: editCuts.cartAnswers,
         });
-    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, sourcePref, halfSourcePref, onUpdate, lineItems, feasibility, editCuts.complete, editCuts.cartAnswers, initialDetails]);
+    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, sourcePref, halfSourcePref, onUpdate, lineItems, feasibility, editCuts.complete, editCuts.cartAnswers, initialDetails, selectedLengthNum]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current stock/offcuts? Reuses the real checkout deduction logic on the
@@ -253,7 +262,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <button onClick={() => setFullQty(Math.max(0, fullQty - 1))} style={{ width: '30px', height: '30px', borderRadius: '7px', border: 'none', cursor: 'pointer', background: 'rgba(255,255,255,0.07)', color: '#94a3b8' }}>-</button>
-                            <input type="number" value={fullQty === 0 ? '' : fullQty} onChange={e => setFullQty(e.target.value === '' ? 0 : Number(e.target.value))} placeholder="0"
+                            <input type="number" value={fullQty === 0 ? '' : fullQty} onChange={e => setFullQty(e.target.value === '' ? 0 : Math.max(0, Math.floor(Number(e.target.value) || 0)))} min="0" step="1" placeholder="0"
                                 style={{ ...inputStyle, width: '48px', textAlign: 'center', padding: '0.375rem' }} />
                             <button onClick={() => setFullQty(fullQty + 1)} style={{ width: '30px', height: '30px', borderRadius: '7px', border: 'none', cursor: 'pointer', background: 'rgba(59,130,246,0.15)', color: '#60a5fa' }}>+</button>
                         </div>
@@ -279,7 +288,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                     <p style={{ ...labelStyle, marginBottom: '0.875rem', display: 'block' }}>✂️ Custom Cut</p>
                     <p style={{ fontSize: '0.78rem', color: '#64748b', margin: '0 0 0.5rem', fontWeight: 500 }}>Total feet needed</p>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <input type="number" placeholder="0" value={feet === 0 ? '' : feet} onChange={e => setFeet(e.target.value === '' ? 0 : Number(e.target.value))}
+                        <input type="number" placeholder="0" value={feet === 0 ? '' : feet} onChange={e => setFeet(e.target.value === '' ? 0 : Math.max(0, Number(e.target.value) || 0))} min="0"
                             style={{ ...inputStyle, fontSize: '1.25rem', fontWeight: 700 }}
                             onFocus={e => { e.target.style.borderColor = 'rgba(59,130,246,0.5)'; }}
                             onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)'; }}

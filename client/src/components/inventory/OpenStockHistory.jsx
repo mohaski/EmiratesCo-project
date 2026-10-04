@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import { parseServerDate } from '../../utils/dates';
 
 /**
  * CEO view of how opened packs are actually being used.
@@ -87,8 +88,8 @@ function PackRow({ pack, expanded, onToggle }) {
                         <p style={{ fontSize: '0.7rem', color: '#64748b', margin: '2px 0 0' }}>{variantName}</p>
                     </div>
                     <div style={{ fontSize: '0.62rem', color: '#475569', textAlign: 'right' }}>
-                        <div>Opened {pack.opened_at ? new Date(pack.opened_at).toLocaleDateString() : '—'}{pack.opened_by_name ? ` · ${pack.opened_by_name}` : ''}</div>
-                        {pack.closed_at && <div>Closed {new Date(pack.closed_at).toLocaleDateString()}{pack.closed_by_name ? ` · ${pack.closed_by_name}` : ''}</div>}
+                        <div>Opened {pack.opened_at ? parseServerDate(pack.opened_at).toLocaleDateString() : '—'}{pack.opened_by_name ? ` · ${pack.opened_by_name}` : ''}</div>
+                        {pack.closed_at && <div>Closed {parseServerDate(pack.closed_at).toLocaleDateString()}{pack.closed_by_name ? ` · ${pack.closed_by_name}` : ''}</div>}
                     </div>
                 </div>
 
@@ -147,7 +148,7 @@ function PackRow({ pack, expanded, onToggle }) {
                                             }}>
                                                 <td style={{ padding: '0.35rem 0.4rem', fontFamily: 'var(--font-mono)' }}>#{l.order_id}</td>
                                                 <td style={{ padding: '0.35rem 0.4rem' }}>{l.customer_name || '—'}</td>
-                                                <td style={{ padding: '0.35rem 0.4rem' }}>{l.sold_at ? new Date(l.sold_at).toLocaleDateString() : '—'}</td>
+                                                <td style={{ padding: '0.35rem 0.4rem' }}>{l.sold_at ? parseServerDate(l.sold_at).toLocaleDateString() : '—'}</td>
                                                 <td style={{ padding: '0.35rem 0.4rem' }}>{l.served_by || '—'}</td>
                                                 <td style={{ padding: '0.35rem 0.4rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{num(l.units)}</td>
                                                 <td style={{ padding: '0.35rem 0.4rem', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{money(l.revenue)}</td>

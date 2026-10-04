@@ -14,6 +14,7 @@ from core.audit.opContext import current as current_op, note_cut
 from entities.offcutLedger import OffcutPiece
 from datetime import datetime
 from loggiing import logger
+from config import nairobi_now
 
 
 def _pending_source_notice(db: Session, source_item_id: Optional[int]) -> Optional[dict]:
@@ -68,7 +69,7 @@ def deduct_stock_for_order_item(db: Session, item: OrderItem) -> None:
                 # Every cut was satisfied exactly by this line's own already-cut piece, handed
                 # back by the reversal just before: the pieces exist, nothing to cut.
                 item.cutting_completed = True
-                item.cutting_completed_at = datetime.utcnow()
+                item.cutting_completed_at = nairobi_now()
             else:
                 item.cutting_completed = False
                 item.cutting_completed_at = None

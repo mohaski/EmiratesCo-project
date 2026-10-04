@@ -3,6 +3,7 @@ from typing import List, Optional
 from sqlmodel import Session
 from db.database import get_session
 from core.userManagement.authService import get_current_user
+from utils import require_roles, CATALOG_ROLES, STAFF_ROLES
 from ws.manager import manager
 from . import model, service
 
@@ -17,7 +18,7 @@ async def create_product(
     product_data: model.ProductCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.create_product(product_data, db, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -32,13 +33,15 @@ def get_products(
     limit: Optional[int] = None,
     search: Optional[str] = None,
     category_id: Optional[int] = None,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user=Depends(require_roles(*STAFF_ROLES)),
 ):
     return service.getAllProducts(skip, limit, search, category_id, db)
 
 @router.get("/categories", response_model=List[model.CategoryResponse])
 def get_categories(
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user=Depends(require_roles(*STAFF_ROLES)),
 ):
     return service.getAllCategories(db)
 
@@ -47,11 +50,36 @@ async def create_category(
     category_data: model.CategoryCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.create_category(category_data, db)
     background_tasks.add_task(manager.broadcast, "products_updated")
     return result
+
+@router.delete("/categories/{category_id}")
+async def delete_category(
+    category_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user=Depends(require_roles(*CATALOG_ROLES)),
+):
+    result = service.delete_category(category_id, db)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
+
+@router.delete("/categories/{category_id}/subcategories/{sub_id}", response_model=model.CategoryResponse)
+async def delete_subcategory(
+    category_id: int,
+    sub_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user=Depends(require_roles(*CATALOG_ROLES)),
+):
+    result = service.remove_subcategory(category_id, sub_id, db)
+    background_tasks.add_task(manager.broadcast, "products_updated")
+    return result
+
 
 @router.post("/categories/{category_id}/subcategories", response_model=model.CategoryResponse)
 async def add_subcategory(
@@ -59,7 +87,7 @@ async def add_subcategory(
     payload: model.SubCategoryCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.add_subcategory(category_id, payload.name, db)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -71,7 +99,7 @@ async def update_product(
     update_data: model.ProductUpdateRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.update_product(product_id, update_data, db, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -82,7 +110,7 @@ async def delete_product(
     product_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.remove_product(product_id, db, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -98,7 +126,7 @@ async def add_product_variant(
     variant_data: model.VariantCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.add_variant(product_id, variant_data, db)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -110,7 +138,7 @@ async def add_product_variants_bulk(
     variants_data: List[model.VariantCreate],
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.add_variants_bulk(product_id, variants_data, db)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -122,7 +150,7 @@ async def update_variant(
     update_data: model.VariantUpdate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.update_variant(variant_id, update_data, db, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -133,7 +161,7 @@ async def delete_variant(
     variant_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.remove_variant(variant_id, db)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -149,7 +177,7 @@ async def update_product_stock(
     stock_data: model.StockQuantityUpdateRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles(*CATALOG_ROLES))
 ):
     result = service.update_simple_product_stock(product_id, stock_data.stock, db, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
@@ -162,7 +190,7 @@ def get_restock_history(
     limit: int = 100,
     product_id: Optional[int] = None,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user),
+    current_user=Depends(require_roles("manager", "ceo", "admin")),
 ):
     """Restock audit log — accessible to manager, ceo, and admin."""
     return service.get_restock_history(db, skip, limit, product_id)
@@ -257,7 +285,7 @@ def preview_offcut_replacement(
     product_id: int,
     payload: model.OffcutReplacementPreviewRequest,
     db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
+    current_user=Depends(require_roles("manager", "ceo", "admin"))
 ):
     """
     Dry-run preview for a manager correcting a "cutter missed this piece" cut:
@@ -294,6 +322,7 @@ def check_availability(
     product_id: int,
     qty: int = Query(..., description="Required quantity"),
     variant_id: Optional[int] = Query(None, description="Optional Variant ID"),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user=Depends(require_roles(*STAFF_ROLES)),
 ):
     return service.check_stock_availability(product_id, qty, db, variant_id)

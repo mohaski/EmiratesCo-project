@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from utils import require_role, ceil_amount
 
 from . import model
+from .splitDetails import normalize_payment_details, signed_split_parts
+from config import nairobi_now
 
 def calculate_cash_payments_for_today(db: Session = Depends(get_session)) -> float:
     """
@@ -110,7 +112,7 @@ def get_financial_summary(period: str, date_str: str | None, db: Session) -> mod
             # "Today" must be anchored to the DB's local date, not the app
             # server's UTC clock — Payment.payed_at is a naive timestamp
             # stored in the DB session's local timezone (e.g. Africa/Nairobi,
-            # UTC+3). Anchoring on datetime.utcnow().date() instead drifts by
+            # UTC+3). Anchoring on nairobi_now().date() instead drifts by
             # that offset, so any payment recorded in the first few hours
             # after local midnight got excluded from "today"'s totals until
             # the app server's UTC clock caught up.
@@ -143,13 +145,15 @@ def get_financial_summary(period: str, date_str: str | None, db: Session) -> mod
     for p in payments:
         total += p.amount
         if p.payment_method == "split":
-            details = p.payment_details or {}
-            matched = sum(float(v or 0) for k, v in details.items() if k in by_method)
+            # Signed like the row: split cancel refunds were once stored with positive
+            # parts on a negative amount, which moved the refund between the buckets.
+            parts = signed_split_parts(p.payment_details, p.amount)
+            matched = sum(parts.values())
             leftover = p.amount - matched
             touched = set()
-            for k, v in details.items():
-                if k in by_method and float(v or 0) != 0:
-                    by_method[k] += float(v or 0)
+            for k, v in parts.items():
+                if v != 0:
+                    by_method[k] += v
                     touched.add(k)
             if leftover:
                 by_method["cash"] += leftover
@@ -222,7 +226,7 @@ def _sync_credit_for_order(db: Session, order: Order) -> None:
         if order.balance <= 0.10:
             credit.status = "Paid"
             if not credit.settledAt:
-                credit.settledAt = datetime.utcnow()
+                credit.settledAt = nairobi_now()
         else:
             credit.status = "Partially Paid" if order.amountPayed > 0 else "Pending"
         db.add(credit)
@@ -284,7 +288,7 @@ def record_payment(
             amount=amount,
             payment_method=pay_method,
             reason="debt",
-            payment_details=payment_details,
+            payment_details=normalize_payment_details(pay_method, payment_details, amount),
             recorded_by=current_user.userId,
         )
         db.add(new_payment)

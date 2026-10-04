@@ -1,4 +1,5 @@
-export default function ConfirmationModal({ isOpen, onClose, onConfirm, title, message, confirmText = 'Confirm', confirmStyle = 'danger' }) {
+// confirmDisabled: lets the caller stop a second click while its action runs.
+export default function ConfirmationModal({ isOpen, onClose, onConfirm, title, message, confirmText = 'Confirm', confirmStyle = 'danger', confirmDisabled = false }) {
     if (!isOpen) return null;
 
     const isDanger = confirmStyle === 'danger';
@@ -46,8 +47,9 @@ export default function ConfirmationModal({ isOpen, onClose, onConfirm, title, m
                         onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
                         >Cancel</button>
-                        <button onClick={onConfirm} style={{
-                            padding: '0.625rem 1.25rem', borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
+                        <button onClick={onConfirm} disabled={confirmDisabled} style={{
+                            opacity: confirmDisabled ? 0.6 : 1,
+                            padding: '0.625rem 1.25rem', borderRadius: '0.75rem', border: 'none', cursor: confirmDisabled ? 'not-allowed' : 'pointer',
                             background: isDanger ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
                             color: '#fff', fontWeight: 700, fontSize: '0.82rem',
                             boxShadow: isDanger ? '0 4px 16px rgba(239,68,68,0.3)' : '0 4px 16px rgba(59,130,246,0.3)',

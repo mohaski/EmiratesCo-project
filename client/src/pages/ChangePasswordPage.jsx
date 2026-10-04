@@ -39,8 +39,8 @@ export default function ChangePasswordPage() {
         e.preventDefault();
         setError('');
 
-        if (!forced && !currentPassword) {
-            setError('Please enter your current password');
+        if (!currentPassword) {
+            setError(forced ? 'Please enter the temporary password you signed in with' : 'Please enter your current password');
             return;
         }
         if (!newPassword || !confirmPassword) {
@@ -59,7 +59,7 @@ export default function ChangePasswordPage() {
         setIsLoading(true);
         try {
             if (forced) {
-                await api.userService.changePassword(user.userId, { newPassword, confirmNewPassword: confirmPassword });
+                await api.userService.changePassword(user.userId, { currentPassword, newPassword, confirmNewPassword: confirmPassword });
             } else {
                 await api.userService.resetPassword(user.userId, { currentPassword, newPassword, confirmNewPassword: confirmPassword });
             }
@@ -114,9 +114,11 @@ export default function ChangePasswordPage() {
                                 </div>
                             )}
 
-                            {!forced && (
+                            {(
                                 <div>
-                                    <label style={labelStyle}>Current Password</label>
+                                    {/* Forced change: the temporary password is still required, so a
+                                        signed-in screen left unattended can't be taken over. */}
+                                    <label style={labelStyle}>{forced ? 'Temporary Password' : 'Current Password'}</label>
                                     <div style={{ position: 'relative' }}>
                                         <input
                                             type={showCurrent ? 'text' : 'password'}

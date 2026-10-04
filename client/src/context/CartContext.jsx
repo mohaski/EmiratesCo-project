@@ -27,7 +27,7 @@ export const CartProvider = ({ children }) => {
         try {
             const saved = localStorage.getItem('emirates_pos_customer');
             return saved ? JSON.parse(saved) : null;
-        } catch (e) {
+        } catch {
             return null;
         }
     });
@@ -37,7 +37,7 @@ export const CartProvider = ({ children }) => {
         try {
             const saved = localStorage.getItem('emirates_pos_tax_enabled');
             return saved !== null ? JSON.parse(saved) : true;
-        } catch (e) {
+        } catch {
             return true;
         }
     });
@@ -46,7 +46,7 @@ export const CartProvider = ({ children }) => {
     const [sessionType, setSessionType] = useState(() => {
         try {
             return localStorage.getItem('emirates_pos_session_type') || 'sales';
-        } catch (e) {
+        } catch {
             return 'sales';
         }
     });
@@ -59,7 +59,7 @@ export const CartProvider = ({ children }) => {
         try {
             const saved = localStorage.getItem('emirates_pos_linked_ref');
             return saved ? JSON.parse(saved) : null;
-        } catch (e) {
+        } catch {
             return null;
         }
     });
@@ -97,6 +97,26 @@ export const CartProvider = ({ children }) => {
         localStorage.setItem('emirates_pos_session_type', sessionType);
         localStorage.setItem('emirates_pos_linked_ref', JSON.stringify(linkedRef));
     }, [cartItems, customer, taxEnabled, sessionType, linkedRef]);
+
+    // Another tab on this till changed the cart: follow it, instead of the next write here
+    // silently overwriting it with this tab's older copy. (A write of the same value fires no
+    // storage event, so the two tabs can't ping-pong.)
+    useEffect(() => {
+        const parse = (v, fallback) => { try { return v == null ? fallback : JSON.parse(v); } catch { return fallback; } };
+        const onStorage = (e) => {
+            switch (e.key) {
+                case 'emirates_pos_cart': setCartItems(parse(e.newValue, [])); break;
+                case 'emirates_pos_customer': setCustomer(parse(e.newValue, null)); break;
+                case 'emirates_pos_linked_ref': setLinkedRef(parse(e.newValue, null)); break;
+                case 'emirates_pos_edit_session': setEditSession(parse(e.newValue, null)); break;
+                case 'emirates_pos_tax_enabled': if (e.newValue != null) setTaxEnabled(parse(e.newValue, true)); break;
+                case 'emirates_pos_session_type': if (e.newValue) setSessionType(e.newValue); break;
+                default: break;
+            }
+        };
+        window.addEventListener('storage', onStorage);
+        return () => window.removeEventListener('storage', onStorage);
+    }, []);
 
     // Clear in-memory state when user logs out
     useEffect(() => {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../../../services/api';
+import { extractErrorMessage } from '../../../utils/toast';
 
 /**
  * Dry-run preview of how the 2D glass offcut engine would cut the current cart's
@@ -36,8 +37,7 @@ export default function CutPreviewModal({ productId, variantId, cutPieces, edit 
             })
             .catch(err => {
                 if (cancelled) return;
-                const detail = err?.response?.data?.detail;
-                setError(detail || 'Could not compute a preview — this combination of cuts may not fit any offcut or the full sheet.');
+                setError(extractErrorMessage(err, 'Could not compute a preview — this combination of cuts may not fit any offcut or the full sheet.'));
             })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };

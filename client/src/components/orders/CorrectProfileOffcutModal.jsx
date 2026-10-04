@@ -4,6 +4,7 @@ import { fmtLen } from '../../utils/cuttingInstructionFormat';
 import { UnusedToggle, FatePicker, SourceSelect } from './SourceCorrectionFields';
 import useCorrectionPreview from '../../hooks/useCorrectionPreview';
 import { choiceFields, remeasureValid, remeasurePayload } from '../../utils/sourceCorrection';
+import { extractErrorMessage } from '../../utils/toast';
 
 // Manager-only correction for one 1D (bar/profile) offcut_sources entry — the
 // 1D analogue of CorrectOffcutModal, mirroring its shape.
@@ -66,7 +67,7 @@ export default function CorrectProfileOffcutModal({ event, orderId, target, onCo
             await onConfirm({ ...payload, notes });
             onClose();
         } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to correct offcut. Please try again.');
+            setError(extractErrorMessage(err, 'Failed to correct offcut. Please try again.'));
         } finally {
             setLoading(false);
         }

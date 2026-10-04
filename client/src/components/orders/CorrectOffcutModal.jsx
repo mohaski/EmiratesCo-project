@@ -5,6 +5,7 @@ import CuttingInstructions from './CuttingInstructions';
 import { UnusedToggle, FatePicker, PieceSourcePicker } from './SourceCorrectionFields';
 import useCorrectionPreview from '../../hooks/useCorrectionPreview';
 import { assignmentsPayload, remeasureValid, remeasurePayload } from '../../utils/sourceCorrection';
+import { extractErrorMessage } from '../../utils/toast';
 
 // Manager-only correction for one owning offcut_sources event. Three things can be
 // wrong about a recorded cutting event, fixed here in one combined Save:
@@ -85,7 +86,7 @@ export default function CorrectOffcutModal({ event, orderId, target, onConfirm, 
             await onConfirm({ ...payload, notes });
             onClose();
         } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to correct offcut. Please try again.');
+            setError(extractErrorMessage(err, 'Failed to correct offcut. Please try again.'));
         } finally {
             setLoading(false);
         }

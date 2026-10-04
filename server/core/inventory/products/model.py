@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -42,10 +42,11 @@ class PopularSizeRange(BaseModel):
 
 class VariantCreate(BaseModel):
     attributes: Dict[str, Any] = {}
-    stock_quantity: int = 0
-    price: float = 0.0
-    price_half: Optional[float] = None
-    price_unit: Optional[float] = None
+    # Never negative: a "-5" typo used to create a variant already below zero.
+    stock_quantity: int = Field(default=0, ge=0)
+    price: float = Field(default=0.0, ge=0)
+    price_half: Optional[float] = Field(default=None, ge=0)
+    price_unit: Optional[float] = Field(default=None, ge=0)
     length: Optional[float] = None
     width: Optional[float] = None
     height: Optional[float] = None

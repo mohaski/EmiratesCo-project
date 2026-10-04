@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useDeferredValue } from 'react';
 import { useProducts } from '../context/ProductContext';
 import { isProfileCategory, isGlassCategory, isAccessoryCategory } from '../utils/colors';
+import { matchesSubCategory as matchesSubCategory_ } from '../utils/subCategories';
 export { PROFILE_COLORS } from '../utils/colors';
 
 export function useProductFiltering() {
@@ -50,7 +51,9 @@ export function useProductFiltering() {
             const matchesCategory = p.category === activeCategory;
             if (!matchesCategory) return false;
 
-            const matchesSubCategory = p.subCategory === activeSubCategory;
+            // A product with no sub-category counts as "general" — the same rule Product
+            // Management uses; a strict match hid such products from Sales entirely.
+            const matchesSubCategory = matchesSubCategory_(p, activeSubCategory);
             const matchesSearch = !lowerQuery || p.name.toLowerCase().includes(lowerQuery);
 
             let matchesColor = true;
@@ -61,7 +64,11 @@ export function useProductFiltering() {
                 const hasColorAttribute = p.attributes?.Color?.includes(profileColor);
                 const hasColorVariant = p.variants?.some(v => v.attributes?.Color === profileColor);
 
-                if (p.attributes?.Color || p.variants) {
+                // Only products that have colours are filtered by colour. (`p.variants` is
+                // always an array, so the old check filtered every product and hid any
+                // colourless profile item from Sales.)
+                const hasAnyColor = !!p.attributes?.Color || (p.variants || []).some(v => v.attributes?.Color);
+                if (hasAnyColor) {
                     matchesColor = hasColorAttribute || hasColorVariant;
                 }
             }

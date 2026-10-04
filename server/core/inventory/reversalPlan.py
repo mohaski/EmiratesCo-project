@@ -65,6 +65,7 @@ from entities.variants import Variant
 
 from core.inventory import offcutLedger as ledger
 from core.inventory import offcutResolver as resolver
+from config import nairobi_now
 
 # ── Physical state of a cut line, as confirmed by the operator ────────────────
 PHYS_NOT_CUT = "not_cut"
@@ -823,7 +824,7 @@ def apply_later_cut_answers(db: Session, plan: Optional[dict], decisions, order_
             if later_item is None or later_item.cutting_completed:
                 continue
             later_item.cutting_completed = True
-            later_item.cutting_completed_at = _dt.utcnow()
+            later_item.cutting_completed_at = nairobi_now()
             db.add(later_item)
             marked.append(later_item.item_id)
             db.add(EditHistory(

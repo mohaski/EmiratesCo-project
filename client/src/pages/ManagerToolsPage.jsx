@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
 import { wsEvents } from '../utils/wsEvents';
 import { CheckoutTab, ReturnTab } from './ToolCheckoutPage';
+import { parseServerDate } from '../utils/dates';
 
 const cardStyle = {
     background: 'rgba(255,255,255,0.03)',
@@ -136,7 +137,7 @@ function WorkerLoansTab() {
                                 </td>
                                 <td style={{ padding: '0.9rem 1rem', fontSize: '0.78rem', color: '#64748b' }}>{loan.issued_by || '—'}</td>
                                 <td style={{ padding: '0.9rem 1rem', fontSize: '0.78rem', color: '#64748b', fontFamily: 'var(--font-mono)' }}>
-                                    {new Date(loan.issued_at).toLocaleString()}
+                                    {parseServerDate(loan.issued_at).toLocaleString()}
                                 </td>
                                 <td style={{ padding: '0.9rem 1rem' }}><Badge status={loan.status} /></td>
                             </tr>
@@ -199,10 +200,22 @@ function EditToolRow({ tool, onSaved }) {
     const [status, setStatus] = useState(tool.status);
     const [saving, setSaving] = useState(false);
 
+    // The form is filled from the tool as it is NOW when editing starts — the row stays
+    // mounted while the list refreshes, so values captured at first render could be stale
+    // (a tool checked out since would have been saved back as "available").
+    const startEditing = () => {
+        setName(tool.name);
+        setDescription(tool.description || '');
+        setStatus(tool.status);
+        setEditing(true);
+    };
+
     const handleSave = async () => {
         setSaving(true);
         try {
-            await ToolService.update(tool.toolId, { name, description: description || null, status });
+            // Status only when it was actually changed here.
+            const changes = { name, description: description || null, ...(status !== tool.status ? { status } : {}) };
+            await ToolService.update(tool.toolId, changes);
             showToast(`"${name}" updated`, 'success');
             setEditing(false);
             onSaved();
@@ -220,7 +233,7 @@ function EditToolRow({ tool, onSaved }) {
                 <td style={{ padding: '0.9rem 1rem', fontSize: '0.8rem', color: '#94a3b8' }}>{tool.description || '—'}</td>
                 <td style={{ padding: '0.9rem 1rem' }}><Badge status={tool.status} /></td>
                 <td style={{ padding: '0.9rem 1rem' }}>
-                    <button style={ghostBtn} onClick={() => setEditing(true)}>Edit</button>
+                    <button style={ghostBtn} onClick={startEditing}>Edit</button>
                 </td>
             </tr>
         );
@@ -249,8 +262,9 @@ function ToolCatalogTab() {
     const [tools, setTools] = useState([]);
     const [loading, setLoading] = useState(true);
 
+    // No spinner on refreshes (only the first load starts with `loading`): swapping the
+    // table for a spinner unmounted any row being edited and lost what was typed.
     const fetchTools = useCallback(async () => {
-        setLoading(true);
         try {
             const data = await ToolService.getAll();
             setTools(data);
@@ -339,7 +353,7 @@ function ItemConditionsTab() {
                                 <td style={{ padding: '0.9rem 1rem', fontSize: '0.78rem', color: '#64748b' }}>{issue.issuedBy || '—'}</td>
                                 <td style={{ padding: '0.9rem 1rem', fontSize: '0.78rem', color: '#64748b' }}>{issue.returnedBy || '—'}</td>
                                 <td style={{ padding: '0.9rem 1rem', fontSize: '0.78rem', color: '#64748b', fontFamily: 'var(--font-mono)' }}>
-                                    {issue.returnedAt ? new Date(issue.returnedAt).toLocaleString() : '—'}
+                                    {issue.returnedAt ? parseServerDate(issue.returnedAt).toLocaleString() : '—'}
                                 </td>
                                 <td style={{ padding: '0.9rem 1rem' }}><Badge status={issue.toolStatus} /></td>
                             </tr>

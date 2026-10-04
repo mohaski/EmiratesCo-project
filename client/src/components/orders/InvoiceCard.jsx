@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef } from 'react';
+import { parseServerDate } from '../../utils/dates';
 
 const InvoiceCard = memo(({ invoice, onView, onConvert, highlighted }) => {
     const cardRef = useRef(null);
@@ -38,7 +39,7 @@ const InvoiceCard = memo(({ invoice, onView, onConvert, highlighted }) => {
                     fontSize: '0.68rem', fontFamily: 'var(--font-mono)', fontWeight: 700,
                 }}>{invoice.id}</span>
                 <span style={{ color: '#334155', fontSize: '0.68rem' }}>
-                    {new Date(invoice.date).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {parseServerDate(invoice.date).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                 </span>
                 {invoice.status === 'converted' && (
                     <span style={{ fontSize: '0.65rem', fontWeight: 700, background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.25)', color: '#4ade80', borderRadius: '100px', padding: '1px 7px' }}>

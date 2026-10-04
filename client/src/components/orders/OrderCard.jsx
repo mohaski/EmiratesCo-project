@@ -1,7 +1,8 @@
 import { memo, useEffect, useRef } from 'react';
+import { parseServerDate } from '../../utils/dates';
 
 const isToday = (dateStr) => {
-    const d = new Date(dateStr);
+    const d = parseServerDate(dateStr);
     const now = new Date();
     return d.getFullYear() === now.getFullYear() &&
            d.getMonth() === now.getMonth() &&
@@ -15,7 +16,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, h
     const isCompleted = order.status === 'completed';
     const orderIsToday = isToday(order.date);
     // Mirrors the backend's 7-day cutoff in cancel_order_with_pin
-    const orderTooOldToCancel = (new Date() - new Date(order.date)) > 7 * 24 * 60 * 60 * 1000;
+    const orderTooOldToCancel = (new Date() - parseServerDate(order.date)) > 7 * 24 * 60 * 60 * 1000;
     const cardRef = useRef(null);
 
     useEffect(() => {
@@ -58,7 +59,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, h
                     }}>Cancelled</span>
                 )}
                 <span style={{ color: '#334155', fontSize: '0.68rem', fontWeight: 500 }}>
-                    {new Date(order.date).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {parseServerDate(order.date).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                 </span>
                 {order.paymentMethod && (
                     <span style={{ fontSize: '0.65rem', color: '#475569', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '4px', padding: '1px 6px', fontWeight: 600 }}>

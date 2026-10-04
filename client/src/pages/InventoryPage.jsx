@@ -8,9 +8,14 @@ import AddOffcutsModal from '../components/inventory/AddOffcutsModal';
 import StockSessionDetailModal from '../components/inventory/StockSessionDetailModal';
 import OpenStockModal from '../components/inventory/OpenStockModal';
 import { getCategoryAccent, hexToRgba, getProfileColorHex } from '../utils/colors';
+import { matchesSubCategory } from '../utils/subCategories';
+import { parseServerDate } from '../utils/dates';
 
-const PROFILE_COLORS = ['White', 'Silver', 'Gold', 'Brown', 'Grey', 'Matt Black'];
-const GLASS_THICKNESSES = ['4mm', '6mm', '8mm', '10mm', '12mm'];
+// How a variant is named on this page. A product with no distinguishing attributes has one
+// variant with an empty name — that used to label it "", and the restock step reads an empty
+// label as "nothing selected", so such products could never be restocked here.
+const variantLabel = (v) => v.name || Object.values(v.attributes || {}).join(' - ') || 'Standard';
+
 
 function useWindowWidth() {
     const [width, setWidth] = useState(() =>
@@ -37,8 +42,30 @@ export default function InventoryPage() {
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('ke-profile');
     const [filterSubCategory, setFilterSubCategory] = useState('window');
+    // The starting tab is a hard-coded category id; where that category doesn't exist the
+    // page listed nothing until a tab was clicked. Fall back to the first real category.
+    if (CATEGORIES.length > 0 && !CATEGORIES.some(c => c.id === filterCategory)) {
+        setFilterCategory(CATEGORIES[0].id);
+    }
     const [inventory, setInventory] = useState([]);
-    const [cartItems, setCartItems] = useState([]);
+    // The session being built is saved per user, so a reload or a trip to another page no
+    // longer throws away stock that has physically arrived but isn't finalized yet.
+    const stockCartKey = user?.userId ? `emirates_pos_stock_cart_${user.userId}` : null;
+    const [cartItems, setCartItems] = useState(() => {
+        try {
+            const raw = stockCartKey && localStorage.getItem(stockCartKey);
+            const parsed = raw ? JSON.parse(raw) : [];
+            return Array.isArray(parsed) ? parsed : [];
+        } catch { return []; }
+    });
+    const [restoredCount, setRestoredCount] = useState(() => cartItems.length);
+    useEffect(() => {
+        if (!stockCartKey) return;
+        try {
+            if (cartItems.length) localStorage.setItem(stockCartKey, JSON.stringify(cartItems));
+            else localStorage.removeItem(stockCartKey);
+        } catch { /* storage unavailable — the session just won't survive a reload */ }
+    }, [cartItems, stockCartKey]);
     const [finalizing, setFinalizing] = useState(false);
     const [isAddStockModalOpen, setAddStockModalOpen] = useState(false);
     const [selectedProduct, setSelectedProduct] = useState(null);
@@ -61,7 +88,9 @@ export default function InventoryPage() {
     // the backend's own restriction in openContainers/controller.py.
     const canManageOpenStock = ['manager', 'ceo', 'admin'].includes(user?.role);
     const [openStockPanel, setOpenStockPanel] = useState(false);
-    const [sidebarTab, setSidebarTab] = useState(canSubmitStock ? 'recent' : 'sessions');
+    // First tab this role actually has (a role without Sessions used to land on an empty
+    // Sessions pane with no tab button for it).
+    const [sidebarTab, setSidebarTab] = useState(canSubmitStock ? 'recent' : canViewSessions ? 'sessions' : 'history');
     const [restockHistory, setRestockHistory] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [sessions, setSessions] = useState([]);
@@ -117,28 +146,28 @@ export default function InventoryPage() {
                     // whole packs, so dividing again would under-report it.
                     const factor = (!p.trackOffcuts && p.unitStockMode !== 'open_container' && v.unitQuantity)
                         ? v.unitQuantity : 1;
-                    const label = v.name || Object.values(v.attributes).join(' - ');
+                    const label = variantLabel(v);
                     stockMap[label] = (v.stock || 0) / factor;
                     // Out-of-stock always alerts, even with no CEO-configured threshold (0 = unset);
                     // a configured threshold (>0) additionally alerts earlier, before hitting zero.
-                    alarmMap[label] = (v.stock || 0) <= 0 || ((v.lowStockThreshold || 0) > 0 && (v.stock || 0) < v.lowStockThreshold);
+                    // The threshold is entered in the unit stock is shown in (boxes for a
+                    // packaged item), so compare in that unit — not raw pieces.
+                    alarmMap[label] = (v.stock || 0) <= 0 || ((v.lowStockThreshold || 0) > 0 && (v.stock || 0) / factor < v.lowStockThreshold);
                 });
                 return { ...p, stockVariants: stockMap, stockVariantAlarms: alarmMap };
             }
-            const variants = {};
-            if (p.category === 'glass') {
-                (p.thicknessPrices ? p.thicknessPrices.map(t => t.thickness) : GLASS_THICKNESSES).forEach(t => { variants[t] = 50; });
-            } else if (p.category?.includes('profile')) {
-                PROFILE_COLORS.forEach(c => { variants[c] = 50; });
-            } else { variants['Standard'] = 50; }
-            return { ...p, stockVariants: variants, stockVariantAlarms: {} };
+            // No variants: nothing to stock. (This used to invent 50 per colour/thickness, and
+            // restocking those made-up rows did nothing.)
+            return { ...p, stockVariants: {}, stockVariantAlarms: {}, noVariants: true };
         }));
     }, [products]);
 
     const filteredInventory = useMemo(() => inventory.filter(item => {
-        const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
+        const q = searchTerm.toLowerCase();
+        // Name or item code, as the search box says.
+        const matchesSearch = item.name.toLowerCase().includes(q) || (item.itemCode || '').toLowerCase().includes(q);
         const matchesCategory = item.category === filterCategory;
-        const matchesSub = matchesCategory ? item.subCategory === filterSubCategory : true;
+        const matchesSub = matchesCategory ? matchesSubCategory(item, filterSubCategory) : true;
         return matchesSearch && matchesCategory && matchesSub;
     }), [inventory, searchTerm, filterCategory, filterSubCategory]);
 
@@ -153,7 +182,7 @@ export default function InventoryPage() {
     const selectedRawVariant = useMemo(() => {
         if (!selectedProduct || !selectedVariant) return null;
         const original = products.find(p => p.id === selectedProduct.id);
-        return original?.variants?.find(v => (v.name || Object.values(v.attributes).join(' - ')) === selectedVariant) || null;
+        return original?.variants?.find(v => variantLabel(v) === selectedVariant) || null;
     }, [products, selectedProduct, selectedVariant]);
     // How many pieces make up one of this variant's own pack units (e.g. 500 for
     // "500pcs") — 1 for an unpackaged variant or a bar/sheet (trackOffcuts) product,
@@ -170,6 +199,10 @@ export default function InventoryPage() {
     const effectiveRestockUnit = canAddPcs ? restockUnit : 'box';
 
     const handleAddStockClick = (product) => {
+        if (product.noVariants) {
+            alert(`${product.name} has no variants yet — add one in Product Management before restocking.`);
+            return;
+        }
         setSelectedProduct(product);
         setSelectedVariant(Object.keys(product.stockVariants)[0]);
         setStockToAdd('');
@@ -182,11 +215,12 @@ export default function InventoryPage() {
     // every line in one server-side transaction via POST /stock-sessions/.
     const addLineToCart = () => {
         if (!selectedProduct || !stockToAdd || !selectedVariant) return;
-        const qty = parseInt(stockToAdd);
-        if (isNaN(qty) || qty <= 0) return;
+        // Whole units only: parseInt turned "2.5" boxes into 2 without a word.
+        const qty = Number(stockToAdd);
+        if (!Number.isInteger(qty) || qty <= 0) { alert('Enter a whole number of units to add (no fractions).'); return; }
         const original = products.find(p => p.id === selectedProduct.id);
         if (!original?.variants) return;
-        const targetVariant = original.variants.find(v => (v.name || Object.values(v.attributes).join(' - ')) === selectedVariant);
+        const targetVariant = original.variants.find(v => variantLabel(v) === selectedVariant);
         if (targetVariant) {
             // `qty` was typed either in the variant's own pack unit (box mode — the
             // stockVariants mapping above) or directly in pieces (pcs mode, e.g. a
@@ -219,8 +253,26 @@ export default function InventoryPage() {
 
     const removeCartLine = (id) => setCartItems(prev => prev.filter(item => item.id !== id));
 
+    // Lines restored from an earlier visit can point at a variant that has since been
+    // deleted, or a pack size that has changed (the conversion was captured when the line
+    // was added) — those must be re-entered, not finalized as they are.
+    const staleLines = useMemo(() => cartItems.filter(item => {
+        const p = products.find(pr => pr.id === item.productId);
+        const v = p?.variants?.find(vr => vr.id === item.variantId);
+        if (!v) return true;
+        if (item.type === 'stock' && item.enteredUnit !== 'pcs') {
+            const boxFactor = (!p.trackOffcuts && p.unitStockMode !== 'open_container' && v.unitQuantity) ? v.unitQuantity : 1;
+            if (boxFactor !== item.factor) return true;
+        }
+        return false;
+    }), [cartItems, products]);
+
     const finalizeSession = async () => {
         if (cartItems.length === 0 || finalizing) return;
+        if (products.length > 0 && staleLines.length > 0) {
+            alert(`${staleLines.length} line(s) no longer match the product (${staleLines.map(l => l.productName).join(', ')}). Remove and re-add them, then finalize.`);
+            return;
+        }
         setFinalizing(true);
         try {
             const stockLines = cartItems.filter(item => item.type === 'stock').map(item => ({
@@ -240,6 +292,7 @@ export default function InventoryPage() {
             }));
             await api.stockSessionService.finalize({ stock_lines: stockLines, offcut_lines: offcutLines });
             setCartItems([]);
+            setRestoredCount(0);
             showToast('Stock session finalized', 'success');
         } catch {
             // toast already shown by the api interceptor
@@ -570,7 +623,12 @@ export default function InventoryPage() {
                                     </div>
                                 ))}
                             </div>
-                            <button onClick={finalizeSession} disabled={cartItems.length === 0 || finalizing} style={{
+                            {restoredCount > 0 && cartItems.length > 0 && (
+                                <p role="status" style={{ fontSize: '0.72rem', color: '#fbbf24', fontWeight: 600, margin: '0 0 0.5rem' }}>
+                                    {restoredCount} line(s) restored from your last visit — check them before finalizing.
+                                </p>
+                            )}
+                                                        <button onClick={finalizeSession} disabled={cartItems.length === 0 || finalizing} style={{
                                 marginTop: '0.875rem', padding: '0.75rem', borderRadius: '0.75rem', border: 'none', flexShrink: 0,
                                 cursor: cartItems.length === 0 || finalizing ? 'not-allowed' : 'pointer',
                                 background: cartItems.length === 0 || finalizing ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg, #3b82f6, #06b6d4)',
@@ -596,7 +654,7 @@ export default function InventoryPage() {
                             ) : (
                                 <div style={{ flex: 1, minHeight: 0, overflowY: paneScroll, display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
                                     {sessions.map(s => {
-                                        const date = new Date(s.created_at);
+                                        const date = parseServerDate(s.created_at);
                                         return (
                                             <button key={s.id} onClick={() => openSessionDetail(s.id)} style={{
                                                 textAlign: 'left', padding: '0.75rem', borderRadius: '0.625rem', cursor: 'pointer',
@@ -638,7 +696,7 @@ export default function InventoryPage() {
                                 <div style={{ flex: 1, minHeight: 0, overflowY: paneScroll, display: 'flex', flexDirection: 'column', gap: '0.5rem' }} className="custom-scrollbar">
                                     {restockHistory.map(h => {
                                         const isAdd = h.qty_added > 0;
-                                        const date = new Date(h.added_at);
+                                        const date = parseServerDate(h.added_at);
                                         return (
                                             <div key={h.id} style={{
                                                 padding: '0.75rem', borderRadius: '0.625rem',

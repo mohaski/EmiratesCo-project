@@ -39,8 +39,15 @@ export default function EditProductModal({ isOpen, onClose, product }) {
         [...(product?.applicableAttributes || []), ...(product?.hasDimensions ? ['Dimensions'] : [])]
     ), [product]);
 
+    // Seeded once each time the dialog opens for a product — not on every products refresh
+    // (any sale anywhere refetches the list and hands this dialog a new `product` object,
+    // which used to wipe what was being typed).
+    const [seededFor, setSeededFor] = useState(null);
+    if (!isOpen && seededFor !== null) setSeededFor(null);
+    const needsSeed = isOpen && product && seededFor !== product.id;
     useEffect(() => {
-        if (!product) return;
+        if (!needsSeed) return;
+        setSeededFor(product.id);
         setForm({
             name: product.name || '',
             subCategory: product.subCategory || '',
@@ -57,13 +64,14 @@ export default function EditProductModal({ isOpen, onClose, product }) {
             init[key] = explicit != null ? explicit.includes(key) : (key === 'Dimensions' || attributeTypesMap[key] === 'custom');
         });
         setPoolIgnored(init);
-    }, [product, poolableKeys, attributeTypesMap]);
+    }, [needsSeed, product, poolableKeys, attributeTypesMap]);
 
     const set = (key, val) => setForm(f => ({ ...f, [key]: val }));
     const togglePoolIgnored = key => setPoolIgnored(p => ({ ...p, [key]: !p[key] }));
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!product) return;
+        if (!form.name || !form.name.trim()) { alert('The product name can\'t be blank.'); return; }
         const poolIgnoredAttributes = poolableKeys.filter(k => poolIgnored[k]);
         const payload = {
             ...product, name: form.name, trackOffcuts: form.trackOffcuts, unit: form.unit,
@@ -88,8 +96,13 @@ export default function EditProductModal({ isOpen, onClose, product }) {
             );
             if (!ok) return;
         }
-        updateProduct(payload);
-        onClose();
+        // Waited for: a refused save (e.g. offcut tracking switched on for an open-pack
+        // product) keeps the dialog open with the reason in the error toast, instead of
+        // closing as if it had saved.
+        try {
+            await updateProduct({ ...payload, name: form.name.trim() });
+            onClose();
+        } catch { /* the response interceptor shows why */ }
     };
 
     if (!isOpen || !product) return null;

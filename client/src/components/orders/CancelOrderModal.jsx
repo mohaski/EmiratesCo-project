@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { extractErrorMessage } from '../../utils/toast';
 
 const REFUND_METHODS = [
     { id: 'cash', label: 'Cash', icon: '💵' },
@@ -17,7 +18,8 @@ const CancelOrderModal = ({ order, onClose, onConfirm }) => {
 
     const amountPaid = order.amountPaid || 0;
     const hasPayment = amountPaid > 0.1;
-    const mpesaAmount = Math.max(0, amountPaid - (parseFloat(cashAmount) || 0));
+    const cashValue = parseFloat(cashAmount) || 0;
+    const mpesaAmount = Math.max(0, amountPaid - cashValue);
 
     const handlePinChange = e => {
         const digits = e.target.value.replace(/\D/g, '').slice(0, 4);
@@ -25,8 +27,10 @@ const CancelOrderModal = ({ order, onClose, onConfirm }) => {
         if (error) setError('');
     };
 
-    const cashExceedsTotal = refundMethod === 'split' && (parseFloat(cashAmount) || 0) > amountPaid;
-    const canSubmit = pin.length === 4 && (!hasPayment || (!!refundMethod && !cashExceedsTotal));
+    const cashExceedsTotal = refundMethod === 'split' && cashValue > amountPaid;
+    // Whole shillings, never negative — a negative cash part inflates the M-Pesa side.
+    const cashInvalid = refundMethod === 'split' && (cashValue < 0 || !Number.isInteger(cashValue));
+    const canSubmit = pin.length === 4 && (!hasPayment || (!!refundMethod && !cashExceedsTotal && !cashInvalid));
 
     const handleSubmit = async e => {
         e.preventDefault();
@@ -42,18 +46,23 @@ const CancelOrderModal = ({ order, onClose, onConfirm }) => {
             setError(`Cash can't exceed the refund total (KSH ${amountPaid.toFixed(0)}).`);
             return;
         }
+        if (cashInvalid) {
+            setError('Enter the cash part as a whole, positive amount.');
+            return;
+        }
         setLoading(true);
         setError('');
         try {
             const refund = hasPayment
                 ? {
                     method: refundMethod,
-                    details: refundMethod === 'split' ? { cash: parseFloat(cashAmount) || 0, mpesa: mpesaAmount } : undefined,
+                    details: refundMethod === 'split' ? { cash: cashValue, mpesa: mpesaAmount } : undefined,
+                    expected: amountPaid,
                 }
                 : null;
             await onConfirm(pin, refund);
         } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to cancel order. Please try again.');
+            setError(extractErrorMessage(err, 'Failed to cancel order. Please try again.'));
         } finally {
             setLoading(false);
         }
@@ -128,7 +137,7 @@ const CancelOrderModal = ({ order, onClose, onConfirm }) => {
                                         <div>
                                             <label style={{ display: 'block', fontSize: '0.62rem', fontWeight: 600, color: '#a855f7', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: '0.3rem' }}>Cash Refunded</label>
                                             <input
-                                                type="number" value={cashAmount} onChange={e => setCashAmount(e.target.value)}
+                                                type="number" min="0" step="1" value={cashAmount} onChange={e => setCashAmount(e.target.value)}
                                                 placeholder="0" step="1"
                                                 style={{
                                                     width: '100%', boxSizing: 'border-box', background: 'rgba(255,255,255,0.05)',

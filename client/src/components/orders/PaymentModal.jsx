@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import api from '../../services/api';
 import { ceilAmount } from '../../utils/money';
+import { extractErrorMessage } from '../../utils/toast';
 
 const METHODS = [
     { id: 'cash', label: 'Cash', icon: '💵' },
@@ -17,11 +18,14 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
     const [error, setError] = useState(null);
 
     const parsedAmount = ceilAmount(parseFloat(amount) || 0);
-    const cashExceedsAmount = paymentMethod === 'split' && (parseFloat(cashAmount) || 0) > parsedAmount;
-    const isValid = parsedAmount > 0 && parsedAmount <= balance + 0.1 && !cashExceedsAmount;
+    const cashValue = parseFloat(cashAmount) || 0;
+    const cashExceedsAmount = paymentMethod === 'split' && cashValue > parsedAmount;
+    // Whole shillings, never negative — a negative cash part inflates the M-Pesa side.
+    const cashInvalid = paymentMethod === 'split' && (cashValue < 0 || !Number.isInteger(cashValue));
+    const isValid = parsedAmount > 0 && parsedAmount <= balance + 0.1 && !cashExceedsAmount && !cashInvalid;
 
     const remainingAfter = useMemo(() => Math.max(0, balance - parsedAmount), [balance, parsedAmount]);
-    const mpesaAutoAmount = useMemo(() => Math.max(0, ceilAmount(parsedAmount - (parseFloat(cashAmount) || 0))), [parsedAmount, cashAmount]);
+    const mpesaAutoAmount = useMemo(() => Math.max(0, ceilAmount(parsedAmount - cashValue)), [parsedAmount, cashValue]);
 
     const handleSubmit = async () => {
         if (!isValid || submitting) return;
@@ -32,12 +36,12 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                 orderId: order.id,
                 amount: parsedAmount,
                 paymentMethod,
-                paymentDetails: paymentMethod === 'split' ? { cash: parseFloat(cashAmount) || 0, mpesa: mpesaAutoAmount } : null,
+                paymentDetails: paymentMethod === 'split' ? { cash: cashValue, mpesa: mpesaAutoAmount } : null,
             });
             onSuccess?.();
         } catch (err) {
             console.error('Failed to record payment', err);
-            setError(err.response?.data?.detail || 'Failed to record payment. Please try again.');
+            setError(extractErrorMessage(err, 'Failed to record payment. Please try again.'));
         } finally {
             setSubmitting(false);
         }
@@ -148,6 +152,8 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                             <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 600, color: '#a855f7', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Cash Amount</label>
                             <input
                                 type="number"
+                                min="0"
+                                step="1"
                                 value={cashAmount}
                                 onChange={e => setCashAmount(e.target.value)}
                                 placeholder="0"
@@ -176,6 +182,11 @@ export default function PaymentModal({ order, onClose, onSuccess }) {
                         {cashExceedsAmount && (
                             <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f87171' }}>
                                 ⚠ Cash exceeds amount collecting (max KSH {parsedAmount.toFixed(0)})
+                            </div>
+                        )}
+                        {cashInvalid && (
+                            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f87171' }}>
+                                ⚠ Enter cash as a whole, positive amount
                             </div>
                         )}
                     </div>

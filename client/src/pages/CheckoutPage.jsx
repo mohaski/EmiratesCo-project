@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef, memo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrders } from '../context/OrderContext';
-import { mapItemForBackend } from '../utils/orderItemMapping';
+import { mapItemForBackend, editSignature } from '../utils/orderItemMapping';
 import { answersComplete, answersPayload } from '../utils/cutAnswers';
 import { useCartTotals } from '../hooks/useCartTotals';
 import { ceilAmount } from '../utils/money';
@@ -160,23 +160,29 @@ export default function CheckoutPage() {
     const isMobile = windowWidth < 768;
 
     const { user } = useAuth();
-    const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart, editSession } = useCart();
+    const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart, editSession, removeFromCart } = useCart();
     const { addOrder, updateOrder } = useOrders();
     const { mode, originalTotal = 0, originalBalance = 0 } = location.state || {};
     const editOrderId = mode === 'edit' ? (location.state?.orderData?.id ?? location.state?.orderData?.orderId ?? null) : null;
     // When arriving from invoice-convert or link mode, items & customer come via navigation state
     const fromInvoice = Boolean(location.state?.cartItems);
-    // Local + mutable so items can be removed right here without losing the sourceInvoiceId
-    // connection (which lives in this page's own closure/state, not in CartContext).
-    const [cartItems, setCartItems] = useState(() => fromInvoice ? location.state.cartItems : ctxCartItems);
+    // Sales, edit, link and convert-from-Sales all check out the live cart (fromCart): reading
+    // it from CartContext means a line removed here is gone from the cart too, and once the
+    // sale clears the cart a stale history entry can't bring a filled checkout back.
+    // Converting straight from Order History hands over the invoice's items without touching
+    // the cart (which may hold a different sale in progress) — those stay a local copy.
+    const fromCart = Boolean(location.state?.fromCart);
+    const [localItems, setLocalItems] = useState(() => fromInvoice ? location.state.cartItems : ctxCartItems);
+    const cartItems = fromCart ? ctxCartItems : localItems;
     const customer = fromInvoice ? location.state.customer : ctxCustomer;
     const enableTax = location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled;
     const parentOrderId = location.state?.parentOrderId ?? null;
     const sourceInvoiceId = location.state?.sourceInvoiceId ?? null;
 
     const removeItem = useCallback((index) => {
-        setCartItems(prev => prev.filter((_, i) => i !== index));
-    }, []);
+        if (fromCart) removeFromCart(index);
+        else setLocalItems(prev => prev.filter((_, i) => i !== index));
+    }, [fromCart, removeFromCart]);
 
     // Editing an order that consumed cut material: the confirmation is asked at SUBMIT,
     // not on entry, because only the final cart says which items actually change. An item
@@ -194,7 +200,12 @@ export default function CheckoutPage() {
     const [loading, setLoading] = useState(false);
     const [paymentError, setPaymentError] = useState(null);
     const [paymentMethod, setPaymentMethod] = useState(null);
-    const [discount, setDiscount] = useState('');
+    // An edit (or a quote conversion) starts from the discount the order already has —
+    // starting blank silently dropped it, and the customer was charged it again.
+    const [discount, setDiscount] = useState(() => {
+        const carried = Number(location.state?.discount ?? 0);
+        return carried > 0 ? String(carried) : '';
+    });
     const [isPartial, setIsPartial] = useState(false);
     const [amountPaid, setAmountPaid] = useState('');
     const [cashAmount, setCashAmount] = useState('');
@@ -222,14 +233,18 @@ export default function CheckoutPage() {
     const { subtotal: rawSubtotal } = useCartTotals(cartItems, enableTax);
 
     const financials = useMemo(() => {
-        const discountValue = isPartial ? 0 : ceilAmount(parseFloat(discount) || 0);
+        // Never negative (that would be a surcharge) and never more than the goods.
+        const discountValue = Math.min(Math.max(0, ceilAmount(parseFloat(discount) || 0)), ceilAmount(rawSubtotal));
         const netTaxable = Math.max(0, rawSubtotal - discountValue);
         const effectiveTax = enableTax ? ceilAmount(netTaxable * 0.16) : 0;
         const total = netTaxable + effectiveTax;
         const effectiveTotal = mode === 'edit' ? (total - originalTotal) : total;
         const isRefund = effectiveTotal < 0;
         const refundAmount = isRefund ? ceilAmount(-effectiveTotal) : 0;
-        const currentPayable = isRefund ? 0 : (isPartial ? ceilAmount(parseFloat(amountPaid) || 0) : Math.max(0, effectiveTotal));
+        // A partial payment is between nothing and the full amount due — the server refuses
+        // anything outside that, so it is clamped here rather than typed past.
+        const partialEntered = Math.max(0, ceilAmount(parseFloat(amountPaid) || 0));
+        const currentPayable = isRefund ? 0 : (isPartial ? Math.min(partialEntered, Math.max(0, effectiveTotal)) : Math.max(0, effectiveTotal));
         const balance = Math.max(0, ceilAmount(total - ((mode === 'edit' ? originalTotal : 0) + currentPayable)));
         // Amount the cash/mpesa split inputs divide up — the payable when charging,
         // the payout when refunding. Both directions share the same split UI.
@@ -243,17 +258,15 @@ export default function CheckoutPage() {
     const { subtotal, tax, discountValue, total, currentPayable, balance, mpesaAutoAmount, effectiveTotal, isRefund, refundAmount, payableAmount, netPayment } = financials;
 
     // In edit mode: detect whether anything actually changed vs the original order
+    // Compared with the fingerprint taken when the edit was opened (items, customer, VAT,
+    // discount). The old check compared against items this page was never given, so it
+    // always said "changed". A session saved before fingerprints existed counts as changed.
     const hasOrderChanged = useMemo(() => {
         if (!editOrderId) return true;
-        const originalItems = location.state?.orderData?.items || [];
-        if (originalItems.length !== cartItems.length) return true;
-        const sig = (items) =>
-            [...items]
-                .map(i => `${i.productId ?? i.id}:${i.variantId ?? ''}:${Number(i.totalPrice ?? 0).toFixed(2)}`)
-                .sort()
-                .join('|');
-        return sig(originalItems) !== sig(cartItems);
-    }, [editOrderId, cartItems, location.state?.orderData?.items]);
+        const original = editSession && String(editSession.orderId) === String(editOrderId) ? editSession.originalSig : null;
+        if (!original) return true;
+        return editSignature(cartItems, { customerId: customer?.id ?? null, vat: enableTax, discount: discountValue }) !== original;
+    }, [editOrderId, editSession, cartItems, customer, enableTax, discountValue]);
 
     const submitOrder = useCallback(async (cutConfirmations, planToken) => {
         setLoading(true);
@@ -266,7 +279,10 @@ export default function CheckoutPage() {
                 totals: { subtotal, tax, total, discount: discountValue, paid: netPayment, balance },
                 cutConfirmations: cutConfirmations || null,
                 planToken: planToken || null,
-                orderVersion: editSession && editSession.orderId === editOrderId ? editSession.version : null,
+                // From the session, else from the page state SalesDashboard passed: an edit
+                // submit always carries a version, so the server's conflict check is never skipped.
+                orderVersion: editSession && String(editSession.orderId) === String(editOrderId)
+                    ? editSession.version : (location.state?.orderVersion ?? null),
                 payment: {
                     method: paymentMethod, isPartial,
                     details: paymentMethod === 'split'
@@ -280,8 +296,10 @@ export default function CheckoutPage() {
                 ? await updateOrder(editOrderId, orderData)
                 : await addOrder(orderData);
 
-            clearCart();
+            // replace: Back from the receipt must not land on a filled checkout that a second
+            // Confirm would turn into a duplicate sale.
             navigate('/checkout/receipt', {
+                replace: true,
                 state: {
                     orderId: response?.orderId,
                     cartItems,
@@ -292,6 +310,7 @@ export default function CheckoutPage() {
                     mode: mode || 'new',
                 },
             });
+            clearCart();
         } catch (err) {
             console.error('Payment failed', err);
             if (err?.response?.status === 409 && err?.response?.data?.detail?.plan) {
@@ -314,7 +333,7 @@ export default function CheckoutPage() {
         } finally {
             setLoading(false);
         }
-    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, editSession, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories]);
+    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, editSession, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories, location.state?.orderVersion]);
 
     // Edit mode: ask the backend what THIS cart would disturb, and confirm every cut line
     // it does — the cutting flags are a prefill, not evidence, so a line the queue still
@@ -322,32 +341,44 @@ export default function CheckoutPage() {
     // requires_explicit_answer: the latter is only about which answers can be taken on
     // trust, and using it here skipped the modal entirely for an ordinary uncut line.
     // A new sale, or an edit that disturbs no cut material, submits straight through.
+    // One submit at a time. The edit path awaits the reversal-plan preview before
+    // submitOrder sets `loading`, so without this a quick double click ran two previews and
+    // two saves.
+    const busyRef = useRef(false);
     const handlePayment = useCallback(async () => {
-        if (!editOrderId) return submitOrder(null, null);
-        let plan = null;
+        if (busyRef.current) return undefined;
+        busyRef.current = true;
+        setLoading(true);
         try {
-            plan = await api.orderService.previewReversalPlan(
-                editOrderId, cartItems.map(mapItemForBackend));
-        } catch (err) {
-            // Advisory pre-check only — the edit call enforces the rules server-side.
-            console.error('Failed to preview the reversal plan', err);
-            return submitOrder(null, null);
-        }
-        const reversing = (plan?.lines || []).filter(l => l.will_reverse !== false);
-        if (reversing.length) {
-            // Answered in the calculators while the items were being changed. When they cover
-            // every line this edit disturbs, there is nothing left to ask; otherwise (an item
-            // removed outright, or answers from before a stale reload) the dialog opens with
-            // them pre-filled and asks only for the rest.
-            const known = Object.assign({}, ...cartItems.map(i => i.details?.cutAnswers || {}));
-            if (answersComplete(reversing, known)) {
-                return submitOrder(answersPayload(reversing, known), plan?.plan_token ?? null);
+            if (!editOrderId) return await submitOrder(null, null);
+            let plan = null;
+            try {
+                plan = await api.orderService.previewReversalPlan(
+                    editOrderId, cartItems.map(mapItemForBackend));
+            } catch (err) {
+                // Advisory pre-check only — the edit call enforces the rules server-side.
+                console.error('Failed to preview the reversal plan', err);
+                return await submitOrder(null, null);
             }
-            setCutsInitial(known);
-            setCutsPlan(plan);
-            return undefined;
+            const reversing = (plan?.lines || []).filter(l => l.will_reverse !== false);
+            if (reversing.length) {
+                // Answered in the calculators while the items were being changed. When they cover
+                // every line this edit disturbs, there is nothing left to ask; otherwise (an item
+                // removed outright, or answers from before a stale reload) the dialog opens with
+                // them pre-filled and asks only for the rest.
+                const known = Object.assign({}, ...cartItems.map(i => i.details?.cutAnswers || {}));
+                if (answersComplete(reversing, known)) {
+                    return await submitOrder(answersPayload(reversing, known), plan?.plan_token ?? null);
+                }
+                setCutsInitial(known);
+                setCutsPlan(plan);
+                setLoading(false);   // the dialog takes over; confirming it submits
+                return undefined;
+            }
+            return await submitOrder(null, plan?.plan_token ?? null);
+        } finally {
+            busyRef.current = false;
         }
-        return submitOrder(null, plan?.plan_token ?? null);
     }, [editOrderId, cartItems, submitOrder]);
 
     if (cartItems.length === 0) {
@@ -362,10 +393,16 @@ export default function CheckoutPage() {
         );
     }
 
+    const cashValue = parseFloat(cashAmount) || 0;
+    // Whole shillings, never negative — a negative cash part inflates the M-Pesa side.
+    const splitCashInvalid = paymentMethod === 'split' && (cashValue < 0 || !Number.isInteger(cashValue));
+    const partialOverDue = isPartial && !isRefund && (parseFloat(amountPaid) || 0) > Math.max(0, effectiveTotal);
     const canConfirm = !loading
         && hasOrderChanged
         && (isRefund ? !!paymentMethod : (currentPayable === 0 || !!paymentMethod))
-        && !(paymentMethod === 'split' && (parseFloat(cashAmount) || 0) > payableAmount);
+        && !(paymentMethod === 'split' && cashValue > payableAmount)
+        && !splitCashInvalid
+        && !partialOverDue;
 
     return (
         <div style={{
@@ -421,7 +458,7 @@ export default function CheckoutPage() {
 
                         {sourceInvoiceId && (
                             <button
-                                onClick={() => navigate('/sales', { state: { mode: 'convert', cartItems, customer, sourceInvoiceId, enableTax } })}
+                                onClick={() => navigate('/sales', { state: { mode: 'convert', cartItems, customer, sourceInvoiceId, enableTax, discount: discountValue } })}
                                 style={{
                                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                                     background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
@@ -587,34 +624,32 @@ export default function CheckoutPage() {
                         </div>
                     </div>
 
-                    {/* Discount */}
-                    {!isPartial && (
-                        <div>
-                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
-                                Discount (KSH)
-                            </label>
-                            <div style={{ position: 'relative' }}>
-                                <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', fontSize: '0.8rem', color: '#22c55e', fontWeight: 700 }}>−</span>
-                                <input
-                                    type="number"
-                                    value={discount}
-                                    onChange={e => setDiscount(e.target.value)}
-                                    placeholder="0"
-                                    min="0"
-                                    step="1"
-                                    style={{
-                                        width: '100%', background: 'rgba(255,255,255,0.04)',
-                                        border: '1px solid rgba(255,255,255,0.08)',
-                                        borderRadius: '0.75rem', padding: '0.75rem 0.875rem 0.75rem 2rem',
-                                        color: '#22c55e', fontSize: '0.9rem', fontFamily: 'var(--font-mono)',
-                                        fontWeight: 700, outline: 'none', transition: 'all 0.2s ease', boxSizing: 'border-box',
-                                    }}
-                                    onFocus={e => { e.target.style.borderColor = 'rgba(34,197,94,0.4)'; e.target.style.boxShadow = '0 0 0 3px rgba(34,197,94,0.08)'; }}
-                                    onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.08)'; e.target.style.boxShadow = ''; }}
-                                />
-                            </div>
+                    {/* Discount — allowed on partial / credit sales too */}
+                    <div>
+                        <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#475569', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '0.5rem' }}>
+                            Discount (KSH)
+                        </label>
+                        <div style={{ position: 'relative' }}>
+                            <span style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', fontSize: '0.8rem', color: '#22c55e', fontWeight: 700 }}>−</span>
+                            <input
+                                type="number"
+                                value={discount}
+                                onChange={e => setDiscount(e.target.value)}
+                                placeholder="0"
+                                min="0"
+                                step="1"
+                                style={{
+                                    width: '100%', background: 'rgba(255,255,255,0.04)',
+                                    border: '1px solid rgba(255,255,255,0.08)',
+                                    borderRadius: '0.75rem', padding: '0.75rem 0.875rem 0.75rem 2rem',
+                                    color: '#22c55e', fontSize: '0.9rem', fontFamily: 'var(--font-mono)',
+                                    fontWeight: 700, outline: 'none', transition: 'all 0.2s ease', boxSizing: 'border-box',
+                                }}
+                                onFocus={e => { e.target.style.borderColor = 'rgba(34,197,94,0.4)'; e.target.style.boxShadow = '0 0 0 3px rgba(34,197,94,0.08)'; }}
+                                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.08)'; e.target.style.boxShadow = ''; }}
+                            />
                         </div>
-                    )}
+                    </div>
 
                     {/* Partial payment toggle */}
                     {isRegistered && effectiveTotal > 0 && (
@@ -654,6 +689,8 @@ export default function CheckoutPage() {
                                 value={amountPaid}
                                 onChange={e => setAmountPaid(e.target.value)}
                                 placeholder="Enter amount..."
+                                min="0"
+                                max={Math.max(0, effectiveTotal)}
                                 step="1"
                                 style={{
                                     width: '100%', background: 'rgba(245,158,11,0.06)',
@@ -663,6 +700,11 @@ export default function CheckoutPage() {
                                     fontWeight: 700, outline: 'none', transition: 'all 0.2s ease', boxSizing: 'border-box',
                                 }}
                             />
+                            {partialOverDue && (
+                                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f87171', marginTop: '0.375rem' }}>
+                                    ⚠ More than the amount due (max KSH {Math.max(0, effectiveTotal).toFixed(0)}) — use Pay in Full instead
+                                </div>
+                            )}
                             {balance > 0 && (
                                 <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b', textAlign: 'right', marginTop: '0.375rem' }}>
                                     Remaining balance: KSH {balance.toFixed(0)}
@@ -726,6 +768,7 @@ export default function CheckoutPage() {
                                     value={cashAmount}
                                     onChange={e => setCashAmount(e.target.value)}
                                     placeholder="0"
+                                    min="0"
                                     step="1"
                                     style={{
                                         width: '100%', background: 'rgba(255,255,255,0.05)',
@@ -754,6 +797,11 @@ export default function CheckoutPage() {
                             {(parseFloat(cashAmount) || 0) > payableAmount && (
                                 <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f87171' }}>
                                     ⚠ Cash exceeds total (max KSH {payableAmount.toFixed(0)})
+                                </div>
+                            )}
+                            {splitCashInvalid && (
+                                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f87171' }}>
+                                    ⚠ Enter cash as a whole, positive amount
                                 </div>
                             )}
                         </div>

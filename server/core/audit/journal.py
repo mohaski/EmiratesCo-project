@@ -37,6 +37,7 @@ from entities.payments import Payment
 from entities.products import Product
 from entities.variants import Variant
 from entities.opJournal import JournalEntry
+from config import nairobi_now
 
 # class -> (table name, columns to journal on UPDATE; None = every column)
 TRACKED = {
@@ -164,7 +165,7 @@ def _journal_after_flush(session, flush_context):
     from core.audit.opContext import current_op_id
 
     op_id = current_op_id()
-    now = _dt.datetime.utcnow()
+    now = nairobi_now()
     rows = []
 
     for obj in session.new:

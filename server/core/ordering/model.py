@@ -22,7 +22,7 @@ class OrderCreate(BaseModel):
     servedBy: UUID
     VAT_status: bool = False
     discount: Optional[float] = 0.0
-    paymentStatus: str
+    paymentStatus: Optional[str] = None  # ignored — the server derives it from the totals
     
     # New Fields
     status: Optional[str] = "pending"
@@ -120,6 +120,9 @@ class OrderCancelRequest(BaseModel):
     pin: str
     refundMethod: Optional[str] = None
     refundDetails: Optional[Dict[str, Any]] = None
+    # The refund the cashier was shown. When the order's paid amount has changed since,
+    # the cancel is refused (409). Optional for older clients.
+    expectedRefund: Optional[float] = None
     # {line_ref: {physicalState, resolution}} — the operator's answer per cut line, keyed
     # by the line_ref from GET /orders/{id}/reversal-plan. Optional: lines that need no
     # judgement fall back to their prefilled default, so an order with nothing cut yet
@@ -137,7 +140,7 @@ class OrderEditRequest(BaseModel):
     servedBy: UUID
     VAT_status: bool = False
     discount: Optional[float] = 0.0
-    paymentStatus: str
+    paymentStatus: Optional[str] = None  # ignored — the server derives it from the totals
     paymentMethod: Optional[str] = None
     paymentDetails: Optional[Dict[str, Any]] = None
     items: List[OrderItemRequest] = []
@@ -202,6 +205,8 @@ class CorrectOffcutRequest(BaseModel):
     # One choice per re-supplied piece; overrides the three single-choice fields above for
     # the pieces it names.
     assignments: Optional[List[PieceAssignment]] = None
+    # The event as the screen showed it; refused (409) if it has changed. Optional.
+    expected_event: Optional[Dict[str, Any]] = None
 
 class CorrectOffcutResponse(BaseModel):
     message: str
@@ -234,6 +239,8 @@ class CorrectProfileOffcutRequest(BaseModel):
     force_new_source: bool = False
     use_original: bool = False
     original_part: int = 0
+    # The event as the screen showed it; refused (409) if it has changed. Optional.
+    expected_event: Optional[Dict[str, Any]] = None
 
 class CorrectProfileOffcutResponse(BaseModel):
     message: str
@@ -267,6 +274,10 @@ class MarkOrdersCuttingDoneRequest(BaseModel):
     """Order-queue batch report: mark every still-pending item across the given
     orders as cut, and each order itself as completed."""
     order_ids: List[int]
+    # The items the queue was showing. When given, only these are marked — an item added to
+    # an order (by an edit on another device) after the queue loaded stays pending. Optional
+    # for older clients, which mark every pending item as before.
+    item_ids: Optional[List[int]] = None
 
 class MarkOrdersCuttingDoneResponse(BaseModel):
     updated_orders: List[int]

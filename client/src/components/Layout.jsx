@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Outlet, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { ROUTE_ROLES } from '../config/routePermissions';
 import PullToRefresh from './PullToRefresh';
+import ErrorBoundary from './common/ErrorBoundary';
 
 const NAV_ICONS = {
   overview: (
@@ -129,8 +130,12 @@ export default function Layout() {
   // Route-level guard: sidebar hiding a link isn't enough to stop direct navigation
   // or hardcoded redirects (e.g. post-checkout) from landing a role on a page it
   // isn't permitted to see, so re-check here against the same ROUTE_ROLES map.
-  const allowedRoles = ROUTE_ROLES[location.pathname];
-  const isAuthorized = !allowedRoles || allowedRoles.includes(user?.role);
+  // React Router matches case-insensitively and ignores a trailing slash, so
+  // normalise the same way before the lookup — otherwise '/users/' or '/USERS'
+  // renders the page but finds no entry. A path with no entry is denied.
+  const normalizedPath = location.pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  const allowedRoles = ROUTE_ROLES[normalizedPath];
+  const isAuthorized = !!allowedRoles && allowedRoles.includes(user?.role);
 
   const isMobile = windowWidth < 768;
   const isTablet = windowWidth >= 768 && windowWidth < 1024;
@@ -483,7 +488,9 @@ export default function Layout() {
           display: 'flex', flexDirection: 'column',
           minWidth: 0,
         }}>
-          {isAuthorized ? <Outlet /> : <Navigate to="/" replace />}
+          {isAuthorized
+            ? <ErrorBoundary resetKey={location.pathname}><Outlet /></ErrorBoundary>
+            : <Navigate to="/" replace />}
         </PullToRefresh>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { useState, useMemo, memo } from 'react';
 import api from '../../services/api';
+import { extractErrorMessage } from '../../utils/toast';
 
 const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
     const [customerSearch, setCustomerSearch] = useState('');
@@ -33,7 +34,7 @@ const CustomerSelectionOverlay = memo(({ customers, onSelectCustomer }) => {
             onSelectCustomer({ id: response.customerId, name: newCustomerName, phone: newCustomerPhone, type: newCustomerType });
         } catch (err) {
             console.error("Registration failed", err);
-            alert("Registration failed: " + (err.response?.data?.detail || "Please check phone number format"));
+            alert("Registration failed: " + extractErrorMessage(err, "Please check phone number format"));
         } finally {
             setIsRegistering(false);
         }

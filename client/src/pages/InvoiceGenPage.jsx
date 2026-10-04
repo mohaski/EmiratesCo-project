@@ -67,6 +67,9 @@ export default function InvoiceGenPage() {
     const handleReviewInvoice = useCallback(() => navigate('/invoice/review', { state: { enableTax } }), [navigate, enableTax]);
     const handleCustomerSelect = useCallback(customer => {
         setSelectedCustomer(customer);
+        // A customer just registered in the overlay isn't in the list fetched on load —
+        // add them, so searching finds them without reloading the page.
+        if (customer?.id) setCustomers(prev => (prev.some(c => c.id === customer.id) ? prev : [...prev, customer]));
         setEnableTax(customer?.type !== 'individual');
     }, [setSelectedCustomer]);
 

@@ -8,7 +8,7 @@ import os
 import logging
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import settings
+from config import settings, DB_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,9 @@ engine: Engine = create_engine(
     connect_args={
         "connect_timeout": 10,
         "application_name": "EmiratesCo-API",
-        "options": "-c statement_timeout=30000",   # 30 s query timeout
+        # 30 s query timeout; pin the session TimeZone so now()/current_date are Nairobi
+        # time whatever the PostgreSQL server's own `timezone` setting is.
+        "options": f"-c statement_timeout=30000 -c TimeZone={DB_TIMEZONE}",
     },
 )
 

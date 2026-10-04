@@ -37,7 +37,16 @@ export default function Login() {
             if (success) { navigate('/'); }
             else { setError('Invalid credentials. Please try again.'); }
         } catch (err) {
-            setError('Connection error. Please try again.');
+            const status = err?.response?.status;
+            const detail = err?.response?.data?.detail;
+            if ((status === 401 || status === 429) && typeof detail === 'string') {
+                // Wrong username/password, a deactivated account, or too many attempts.
+                setError(detail);
+            } else if (!err?.response) {
+                setError('Cannot reach the server. Check your network connection.');
+            } else {
+                setError('Sign-in failed. Please try again.');
+            }
         } finally {
             setIsLoading(false);
         }

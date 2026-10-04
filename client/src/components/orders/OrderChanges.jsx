@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import api from '../../services/api';
 import { CutQuestions } from './ResolveCutsModal';
 import { answersComplete, answersPayload } from '../../utils/cutAnswers';
+import { parseServerDate } from '../../utils/dates';
 
 /**
  * Every recorded change to an order, and the two ways to fix a mistaken one (managers, CEO):
@@ -35,7 +36,7 @@ const input = {
 };
 
 const fmtWhen = (iso) => {
-    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    try { return parseServerDate(iso).toLocaleString(); } catch { return iso; }
 };
 
 const errorText = (err) => {

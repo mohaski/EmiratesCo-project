@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlmodel import Session, select
 
 from entities.invoices import Invoice
+from core.financials.splitDetails import normalize_payment_details
 from entities.orders import Order
 from entities.orderItems import OrderItem
 from entities.products import Product
@@ -183,6 +184,12 @@ def convert_invoice_to_order(
         vat = compute_VAT_amount(net) if inv.vat_enabled else Decimal("0.00")
         final_total = net + vat
         amount_paid = ceil_amount(Decimal(str(data.amount_paid)))
+        if amount_paid < 0:
+            raise HTTPException(status_code=400, detail="The amount paid can't be negative.")
+        if amount_paid > final_total + Decimal("1"):
+            raise HTTPException(status_code=400, detail=(
+                f"The amount paid (KSH {amount_paid:,.0f}) is more than the order total (KSH {final_total:,.0f})."))
+        amount_paid = min(amount_paid, final_total)
         balance = final_total - amount_paid
 
         is_paid = balance <= Decimal("0.10")
@@ -217,7 +224,7 @@ def convert_invoice_to_order(
                 amount=float(amount_paid),
                 payment_method=pay_method,
                 reason="order",
-                payment_details=data.payment_details,
+                payment_details=normalize_payment_details(pay_method, data.payment_details, float(amount_paid)),
                 recorded_by=served_by_id,
             ))
 
@@ -270,6 +277,7 @@ def convert_invoice_to_order(
             orderId=new_order.orderId,
         )
     except HTTPException:
+        db.rollback()
         raise
     except Exception as e:
         db.rollback()

@@ -3,6 +3,7 @@ import { useProducts } from '../../context/ProductContext';
 import { useAttributes } from '../../context/AttributeContext';
 import { isProfileCategory } from '../../utils/colors';
 import ConfirmationModal from '../common/ConfirmationModal';
+import { extractErrorMessage } from '../../utils/toast';
 
 export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const { updateProduct, updateProductVariant, deleteProductVariant } = useProducts();
@@ -109,7 +110,8 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     ];
 
     const handleEditClick = v => {
-        setEditingVariantId(getVariantId(v));
+        // By id: two variants can share a label, and a label changes when an attribute is added.
+        setEditingVariantId(v.id);
         setEditForm({
             price: v.price || v.priceFull || '', priceHalf: v.priceHalf || '', priceUnit: v.priceUnit || '', stockChange: '',
             lowStockThreshold: v.lowStockThreshold || '',
@@ -141,11 +143,15 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const handleSaveEdit = async originalVariant => {
         setSaving(true);
         try {
+            // A blank price box means "leave it" (clearing a box to retype it used to save 0);
+            // type 0 to really set 0. Stock is sent only when it actually changes.
+            const priceOrSkip = (key, raw) => (String(raw).trim() === '' ? {} : { [key]: parseFloat(raw) || 0 });
+            const stockChange = (parseInt(editForm.stockChange) || 0) * packFactor(originalVariant);
             const payload = {
-                price: parseFloat(editForm.price) || 0,
-                price_half: parseFloat(editForm.priceHalf) || 0,
-                price_unit: parseFloat(editForm.priceUnit) || 0,
-                stock_change: (parseInt(editForm.stockChange) || 0) * packFactor(originalVariant),
+                ...priceOrSkip('price', editForm.price),
+                ...priceOrSkip('price_half', editForm.priceHalf),
+                ...priceOrSkip('price_unit', editForm.priceUnit),
+                ...(stockChange !== 0 ? { stock_change: stockChange } : {}),
                 low_stock_threshold: parseFloat(editForm.lowStockThreshold) || 0,
                 ...(product.trackOffcuts ? { min_usable: parseFloat(editForm.minUsable) || (product.hasDimensions ? 150 : 2) } : {}),
                 ...(product.hasDimensions ? {
@@ -155,7 +161,7 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
             };
             await updateProductVariant(originalVariant.id, payload);
             setEditingVariantId(null);
-        } catch { alert('Update failed'); }
+        } catch (err) { alert(extractErrorMessage(err, 'Update failed')); }
         finally { setSaving(false); }
     };
 
@@ -183,7 +189,10 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
 
     // --- Add Attribute panel logic ---
     const applicableAttributes = product.applicableAttributes || [];
-    const availableClasses = attributeClasses.filter(c => !applicableAttributes.includes(c.name));
+    // Offered: attributes not on the product yet, plus ones on the product that some variant
+    // still lacks (an earlier "Add Attribute" stopped part-way) — so that can be finished.
+    const availableClasses = attributeClasses.filter(c => !applicableAttributes.includes(c.name)
+        || variants.some(v => !(c.name in (v.attributes || {}))));
     const isNewClass = attrClassChoice === '__new__';
     const selectedClass = !isNewClass && attrClassChoice
         ? attributeClasses.find(c => String(c.id) === String(attrClassChoice))
@@ -234,10 +243,17 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
 
     const handleSaveAttribute = async () => {
         if (!effectiveClassName) { alert('Choose or name an attribute.'); return; }
-        if (applicableAttributes.includes(effectiveClassName)) { alert(`"${effectiveClassName}" is already an attribute on this product.`); return; }
+        // Already on the product: a previous attempt registered it but stopped part-way through
+        // filling in the variants. Finish the job (only variants still without it) instead of
+        // refusing — the refusal used to leave those variants unfixable.
+        const resuming = applicableAttributes.includes(effectiveClassName);
+        const missing = variants.filter(v => !(effectiveClassName in (v.attributes || {})));
+        if (resuming && missing.length === 0) { alert(`"${effectiveClassName}" is already set on every variant of this product.`); return; }
+        if (resuming && !window.confirm(`"${effectiveClassName}" is already on this product. Fill it in for the ${missing.length} variant(s) still missing it?`)) return;
         setSavingAttr(true);
+        let done = 0, todo = 0;
         try {
-            if (isNewClass) {
+            if (isNewClass && !resuming) {
                 await createAttributeClass(effectiveClassName, newClassType === 'custom' ? 'custom' : 'list');
             }
             // Does the CEO's pooling choice for this attribute diverge from what the
@@ -260,19 +276,28 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                 nextPoolIgnored = Array.from(seed);
             }
             // 1. Register the attribute on the product itself, so new variants offer it too.
-            await updateProduct({
-                ...product,
-                applicableAttributes: [...applicableAttributes, effectiveClassName],
-                ...(nextPoolIgnored !== undefined ? { poolIgnoredAttributes: nextPoolIgnored } : {}),
-            });
-            // 2. Backfill each existing variant with its chosen value (blanks are left unset).
-            for (const v of variants) {
-                const val = (variantAttrValues[getVariantId(v)] || '').trim();
-                if (!val) continue;
+            if (!resuming) {
+                await updateProduct({
+                    ...product,
+                    applicableAttributes: [...applicableAttributes, effectiveClassName],
+                    ...(nextPoolIgnored !== undefined ? { poolIgnoredAttributes: nextPoolIgnored } : {}),
+                });
+            }
+            // 2. Backfill each variant still without it with its chosen value (blanks are left unset).
+            const targets = (resuming ? missing : variants)
+                .map(v => ({ v, val: (variantAttrValues[getVariantId(v)] || '').trim() }))
+                .filter(t => t.val);
+            todo = targets.length;
+            for (const { v, val } of targets) {
                 await updateProductVariant(v.id, { attributes: { ...v.attributes, [effectiveClassName]: val } });
+                done += 1;
             }
             closeAttrPanel();
-        } catch { alert('Failed to add attribute.'); }
+        } catch (err) {
+            alert(todo > 0
+                ? `Stopped after ${done} of ${todo} variant(s): ${extractErrorMessage(err, 'update failed')}. Open "Add Attribute" with the same name again to finish the rest.`
+                : extractErrorMessage(err, 'Failed to add attribute.'));
+        }
         finally { setSavingAttr(false); }
     };
 
@@ -499,10 +524,11 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                                 {variants.map((variant, idx) => {
                                     const name = getVariantId(variant);
-                                    const isEditing = editingVariantId === name;
+                                    const isEditing = editingVariantId === variant.id;
                                     // Out-of-stock always alerts, even with no CEO-configured threshold (0 = unset);
                                     // a configured threshold (>0) additionally alerts earlier, before hitting zero.
-                                    const isLowStock = (variant.stock || 0) <= 0 || (variant.lowStockThreshold > 0 && (variant.stock || 0) < variant.lowStockThreshold);
+                                    // Threshold in the unit stock is shown in (boxes for a packaged item).
+                                    const isLowStock = (variant.stock || 0) <= 0 || (variant.lowStockThreshold > 0 && (variant.stock || 0) / packFactor(variant) < variant.lowStockThreshold);
                                     return (
                                         <div key={idx} style={{
                                             borderRadius: '1rem', overflow: 'hidden',

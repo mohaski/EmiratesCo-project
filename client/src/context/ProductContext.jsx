@@ -1,5 +1,5 @@
 // @refresh reset
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../services/api';
 import { wsEvents } from '../utils/wsEvents';
 import { computePoolKey } from '../utils/poolKey';
@@ -122,7 +122,11 @@ export const ProductProvider = ({ children }) => {
     };
 
     // --- Data Fetching ---
+    // Latest request wins: every sale broadcasts products_updated, and two quick refreshes
+    // could resolve out of order — an older stock snapshot overwriting a newer one.
+    const productsReqRef = useRef(0);
     const initializeData = useCallback(async () => {
+        const req = ++productsReqRef.current;
         try {
             setLoading(true);
             const [rawCats, rawProds, rawOpen] = await Promise.all([
@@ -132,6 +136,7 @@ export const ProductProvider = ({ children }) => {
                 // transient failure, must not take the whole product list down.
                 api.openContainerService.list('open').catch(() => []),
             ]);
+            if (req !== productsReqRef.current) return;
 
             const mappedCats = mapCategories(rawCats);
             setCategories(mappedCats);
@@ -142,18 +147,20 @@ export const ProductProvider = ({ children }) => {
             setError(null);
         } catch (err) {
             console.error("Failed to fetch product data", err);
-            setError("Failed to load products");
+            if (req === productsReqRef.current) setError("Failed to load products");
         } finally {
-            setLoading(false);
+            if (req === productsReqRef.current) setLoading(false);
         }
     }, []);
 
     const refreshProducts = useCallback(async () => {
+        const req = ++productsReqRef.current;
         try {
             const [raw, rawOpen] = await Promise.all([
                 api.productService.getAll(),
                 api.openContainerService.list('open').catch(() => []),
             ]);
+            if (req !== productsReqRef.current) return;
             // Pull fresh categories inside the setter to avoid stale closure
             setCategories(currentCats => {
                 const mapped = mapProducts(raw, currentCats);
@@ -180,7 +187,7 @@ export const ProductProvider = ({ children }) => {
     // whole app lifetime, so a mount-only effect never re-runs when the same
     // session logs out and back in.
     useEffect(() => {
-        if (user) {
+        if (user && !user.mustChangePassword) {
             initializeData();
         } else {
             setProducts([]);
@@ -200,15 +207,14 @@ export const ProductProvider = ({ children }) => {
         try {
             const cat = categories.find(c => c.id === productData.category);
             const dbCategoryId = cat ? cat.dbId : null;
-
-            if (!dbCategoryId) {
-                console.error("Category not found for ID:", productData.category);
-            }
+            // Refused rather than filed under category 1, which is where a product silently
+            // went when its category couldn't be matched.
+            if (!dbCategoryId) throw new Error(`Category "${productData.category}" not found — reload the page and try again.`);
 
             const payload = {
                 name: productData.name,
                 itemCode: productData.itemCode,
-                category_id: dbCategoryId || 1,
+                category_id: dbCategoryId,
                 sub_category: productData.subCategory,
                 trackOffcuts: productData.trackOffcuts || false,
                 unit_stock_mode: productData.unitStockMode || 'counted',
@@ -244,12 +250,12 @@ export const ProductProvider = ({ children }) => {
         }
     }, [categories, refreshProducts]);
 
+    // Throws on failure so the caller can keep its dialog open (it used to close as if the
+    // product had been deleted; only the error toast said otherwise).
     const deleteProduct = useCallback(async (productId) => {
         try {
             await api.productService.delete(productId);
-            await refreshProducts();
-        } catch (err) {
-            console.error("Delete Product Failed", err);
+        } finally {
             await refreshProducts();
         }
     }, [refreshProducts]);
@@ -293,8 +299,23 @@ export const ProductProvider = ({ children }) => {
             return true;
         } catch (err) {
             console.error("Failed to add category", err);
+            throw err;
         }
     }, [refreshCategories]);
+
+    const deleteCategory = useCallback(async (categoryId) => {
+        const cat = categories.find(c => c.id === categoryId);
+        if (!cat) throw new Error('Category not found');
+        await api.productService.deleteCategory(cat.dbId);
+        await refreshCategories();
+    }, [categories, refreshCategories]);
+
+    const deleteSubCategory = useCallback(async (categoryId, subId) => {
+        const cat = categories.find(c => c.id === categoryId);
+        if (!cat) throw new Error('Category not found');
+        await api.productService.deleteSubCategory(cat.dbId, subId);
+        await refreshCategories();
+    }, [categories, refreshCategories]);
 
     const addSubCategory = useCallback(async (categoryId, label) => {
         try {
@@ -410,6 +431,8 @@ export const ProductProvider = ({ children }) => {
         updateProduct,
         addCategory,
         addSubCategory,
+        deleteCategory,
+        deleteSubCategory,
         addProductVariant,
         addProductVariants,
         addProductOffcuts,
@@ -418,7 +441,7 @@ export const ProductProvider = ({ children }) => {
         openContainers,
         hasOpenPack,
         refreshProducts: initializeData
-    }), [products, categories, loading, error, openContainers, hasOpenPack, addProduct, deleteProduct, updateProduct, addCategory, addSubCategory, addProductVariant, addProductVariants, addProductOffcuts, updateProductVariant, deleteProductVariant, initializeData]);
+    }), [products, categories, loading, error, openContainers, hasOpenPack, addProduct, deleteProduct, updateProduct, addCategory, addSubCategory, deleteCategory, deleteSubCategory, addProductVariant, addProductVariants, addProductOffcuts, updateProductVariant, deleteProductVariant, initializeData]);
 
     return (
         <ProductContext.Provider value={value}>

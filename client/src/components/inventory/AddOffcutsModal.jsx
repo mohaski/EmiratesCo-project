@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { extractErrorMessage } from '../../utils/toast';
 
 const rowInput = {
     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px',
@@ -41,8 +42,9 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
     const addRow = () => setRows(prev => [...prev, emptyRow(hasDimensions)]);
 
     const isRowValid = (r) => {
-        const qty = parseInt(r.quantity);
-        if (!(qty > 0)) return false;
+        // A whole number of pieces — "1.5" used to be accepted and saved as 1.
+        const qty = Number(r.quantity);
+        if (!(Number.isInteger(qty) && qty > 0)) return false;
         return hasDimensions
             ? parseFloat(r.width) > 0 && parseFloat(r.height) > 0
             : parseFloat(r.length) > 0;
@@ -65,7 +67,7 @@ export default function AddOffcutsModal({ isOpen, onClose, product, onSubmit }) 
             await onSubmit(payload);
             onClose();
         } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to add offcuts. Please try again.');
+            setError(extractErrorMessage(err, 'Failed to add offcuts. Please try again.'));
         } finally {
             setSubmitting(false);
         }

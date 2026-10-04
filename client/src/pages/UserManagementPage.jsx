@@ -20,7 +20,14 @@ export default function UserManagementPage() {
     const deferredQuery = useDeferredValue(searchQuery);
     const [showRegModal, setShowRegModal] = useState(false);
     const [resetTarget, setResetTarget] = useState(null);
-    const [busyUserId, setBusyUserId] = useState(null);
+    // One busy flag per user: with a single id, finishing the first of two quick actions
+    // re-enabled the second user's buttons while their request was still running.
+    const [busyIds, setBusyIds] = useState(() => new Set());
+    const markBusy = (id, on) => setBusyIds(prev => {
+        const next = new Set(prev);
+        if (on) next.add(id); else next.delete(id);
+        return next;
+    });
     const [pendingRoles, setPendingRoles] = useState({});
 
     const fetchUsers = useCallback(async () => {
@@ -55,7 +62,7 @@ export default function UserManagementPage() {
     const handleConfirmRoleChange = useCallback(async (targetUser) => {
         const role = pendingRoles[targetUser.userId];
         if (!role || role === targetUser.role) return;
-        setBusyUserId(targetUser.userId);
+        markBusy(targetUser.userId, true);
         try {
             await api.userService.updateRole(targetUser.userId, role);
             setUsers(prev => prev.map(u => u.userId === targetUser.userId ? { ...u, role } : u));
@@ -68,7 +75,7 @@ export default function UserManagementPage() {
                 delete next[targetUser.userId];
                 return next;
             });
-            setBusyUserId(null);
+            markBusy(targetUser.userId, false);
         }
     }, [pendingRoles]);
 
@@ -77,7 +84,7 @@ export default function UserManagementPage() {
         if (nextActive === false && !window.confirm(`Deactivate ${targetUser.firstName} ${targetUser.secondName || ''}? They will no longer be able to log in.`)) {
             return;
         }
-        setBusyUserId(targetUser.userId);
+        markBusy(targetUser.userId, true);
         try {
             await api.userService.updateStatus(targetUser.userId, nextActive);
             setUsers(prev => prev.map(u => u.userId === targetUser.userId ? { ...u, isActive: nextActive } : u));
@@ -85,7 +92,7 @@ export default function UserManagementPage() {
         } catch (err) {
             showToast(extractErrorMessage(err), 'error');
         } finally {
-            setBusyUserId(null);
+            markBusy(targetUser.userId, false);
         }
     }, []);
 
@@ -183,7 +190,7 @@ export default function UserManagementPage() {
                             <tbody>
                                 {rows.map(row => {
                                     const isSelf = row.userId === currentUser?.userId;
-                                    const busy = busyUserId === row.userId;
+                                    const busy = busyIds.has(row.userId);
                                     return (
                                         <tr key={row.userId} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                                             <td style={{ padding: '0.875rem 1rem', fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0' }}>

@@ -3,6 +3,7 @@ from typing import List
 from sqlmodel import Session
 from db.database import get_session
 from core.userManagement.authService import get_current_user
+from utils import require_roles, CATALOG_ROLES, STAFF_ROLES
 from ws.manager import manager
 from . import model, service
 
@@ -10,7 +11,9 @@ router = APIRouter(prefix="/attributes", tags=["Attributes"])
 
 
 @router.get("/", response_model=List[model.AttributeClassResponse])
-def get_attribute_classes(db: Session = Depends(get_session)):
+def get_attribute_classes(db: Session = Depends(get_session),
+    current_user=Depends(require_roles(*STAFF_ROLES)),
+):
     return service.get_all_attribute_classes(db)
 
 
@@ -19,7 +22,7 @@ async def create_attribute_class(
     data: model.AttributeClassCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_roles(*CATALOG_ROLES)),
 ):
     result = service.create_attribute_class(data, db)
     background_tasks.add_task(manager.broadcast, "attributes_updated")
@@ -32,7 +35,7 @@ async def rename_attribute_class(
     data: model.AttributeClassRename,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_roles(*CATALOG_ROLES)),
 ):
     result = service.rename_attribute_class(class_id, data, db)
     background_tasks.add_task(manager.broadcast, "attributes_updated")
@@ -44,7 +47,7 @@ async def delete_attribute_class(
     class_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_roles(*CATALOG_ROLES)),
 ):
     result = service.delete_attribute_class(class_id, db)
     background_tasks.add_task(manager.broadcast, "attributes_updated")
@@ -57,7 +60,7 @@ async def add_attribute_value(
     data: model.AttributeValueCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_roles(*CATALOG_ROLES)),
 ):
     result = service.add_attribute_value(class_id, data, db)
     background_tasks.add_task(manager.broadcast, "attributes_updated")
@@ -70,7 +73,7 @@ async def rename_attribute_value(
     data: model.AttributeValueRename,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_roles(*CATALOG_ROLES)),
 ):
     result = service.rename_attribute_value(value_id, data, db)
     background_tasks.add_task(manager.broadcast, "attributes_updated")
@@ -82,7 +85,7 @@ async def delete_attribute_value(
     value_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_roles(*CATALOG_ROLES)),
 ):
     result = service.delete_attribute_value(value_id, db)
     background_tasks.add_task(manager.broadcast, "attributes_updated")

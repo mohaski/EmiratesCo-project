@@ -4,6 +4,7 @@ import { useToast } from '../../context/ToastContext';
 import { wsEvents } from '../../utils/wsEvents';
 import CuttingInstructions from './CuttingInstructions';
 import { REVIEW_THEME } from '../../utils/cuttingInstructionFormat';
+import { extractErrorMessage } from '../../utils/toast';
 
 const cardStyle = {
     background: 'rgba(255,255,255,0.03)',
@@ -26,8 +27,8 @@ export default function CuttingQueueSection({ onCountChange }) {
     const [selected, setSelected] = useState(() => new Set());
     const [submitting, setSubmitting] = useState(false);
 
-    const fetchQueue = useCallback(() => {
-        setLoading(true);
+    const fetchQueue = useCallback(({ background = false } = {}) => {
+        if (!background) setLoading(true);
         api.orderService.getCuttingQueue()
             .then(data => { setOrders(data || []); setError(''); })
             .catch(() => setError('Failed to load the cutting queue — please try again.'))
@@ -35,7 +36,14 @@ export default function CuttingQueueSection({ onCountChange }) {
     }, []);
 
     useEffect(() => { fetchQueue(); }, [fetchQueue]);
-    useEffect(() => wsEvents.on('cutting_status_updated', fetchQueue), [fetchQueue]);
+    // Cutting reports, and also any order change: an order cancelled or edited elsewhere
+    // must not stay on screen to be ticked off with items that are gone or never shown.
+    useEffect(() => {
+        let timer = null;
+        const refresh = () => { clearTimeout(timer); timer = setTimeout(() => fetchQueue({ background: true }), 400); };
+        const offs = [wsEvents.on('cutting_status_updated', refresh), wsEvents.on('orders_updated', refresh)];
+        return () => { offs.forEach(off => off()); clearTimeout(timer); };
+    }, [fetchQueue]);
 
     useEffect(() => { onCountChange?.(orders.length); }, [orders, onCountChange]);
 
@@ -62,12 +70,15 @@ export default function CuttingQueueSection({ onCountChange }) {
         if (selected.size === 0) return;
         setSubmitting(true);
         try {
-            await api.orderService.markOrdersCuttingDone([...selected]);
-            showToast(`${selected.size} order${selected.size > 1 ? 's' : ''} reported cut and completed`, 'success');
+            // Only the items on screen: one added to the order since the queue loaded is
+            // still to be cut.
+            const shownItemIds = orders.filter(o => selected.has(o.orderId)).flatMap(o => (o.items || []).map(i => i.itemId));
+            await api.orderService.markOrdersCuttingDone([...selected], shownItemIds);
+            showToast(`${selected.size} order${selected.size > 1 ? 's' : ''} reported cut`, 'success');
             setSelected(new Set());
             fetchQueue();
         } catch (err) {
-            showToast(err.response?.data?.detail || 'Failed to report cutting done. Please try again.', 'error');
+            showToast(extractErrorMessage(err, 'Failed to report cutting done. Please try again.'), 'error');
         } finally {
             setSubmitting(false);
         }

@@ -34,6 +34,7 @@ from uuid import UUID
 
 from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel
+from config import nairobi_now
 
 OP_SALE = "sale"
 OP_EDIT = "edit"
@@ -68,7 +69,7 @@ class StockOperation(SQLModel, table=True):
     actor_name: Optional[str] = Field(default=None)
     order_id: Optional[int] = Field(default=None, index=True)
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False, index=True)
+    created_at: datetime = Field(default_factory=nairobi_now, nullable=False, index=True)
 
     # The request as submitted (edit cart + cut answers, cancel answers...), so a mistaken
     # edit can be re-run with corrected answers against exactly the same cart.
@@ -95,7 +96,7 @@ class JournalEntry(SQLModel, table=True):
     action: str = Field(nullable=False)  # insert | update | delete
     before: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
     after: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
-    at: datetime = Field(default_factory=datetime.utcnow, nullable=False, index=True)
+    at: datetime = Field(default_factory=nairobi_now, nullable=False, index=True)
 
 
 class StockBaseline(SQLModel, table=True):
@@ -105,6 +106,6 @@ class StockBaseline(SQLModel, table=True):
     table_name: str = Field(nullable=False)   # variants | products
     row_pk: str = Field(nullable=False)
     quantity: float = Field(nullable=False)
-    taken_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    taken_at: datetime = Field(default_factory=nairobi_now, nullable=False)
     # The journal id that was current when this was taken — deltas after it count.
     after_journal_id: int = Field(default=0, nullable=False)

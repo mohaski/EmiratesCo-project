@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { wsEvents } from '../utils/wsEvents';
+import { parseServerDate } from '../utils/dates';
 
 const STATUS_COLORS = {
     'Pending': '#f59e0b',
@@ -150,7 +151,7 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
                                         borderRadius: '6px', padding: '2px 8px',
                                     }}>{row.status}</span>
                                     <span style={{ fontSize: '0.72rem', color: '#64748b', marginLeft: 'auto' }}>
-                                        {row.lastPaymentAt ? `Last paid ${new Date(row.lastPaymentAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'No payments yet'}
+                                        {row.lastPaymentAt ? `Last paid ${parseServerDate(row.lastPaymentAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : 'No payments yet'}
                                     </span>
                                 </div>
                             </div>
@@ -200,7 +201,7 @@ export function DuesTab({ searchQuery = '', onCountChange }) {
                                             }}>{row.daysOutstanding}d {overdue && '⚠'}</span>
                                         </td>
                                         <td style={{ padding: '0.875rem 1rem', fontSize: '0.78rem', color: '#64748b' }}>
-                                            {row.lastPaymentAt ? new Date(row.lastPaymentAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                                            {row.lastPaymentAt ? parseServerDate(row.lastPaymentAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
                                         </td>
                                         <td style={{ padding: '0.875rem 1rem' }}>
                                             <span style={{

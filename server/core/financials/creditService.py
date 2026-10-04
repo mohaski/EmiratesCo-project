@@ -10,6 +10,7 @@ from entities.payments import Payment
 from db.database import get_session
 from loggiing import logger
 from . import model
+from config import nairobi_now
 
 
 def create_credit(credit_data: model.CreditCreateRequest, db: Session = Depends(get_session)) -> model.CreditCreateResponse:
@@ -57,7 +58,7 @@ def update_credit(payedAmount: float, order_id: int, credit_data: model.CreditUp
         elif payedAmount == credit.amount_due:
             credit.amount_due = 0.0
             credit.status = "Paid"
-            credit.settledAt = datetime.utcnow()
+            credit.settledAt = nairobi_now()
         else:
             credit.amount_due -= payedAmount
             if credit.status != "Partially Paid":
@@ -131,7 +132,7 @@ def get_all_outstanding_credits(db: Session = Depends(get_session)) -> list[mode
         )
         last_payment_map = dict(db.exec(last_payment_stmt).all())
 
-        now = datetime.utcnow()
+        now = nairobi_now()
         items = []
         for credit, customer, order in rows:
             created_at = order.created_at

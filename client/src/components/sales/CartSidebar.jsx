@@ -109,7 +109,7 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
 
     const handleAction = useCallback(() => {
         if (onAction) { onAction(); return; }
-        navigate('/checkout', { state: { cartItems, customer, enableTax } });
+        navigate('/checkout', { state: { cartItems, customer, enableTax, fromCart: true } });
     }, [onAction, navigate, cartItems, customer, enableTax]);
 
     return (
@@ -142,7 +142,7 @@ export default function CartSidebar({ cartItems, onRemoveItem, onEditItem, custo
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: '0.875rem',
                     }}>
-                        {customer ? (customer.type === 'corporate' ? '🏢' : '👤') : '👤'}
+                        {customer ? (customer.type === 'cooperate' ? '🏢' : '👤') : '👤'}
                     </div>
                 </div>
 

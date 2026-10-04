@@ -22,9 +22,12 @@ export const showToast = (message, type = 'error') => {
 
 /**
  * Extract a user-readable message from an axios error response.
- * Handles FastAPI's string detail, list detail (Pydantic errors), and network failures.
+ * Handles FastAPI's string detail, list detail (Pydantic errors), structured
+ * detail objects ({message, reasons|plan}), and network failures.
+ * Always returns a string, so it is safe to render directly as a React child.
+ * `fallback` is used when the response carries no usable message.
  */
-export const extractErrorMessage = (error) => {
+export const extractErrorMessage = (error, fallback = 'An error occurred.') => {
     if (!error) return 'An unexpected error occurred.';
     const data = error.response?.data;
     if (!data) {
@@ -34,9 +37,14 @@ export const extractErrorMessage = (error) => {
         return error.message || 'An unexpected error occurred.';
     }
     const detail = data.detail;
-    if (typeof detail === 'string') return detail;
+    if (typeof detail === 'string' && detail) return detail;
     if (Array.isArray(detail)) {
-        return detail.map(e => e.msg || String(e)).filter(Boolean).join(' · ') || 'Validation error.';
+        return detail.map(e => e?.msg || String(e)).filter(Boolean).join(' · ') || 'Validation error.';
     }
-    return String(detail || data.message || 'An error occurred.');
+    if (detail && typeof detail === 'object') {
+        const reasons = Array.isArray(detail.reasons) ? detail.reasons : [];
+        const text = [detail.message, ...reasons].filter(r => typeof r === 'string' && r).join(' ');
+        if (text) return text;
+    }
+    return typeof data.message === 'string' && data.message ? data.message : fallback;
 };

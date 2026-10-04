@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { ToolService } from '../services/api';
 import { useToast } from '../context/ToastContext';
 import { wsEvents } from '../utils/wsEvents';
+import { parseServerDate } from '../utils/dates';
 
 const cardStyle = {
     background: 'rgba(255,255,255,0.03)',
@@ -130,7 +131,11 @@ export function CheckoutTab() {
         setSelectedIds(prev => prev.includes(toolId) ? prev.filter(id => id !== toolId) : [...prev, toolId]);
     };
 
-    const canReview = workerName.trim().length > 0 && selectedIds.length > 0;
+    // Only tools that are still available: a tool taken on another screen drops out of the
+    // list on refresh, and sending it anyway failed the whole loan.
+    const liveSelectedIds = selectedTools.map(t => t.toolId);
+    const droppedCount = selectedIds.length - liveSelectedIds.length;
+    const canReview = workerName.trim().length > 0 && liveSelectedIds.length > 0;
 
     const resetForm = () => {
         setWorkerName('');
@@ -142,8 +147,8 @@ export function CheckoutTab() {
     const handleConfirm = async () => {
         setSubmitting(true);
         try {
-            await ToolService.createLoan({ workerName: workerName.trim(), toolIds: selectedIds, notes: notes || null });
-            showToast(`${selectedIds.length} tool(s) checked out to ${workerName.trim()}`, 'success');
+            await ToolService.createLoan({ workerName: workerName.trim(), toolIds: liveSelectedIds, notes: notes || null });
+            showToast(`${liveSelectedIds.length} tool(s) checked out to ${workerName.trim()}`, 'success');
             resetForm();
             fetchTools();
         } catch {
@@ -262,6 +267,11 @@ export function CheckoutTab() {
                     <h3 style={{ fontSize: '0.68rem', fontWeight: 700, color: '#475569', letterSpacing: '0.1em', textTransform: 'uppercase', margin: '0 0 0.75rem' }}>
                         Selected ({selectedTools.length})
                     </h3>
+                    {droppedCount > 0 && (
+                        <p style={{ margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#fbbf24', fontWeight: 600 }}>
+                            {droppedCount} selected tool(s) were just checked out on another screen and were removed.
+                        </p>
+                    )}
                     {selectedTools.length === 0 ? (
                         <p style={{ fontSize: '0.8rem', color: '#334155' }}>No tools selected yet.</p>
                     ) : (
@@ -298,8 +308,15 @@ export function ReturnTab() {
     const fetchLoans = useCallback(async (worker) => {
         setLoading(true);
         try {
-            const data = await ToolService.getLoans({ worker: worker || undefined, limit: 50 });
-            setLoans(data.filter(l => l.status !== 'returned'));
+            // Ask for the open loans themselves: taking the 50 newest of ALL loans and then
+            // dropping the returned ones hid any older loan still out — its tools could
+            // never be returned from here.
+            const [out, partial] = await Promise.all([
+                ToolService.getLoans({ worker: worker || undefined, status: 'out', limit: 500 }),
+                ToolService.getLoans({ worker: worker || undefined, status: 'partially_returned', limit: 500 }),
+            ]);
+            const open = [...out, ...partial].sort((a, b) => String(b.issued_at || '').localeCompare(String(a.issued_at || '')));
+            setLoans(open);
         } finally {
             setLoading(false);
         }
@@ -365,7 +382,7 @@ export function ReturnTab() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                         <div>
                             <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#f1f5f9' }}>{selectedLoan.workerName}</div>
-                            <div style={{ fontSize: '0.75rem', color: '#475569' }}>Issued {new Date(selectedLoan.issued_at).toLocaleString()}</div>
+                            <div style={{ fontSize: '0.75rem', color: '#475569' }}>Issued {parseServerDate(selectedLoan.issued_at).toLocaleString()}</div>
                         </div>
                         <Badge status={selectedLoan.status} />
                     </div>

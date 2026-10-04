@@ -21,10 +21,19 @@ const stripUiKeys = (details) => {
 };
 
 export const mapItemForBackend = (item) => {
-    const rawQty = parseFloat(item.qty || item.quantity);
+    // DynamicCalculator items carry their quantity only in details.qty (no top-level qty,
+    // no lineItems), and the server prices and deducts a line-item-less item by its
+    // quantity — so falling back to 1 charged and deducted one unit whatever was entered.
+    // Only for those items: a calculator with lineItems keeps quantity 1 per line, and a
+    // reopened saved item has its top-level qty, which still wins.
+    const dynamic = !!item.details?.isDynamic && !item.details?.lineItems;
+    const rawQty = parseFloat(item.qty || item.quantity || (dynamic ? item.details?.qty : undefined));
     const qty = isNaN(rawQty) ? 1 : rawQty;
 
-    const rawPrice = parseFloat(item.price || item.unitPrice);
+    // Same items have no unit price either; without one the server falls back to the price
+    // sent (0) whenever the product has no matching variant.
+    let rawPrice = parseFloat(item.price || item.unitPrice);
+    if (isNaN(rawPrice) && dynamic && qty > 0) rawPrice = (parseFloat(item.totalPrice) || 0) / qty;
     const price = isNaN(rawPrice) ? 0 : rawPrice;
 
     const rawVariantId = item.variantId ?? item.details?.variantId ?? null;
@@ -38,3 +47,25 @@ export const mapItemForBackend = (item) => {
         details: stripUiKeys(item.details),
     };
 };
+
+// Keys a calculator adds for its own bookkeeping — they change when an item is merely
+// reopened, without the goods changing.
+const VOLATILE_DETAIL_KEYS = new Set(['cutAnswers', '_source', '_sourceItemId', 'isValid', 'checkingStock', 'stockError', 'missingAttributes']);
+const stable = (value) => {
+    if (Array.isArray(value)) return value.map(stable);
+    if (value && typeof value === 'object') {
+        return Object.keys(value).sort().filter(k => !VOLATILE_DETAIL_KEYS.has(k))
+            .reduce((acc, k) => { acc[k] = stable(value[k]); return acc; }, {});
+    }
+    return value;
+};
+
+/** What an order edit would change: the goods (as sent to the server, prices excluded —
+ * the server reprices), the customer, VAT and the discount. Two equal signatures mean
+ * saving would change nothing. */
+export const editSignature = (items, { customerId = null, vat = false, discount = 0 } = {}) => JSON.stringify({
+    items: (items || []).map(mapItemForBackend).map(i => stable({ ...i, unitPrice: undefined })),
+    customerId: customerId ?? null,
+    vat: !!vat,
+    discount: Number(discount) || 0,
+});

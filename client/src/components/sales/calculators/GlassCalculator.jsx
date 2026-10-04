@@ -7,6 +7,15 @@ import { useCart } from '../../../context/CartContext';
 import { useEditCutAnswers } from '../../../hooks/useEditCutAnswers';
 import EditCutPanel from '../../orders/EditCutPanel';
 
+// Piece sizes in mm, rounded the way the backend's glass resolver rounds them — the fit
+// checks here must agree with it or they accept cuts it then rejects (or vice versa).
+const MM_PER_FOOT = 304.79999025;
+const MM_PER_INCH = 25.4;
+const toMm = (val, u) => u === 'ft' ? Math.floor(val * MM_PER_FOOT) : u === 'inch' ? Math.floor(val * MM_PER_INCH) : val;
+// Does an l×w piece fit a sheet (rotation allowed)? Unknown sheet size (0) = can't tell, so yes.
+const fitsSheet = (lMm, wMm, sheetL, sheetW) => !(sheetL > 0 && sheetW > 0)
+    || (Math.max(lMm, wMm) <= Math.max(sheetL, sheetW) && Math.min(lMm, wMm) <= Math.min(sheetL, sheetW));
+
 const inputStyle = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
     borderRadius: '0.5rem', padding: '0.5rem 0.625rem', color: '#f1f5f9',
@@ -199,8 +208,18 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const editCuts = useEditCutAnswers({ initialDetails, variantId: pricing.variantId, lineItems });
     const apiAnswersKey = JSON.stringify(editCuts.apiAnswers);
 
+    // Pieces already in the list are re-checked against the CURRENT sheet: they may have been
+    // added before a thickness/sheet was chosen (size unknown, nothing to check) or before a
+    // switch to a smaller sheet. Flagged, not deleted — the cashier decides.
+    const badPieces = useMemo(() => cutPieces.map(c => {
+        if (!(c.l > 0 && c.w > 0 && c.q > 0)) return 'size and quantity must be above 0';
+        return fitsSheet(toMm(c.l, c.u), toMm(c.w, c.u), pricing.sheetLengthMm, pricing.sheetWidthMm)
+            ? null : `doesn't fit the ${pricing.sheetLengthMm}×${pricing.sheetWidthMm}mm sheet`;
+    }), [cutPieces, pricing.sheetLengthMm, pricing.sheetWidthMm]);
+    const anyBadPiece = badPieces.some(Boolean);
+
     useEffect(() => {
-        let syncValid = missingRequired.length === 0;
+        let syncValid = missingRequired.length === 0 && !anyBadPiece;
         // Editing: the item's own full sheets come back before the new quantity is taken.
         const fullAvailable = pricing.availableStock !== undefined
             ? pricing.availableStock + heldByEditedItem(initialDetails, pricing.variantId, ['sheet-full']) : undefined;
@@ -216,9 +235,9 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         if (extraSelections['Thickness']) attributes.push({ label: 'Thickness', value: extraSelections['Thickness'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Thickness') attributes.push({ label: key, value: val }); });
         onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, ...(halfSourcePref ? { halfSourcePref } : {}), cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, missingAttributes: missingRequired, checkingStock: feasibility.checking,
-            stockError: feasibility.message || (!editCuts.complete ? 'Answer whether the original glass was cut.' : null),
+            stockError: (anyBadPiece ? 'A cut piece is invalid for this sheet — fix or remove it.' : null) || feasibility.message || (!editCuts.complete ? 'Answer whether the original glass was cut.' : null),
             _sourceItemId: initialDetails?._sourceItemId, cutAnswers: editCuts.cartAnswers });
-    }, [fullQty, halfQty, halfSide, halfSourcePref, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired, editCuts.complete, editCuts.cartAnswers, initialDetails]);
+    }, [fullQty, halfQty, halfSide, halfSourcePref, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired, editCuts.complete, editCuts.cartAnswers, initialDetails, anyBadPiece]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current sheet stock/offcuts? Reuses the exact real checkout deduction
@@ -279,13 +298,18 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     // _cut_dims_to_mm() exactly; sub-mm precision is meaningless on a cutting
     // table, and the two must agree or this fit check would accept cuts the
     // resolver then rejects (or vice versa).
-    const MM_PER_FOOT = 304.79999025;
-    const MM_PER_INCH = 25.4;
-    const toMm = (val, u) => u === 'ft' ? Math.floor(val * MM_PER_FOOT) : u === 'inch' ? Math.floor(val * MM_PER_INCH) : val;
 
     // Live validation as the cashier types — doesn't wait for "Add" to be clicked.
     useEffect(() => {
         const { sheetLengthMm, sheetWidthMm } = pricing;
+        // Checks that need no sheet size: a zero/negative side, or a quantity that isn't a
+        // whole number of pieces, is never a valid cut.
+        if ((cutL !== '' && !(parseFloat(cutL) > 0)) || (cutW !== '' && !(parseFloat(cutW) > 0))) {
+            setCutSizeError('Length and width must be greater than 0'); return;
+        }
+        if (cutQty !== '' && !(Number.isInteger(Number(cutQty)) && Number(cutQty) >= 1)) {
+            setCutSizeError('Quantity must be a whole number of pieces (1 or more)'); return;
+        }
         if (!(sheetLengthMm > 0 && sheetWidthMm > 0)) { setCutSizeError(null); return; }
         const maxSide = Math.max(sheetLengthMm, sheetWidthMm);
         const minSide = Math.min(sheetLengthMm, sheetWidthMm);
@@ -316,11 +340,12 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         }
 
         setCutSizeError(null);
-    }, [cutL, cutW, unit, pricing]);
+    }, [cutL, cutW, cutQty, unit, pricing]);
 
     const addCut = () => {
         if (!cutL || !cutW || !cutQty || cutSizeError) return;
-        const l = parseFloat(cutL), w = parseFloat(cutW), q = parseFloat(cutQty);
+        const l = parseFloat(cutL), w = parseFloat(cutW), q = Number(cutQty);
+        if (!(l > 0 && w > 0 && Number.isInteger(q) && q >= 1)) return;
         const area = getArea(l, w, unit);
         setCutPieces(prev => [...prev, { l, w, q, u: unit, area, label: `Cut: ${l}×${w}${unit}` }]);
         setCutL(''); setCutW(''); setCutQty('');
@@ -494,7 +519,8 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
                         {cutPieces.map((cut, i) => (
                             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.625rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.04)', fontSize: '0.78rem' }}>
                                 <div>
-                                    <span style={{ color: '#94a3b8' }}>{cut.label} ×{cut.q}</span>
+                                    <span style={{ color: badPieces[i] ? '#f87171' : '#94a3b8' }}>{cut.label} ×{cut.q}</span>
+                                    {badPieces[i] && <span style={{ color: '#f87171', fontSize: '0.65rem', marginLeft: '0.5rem', fontWeight: 700 }}>⚠ {badPieces[i]}</span>}
                                     <span style={{ color: '#475569', fontSize: '0.65rem', marginLeft: '0.5rem', fontFamily: 'var(--font-mono)' }}>{(cut.area * cut.q).toFixed(2)}sqft</span>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>

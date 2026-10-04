@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../services/api';
 import { useProducts } from '../context/ProductContext';
 import { useToast } from '../context/ToastContext';
@@ -6,6 +6,7 @@ import { wsEvents } from '../utils/wsEvents';
 import { getCategoryAccent, hexToRgba } from '../utils/colors';
 import { subCategoriesFor, matchesSubCategory } from '../utils/subCategories';
 import ConfirmationModal from '../components/common/ConfirmationModal';
+import { parseServerDate } from '../utils/dates';
 
 const editInput = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(6,182,212,0.35)', borderRadius: '6px',
@@ -48,33 +49,46 @@ function Checkbox({ checked, indeterminate = false, onChange, title }) {
 function OffcutRow({ row, selected, onToggleSelect, isEditing, onStartEdit, onCancelEdit, onSave }) {
     const [draft, setDraft] = useState({});
     const [saving, setSaving] = useState(false);
+    // The offcut as it was when editing started. The list refreshes on every sale/restock
+    // anywhere (each refresh is a new `row` object), which used to re-seed — and wipe — what
+    // was being typed. Seeded once per edit; changes are worked out against this snapshot.
+    const [base, setBase] = useState(null);
 
     useEffect(() => {
         if (isEditing) {
+            setBase(row);
             setDraft(row.has_dimensions
                 ? { width: String(row.width ?? ''), height: String(row.height ?? ''), quantity: String(row.quantity) }
                 : { length: String(row.length ?? ''), quantity: String(row.quantity) });
+        } else {
+            setBase(null);
         }
-    }, [isEditing, row]);
+    }, [isEditing, row.offcutId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Did this offcut change underneath the edit (a sale used some of it)?
+    const changedMeanwhile = !!base && (row.quantity !== base.quantity || row.length !== base.length
+        || row.width !== base.width || row.height !== base.height);
 
     const draftValid = row.has_dimensions
-        ? parseFloat(draft.width) > 0 && parseFloat(draft.height) > 0 && parseInt(draft.quantity) > 0
-        : parseFloat(draft.length) > 0 && parseInt(draft.quantity) > 0;
+        ? parseFloat(draft.width) > 0 && parseFloat(draft.height) > 0 && Number.isInteger(Number(draft.quantity)) && Number(draft.quantity) > 0
+        : parseFloat(draft.length) > 0 && Number.isInteger(Number(draft.quantity)) && Number(draft.quantity) > 0;
 
     const handleSave = async () => {
         if (!draftValid || saving) return;
         setSaving(true);
         try {
-            // Send only what actually moved — the endpoint patches field by field,
-            // so an untouched dimension is left exactly as the cutting job recorded it.
+            // Send only what the CEO changed, compared with the snapshot taken when editing
+            // started — so a field left alone keeps its current value even if a sale moved it
+            // meanwhile (diffing against the live row would have written the old value back).
+            const ref = base || row;
             const changes = {};
             if (row.has_dimensions) {
-                if (parseFloat(draft.width) !== row.width) changes.width = parseFloat(draft.width);
-                if (parseFloat(draft.height) !== row.height) changes.height = parseFloat(draft.height);
-            } else if (parseFloat(draft.length) !== row.length) {
+                if (parseFloat(draft.width) !== ref.width) changes.width = parseFloat(draft.width);
+                if (parseFloat(draft.height) !== ref.height) changes.height = parseFloat(draft.height);
+            } else if (parseFloat(draft.length) !== ref.length) {
                 changes.length = parseFloat(draft.length);
             }
-            if (parseInt(draft.quantity) !== row.quantity) changes.quantity = parseInt(draft.quantity);
+            if (parseInt(draft.quantity) !== ref.quantity) changes.quantity = parseInt(draft.quantity);
             await onSave(row.offcutId, changes);
         } finally {
             setSaving(false);
@@ -96,6 +110,11 @@ function OffcutRow({ row, selected, onToggleSelect, isEditing, onStartEdit, onCa
                 background: 'rgba(255,255,255,0.04)', borderRadius: '4px', padding: '1px 6px', flexShrink: 0,
             }}>#{row.offcutId}</span>
 
+            {isEditing && changedMeanwhile && (
+                <span style={{ fontSize: '0.68rem', color: '#fbbf24', fontWeight: 700, flexBasis: '100%' }}>
+                    ⚠ This offcut changed while you were editing (now {row.has_dimensions ? `${row.width}×${row.height}` : row.length} × {row.quantity}). Only the fields you change will be saved.
+                </span>
+            )}
             {/* Size + quantity — the two things this page exists to correct */}
             {isEditing ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', flex: '1 1 260px' }}>
@@ -137,7 +156,7 @@ function OffcutRow({ row, selected, onToggleSelect, isEditing, onStartEdit, onCa
 
             <span style={{ fontSize: '0.68rem', color: '#475569', flexShrink: 0 }}>
                 {row.source_item_id ? `from cut #${row.source_item_id}` : 'entered by hand'}
-                {row.created_at ? ` · ${new Date(row.created_at).toLocaleDateString()}` : ''}
+                {row.created_at ? ` · ${parseServerDate(row.created_at).toLocaleDateString()}` : ''}
             </span>
 
             <div style={{ display: 'flex', gap: '0.4rem', marginLeft: 'auto', flexShrink: 0 }}>
@@ -413,7 +432,11 @@ export default function OffcutManagementPage() {
         }
     };
 
+    const deletingRef = useRef(false);
     const handleBulkDelete = async () => {
+        // A double click sent the batch twice (the second came back 404 and reloaded).
+        if (deletingRef.current) return;
+        deletingRef.current = true;
         setDeleting(true);
         try {
             const ids = [...selectedIds];
@@ -428,6 +451,7 @@ export default function OffcutManagementPage() {
             setConfirmOpen(false);
             load();
         } finally {
+            deletingRef.current = false;
             setDeleting(false);
         }
     };
@@ -575,6 +599,7 @@ export default function OffcutManagementPage() {
                 title="Delete these offcuts?"
                 message={`${selectedIds.size} offcut row${selectedIds.size === 1 ? '' : 's'} (${selectedPieces} physical piece${selectedPieces === 1 ? '' : 's'}) will be removed from the pool permanently. Cutting jobs will no longer be able to draw from them. This cannot be undone.`}
                 confirmText={deleting ? 'Deleting…' : 'Delete permanently'}
+                confirmDisabled={deleting}
             />
         </div>
     );

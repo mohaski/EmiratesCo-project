@@ -1,6 +1,7 @@
 from sqlmodel import SQLModel, Field, Relationship
 from typing import Optional
 from datetime import datetime
+from config import nairobi_now
 
 class Offcut(SQLModel, table=True):
     __tablename__ = "offcuts"
@@ -37,7 +38,7 @@ class Offcut(SQLModel, table=True):
     source_item_id: Optional[int] = Field(default=None, foreign_key="orderitems.item_id", index=True)
 
     # Metadata
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=nairobi_now)
     
     # Relationships
     product: "Product" = Relationship(back_populates="offcuts")

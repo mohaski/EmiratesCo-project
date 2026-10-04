@@ -40,7 +40,7 @@ export const AttributeProvider = ({ children }) => {
     // whole app lifetime, so a mount-only effect never re-runs when the same
     // session logs out and back in.
     useEffect(() => {
-        if (user) {
+        if (user && !user.mustChangePassword) {
             refreshAttributes();
         } else {
             setAttributeClasses([]);

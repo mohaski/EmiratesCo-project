@@ -38,7 +38,9 @@ from entities.opJournal import (
     OP_STATUS,
 )
 from . import model
+from core.financials.splitDetails import normalize_payment_details
 from typing import List, Optional
+from config import nairobi_now
 
 
 
@@ -320,6 +322,11 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # 🔐 Ensure user has privilege to create
         require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
+        if (order_data.amountPaid or 0) < 0:
+            raise HTTPException(status_code=400, detail="The amount paid can't be negative.")
+        if (order_data.discount or 0) < 0:
+            raise HTTPException(status_code=400, detail="The discount can't be negative.")
+
         # 1. Validate source invoice (if converting) before touching anything
         source_inv = None
         if order_data.sourceInvoiceId:
@@ -337,7 +344,10 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
             parent_orderid=order_data.parentOrderId,
             source_invoice_id=order_data.sourceInvoiceId,
             VAT_status=order_data.VAT_status,
-            payment_status=order_data.paymentStatus,
+            # Placeholder — derived from the server-side totals below, never taken
+            # from the client (the server reprices items, so the client's view of
+            # "Paid" can be wrong).
+            payment_status="Unpaid",
             discount=order_data.discount,
             amountPayed=order_data.amountPaid,
             status=order_data.status or "confirmed",
@@ -406,12 +416,27 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
             final_total = net_subtotal
 
         amount_paid_val = ceil_amount(Decimal(str(order_data.amountPaid or 0)))
+        # The server prices the order, so the amount is checked against ITS total — a
+        # payment above it would leave amountPayed > total and the excess on the books.
+        if amount_paid_val > final_total + Decimal("1"):
+            raise HTTPException(
+                status_code=400,
+                detail=(f"The amount paid (KSH {amount_paid_val:,.0f}) is more than the order total "
+                        f"(KSH {final_total:,.0f}). Prices may have changed — check the cart and try again."),
+            )
+        amount_paid_val = min(amount_paid_val, final_total)
         raw_balance = final_total - amount_paid_val
         new_balance = ceil_amount(raw_balance) if raw_balance > Decimal("0.10") else Decimal("0.00")
 
         new_order.subtotal = float(net_subtotal)
         new_order.total = float(final_total)
         new_order.balance = float(new_balance)
+        new_order.amountPayed = float(amount_paid_val)
+        # Same rule as the edit path and invoice conversion.
+        new_order.payment_status = (
+            "Paid" if new_balance <= Decimal("0.10")
+            else ("Partial" if amount_paid_val > 0 else "Unpaid")
+        )
 
         db.add(new_order)
 
@@ -440,18 +465,19 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
                 f"amount={float(final_total):.2f}, due={float(new_order.balance):.2f}, status={credit_status}"
             )
 
-        # Record payment when money was actually collected
-        if (order_data.amountPaid or 0) > 0:
+        # Record payment when money was actually collected — the same rounded amount
+        # amountPayed holds, so the payment rows and the order always agree.
+        if amount_paid_val > 0:
             from entities.payments import Payment
             pay_method = (order_data.paymentMethod or "cash").lower()
             if pay_method not in {"cash", "mpesa", "split", "number"}:
                 pay_method = "cash"
             new_payment_rec = Payment(
                 orderId=new_order.orderId,
-                amount=float(order_data.amountPaid),
+                amount=float(amount_paid_val),
                 payment_method=pay_method,
                 reason="order",
-                payment_details=order_data.paymentDetails,
+                payment_details=normalize_payment_details(pay_method, order_data.paymentDetails, float(amount_paid_val)),
                 recorded_by=current_user.userId,
             )
             db.add(new_payment_rec)
@@ -464,6 +490,9 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
             orderId=new_order.orderId
         )
     except HTTPException:
+        # Some refusals (the amount checks) come after stock was already deducted in
+        # this session — never leave that pending on the session.
+        db.rollback()
         raise
     except ValueError as e:
         db.rollback()
@@ -653,12 +682,18 @@ def get_all_orders(
     db: Session = Depends(get_session),
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(100, ge=1, le=500, description="Maximum number of records to return"),
+    search: str | None = None,
 ) -> list[model.OrderResponse]:
     """
     Retrieve all orders in the system with pagination, newest first.
+    `search` narrows to orders whose customer name contains it (any age) — Order History
+    only loads the newest page, so a name search must reach older orders here.
     """
     try:
-        statement = select(Order).order_by(Order.created_at.desc()).offset(skip).limit(limit)
+        statement = select(Order)
+        if search and search.strip():
+            statement = statement.where(Order.customer_name.ilike(f"%{search.strip()}%"))
+        statement = statement.order_by(Order.created_at.desc()).offset(skip).limit(limit)
         orders = db.exec(statement).all()
 
         return [_order_to_shallow_response(order) for order in orders]
@@ -790,7 +825,7 @@ def _order_age(db: Session, order: Order) -> timedelta:
 
     orders.created_at is `timestamp without time zone` filled by server_default now() in a
     session whose TimeZone is Africa/Nairobi, so it holds LOCAL time. The cancel window used
-    to subtract it from datetime.utcnow(), which made every order look three hours younger
+    to subtract it from nairobi_now(), which made every order look three hours younger
     than it was — the "7-day" window was really 7 days 3 hours, and a fresh order computed
     to a negative age. Asking the database for now() in the same local frame avoids
     depending on either the machine's timezone or Python's.
@@ -977,6 +1012,35 @@ def _returned_piece(db, ref: str):
     return ledger.get_piece(db, entry["piece_id"])
 
 
+def _assert_cart_is_this_orders(db: Session, order_id: int, item_requests) -> None:
+    """Refuse a cart whose lines were opened from a DIFFERENT order.
+
+    Lines loaded from a saved order carry details._sourceItemId. If any of those items
+    belongs to another order, saving would rebuild THIS order out of that order's goods —
+    which is what a stale edit session in the browser once did (the cart had been reloaded
+    with order B while the session still pointed at order A, so the save went to A). An
+    item that no longer exists (replaced by a later edit) proves nothing and is ignored;
+    the version check covers that case.
+    """
+    source_ids = {
+        sid for sid in ((r.details or {}).get("_sourceItemId") for r in (item_requests or []))
+        if isinstance(sid, int)
+    }
+    if not source_ids:
+        return
+    foreign = db.exec(
+        select(OrderItem.item_id, OrderItem.order_id)
+        .where(OrderItem.item_id.in_(source_ids), OrderItem.order_id != order_id)
+    ).all()
+    if foreign:
+        other = sorted({row[1] for row in foreign})
+        raise HTTPException(
+            status_code=409,
+            detail=(f"This cart holds items from order #{', #'.join(map(str, other))}, not order #{order_id}. "
+                    "Discard the edit and open the order you want to change again."),
+        )
+
+
 def _match_items(existing_items, item_requests):
     """Pair the incoming cart against the order as it stands.
 
@@ -1069,6 +1133,7 @@ def apply_order_edit(
     order_data: model.OrderEditRequest,
     db: Session,
     current_user,
+    money_check: bool = True,
 ) -> dict:
     """
     Edit an existing order in-place (no commit — see update_order):
@@ -1095,6 +1160,11 @@ def apply_order_edit(
     cut-bearing items carry exactly one cut line) and is forced for glass anyway, where
     resolve_glass_cut_lines packs every cut of an item into one sheet as a single batch — so
     no subset of those lines can be reused independently.
+
+    money_check: the payment sent must fit the server's totals and what is already paid
+    (else 409/400 — the cashier's screen was out of date). False only for the undo tool's
+    corrections, which re-run an edit with amountPaid=0 to rebuild the goods and leave the
+    money exactly as the original edit recorded it.
     """
     from core.inventory.inventoryService import (
         deduct_stock_for_order_item,
@@ -1106,6 +1176,8 @@ def apply_order_edit(
     from core.inventory import reversalPlan
 
     require_role(["manager", "ceo", "admin"], current_user)
+    if money_check and (getattr(order_data, "discount", 0) or 0) < 0:
+        raise HTTPException(status_code=400, detail="The discount can't be negative.")
 
     # Locked for the rest of the transaction: two saves of the same order are serialised, so
     # the version check below can't let both through.
@@ -1139,6 +1211,7 @@ def apply_order_edit(
     # entirely alone; everything else is reversed and rebuilt. Worked out before the
     # confirmation is validated, so the operator is only ever asked about material this
     # edit actually disturbs.
+    _assert_cart_is_this_orders(db, order_id, order_data.items)
     existing_items = db.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all()
     reused_items, reversing_items, unmatched_requests = _match_items(existing_items, order_data.items)
     reversing_item_ids = {oi.item_id for oi in reversing_items}
@@ -1322,6 +1395,26 @@ def apply_order_edit(
         prior_paid = Decimal(str(order.amountPayed or 0))
         total_paid = max(Decimal("0.00"), min(prior_paid + new_payment, final_total))
         new_balance = max(final_total - total_paid, Decimal("0.00"))
+        # What actually moves onto the order. The Payment row records this, so it can never
+        # disagree with amountPayed.
+        recorded_payment = total_paid - prior_paid if money_check else new_payment
+        if money_check:
+            if new_payment < 0 and prior_paid + new_payment < final_total - Decimal("0.10"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(f"A refund of KSH {abs(new_payment):,.0f} is more than the customer overpaid "
+                            f"(KSH {max(prior_paid - final_total, Decimal('0')):,.0f})."),
+                )
+            if abs(recorded_payment - new_payment) > Decimal("1"):
+                # The cashier's screen worked the amount out from figures that are no longer
+                # true: money was collected on this order since the edit was opened, or the
+                # server priced the cart differently.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(f"The amounts on this order have changed since it was opened (total now "
+                            f"KSH {final_total:,.0f}, already paid KSH {prior_paid:,.0f}). "
+                            "Reopen the order and try again."),
+                )
 
         is_paid = new_balance <= Decimal("0.10")
         payment_status = "Paid" if is_paid else ("Partial" if total_paid > 0 else "Unpaid")
@@ -1384,17 +1477,17 @@ def apply_order_edit(
         # the cashier actually used — get_financial_summary sums Payment.amount
         # per method, so a negative row here nets straight out of that day's
         # cash/mpesa totals for the CEO, the same way the positive case adds to it.
-        if new_payment != Decimal("0"):
+        if recorded_payment != Decimal("0"):
             from entities.payments import Payment
             pay_method = (order_data.paymentMethod or "cash").lower()
             if pay_method not in {"cash", "mpesa", "split", "number"}:
                 pay_method = "cash"
             edit_payment_rec = Payment(
                 orderId=order_id,
-                amount=float(new_payment),
+                amount=float(recorded_payment),
                 payment_method=pay_method,
-                reason="refund" if new_payment < Decimal("0") else "order",
-                payment_details=order_data.paymentDetails,
+                reason="refund" if recorded_payment < Decimal("0") else "order",
+                payment_details=normalize_payment_details(pay_method, order_data.paymentDetails, float(recorded_payment)),
                 recorded_by=current_user.userId,
             )
             db.add(edit_payment_rec)
@@ -1406,7 +1499,7 @@ def apply_order_edit(
         record_summary(
             op,
             cut_confirmations=before_snapshot["cut_confirmations"],
-            payment=float(new_payment),
+            payment=float(recorded_payment),
             total_delta=float(total_delta),
             returned=op.returned if op else {},
         )
@@ -1418,9 +1511,30 @@ def apply_order_edit(
         raise HTTPException(status_code=422, detail=str(e))
 
 
-def _correction_target(order_id: int, item_id: int, line_idx: int, event_idx: int, db: Session, current_user):
+def _canonical_event(value):
+    """An offcut_sources event in a form that survives a trip through the browser: JSON
+    numbers lose the int/float distinction (3.0 comes back as 3), so numbers compare as
+    rounded floats and dict keys in sorted order."""
+    if isinstance(value, dict):
+        return {k: _canonical_event(value[k]) for k in sorted(value)}
+    if isinstance(value, list):
+        return [_canonical_event(v) for v in value]
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return round(float(value), 6)
+    return value
+
+
+def _correction_target(order_id: int, item_id: int, line_idx: int, event_idx: int, db: Session, current_user,
+                       expected_event: dict | None = None):
     """The order item, a private copy of its details, and the product a correction is about.
-    The copy keeps the loaded JSON untouched until the result is assigned back as a whole."""
+    The copy keeps the loaded JSON untouched until the result is assigned back as a whole.
+
+    expected_event: the cutting event as the manager's screen showed it. Events are found by
+    position, and a correction shifts positions (a failed glass cut leaves its event), so a
+    retry after a lost response — or a second manager on the same order — would otherwise
+    correct whatever now sits at that position. Refused with 409 when it differs."""
     import copy
 
     require_role(["manager", "ceo", "admin"], current_user)
@@ -1446,6 +1560,12 @@ def _correction_target(order_id: int, item_id: int, line_idx: int, event_idx: in
     offcut_sources = line_items[line_idx].get("offcut_sources") or []
     if not (0 <= event_idx < len(offcut_sources)):
         raise HTTPException(status_code=422, detail="Invalid event_idx for this cutting line")
+    if expected_event is not None and _canonical_event(expected_event) != _canonical_event(offcut_sources[event_idx]):
+        raise HTTPException(
+            status_code=409,
+            detail="This cutting record has changed since you opened it (it may already have been corrected). "
+                   "Reopen the order and check it again.",
+        )
 
     product = db.get(Product, item.product_id)
     if not product:
@@ -1560,7 +1680,9 @@ def correct_offcut_for_order_item(
     force_new_source - the replacement comes from a new sheet; use_original - the
     replacement is the never-used source itself, chosen on purpose.
     """
-    item, details, line_items, product, variant = _correction_target(order_id, item_id, line_idx, event_idx, db, current_user)
+    expected_event = opts.pop("expected_event", None)
+    item, details, line_items, product, variant = _correction_target(
+        order_id, item_id, line_idx, event_idx, db, current_user, expected_event=expected_event)
     failed_cut_refs = [{"line_idx": fc.line_idx, "cut_idx": fc.cut_idx} for fc in failed_cuts]
 
     try:
@@ -1734,7 +1856,9 @@ def correct_profile_offcut_for_order_item(
     core/inventory/cutCorrection.py for `opts.source_unused` (the source was never used:
     a new bar goes back to STOCK, not into the offcut pool).
     """
-    item, details, line_items, product, variant = _correction_target(order_id, item_id, line_idx, event_idx, db, current_user)
+    expected_event = opts.pop("expected_event", None)
+    item, details, line_items, product, variant = _correction_target(
+        order_id, item_id, line_idx, event_idx, db, current_user, expected_event=expected_event)
 
     try:
         result = _apply_profile_correction(db, item, details, line_items, line_idx, event_idx, product, variant,
@@ -1816,10 +1940,13 @@ def mark_cutting_complete_batch(item_ids: list, db: Session, current_user) -> di
     """
     require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
+    # Items of a cancelled order are not cut work any more.
     items = db.exec(
-        select(OrderItem).where(OrderItem.item_id.in_(item_ids), OrderItem.cutting_completed == False)  # noqa: E712
+        select(OrderItem).join(Order, Order.orderId == OrderItem.order_id)
+        .where(OrderItem.item_id.in_(item_ids), OrderItem.cutting_completed == False,  # noqa: E712
+               Order.status != "cancelled")
     ).all()
-    now = datetime.utcnow()
+    now = nairobi_now()
     updated = []
     for item in items:
         item.cutting_completed = True
@@ -1832,7 +1959,7 @@ def mark_cutting_complete_batch(item_ids: list, db: Session, current_user) -> di
 
 
 @stock_operation(OP_CUTTING_REPORT, order_arg=None)
-def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current_user) -> dict:
+def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current_user, item_ids: list | None = None) -> dict:
     """
     Order-queue batch action: the queue is checked off a whole order at a time,
     not one item at a time — floor staff confirm an entire order's cutting is
@@ -1853,13 +1980,16 @@ def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current
     """
     require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
-    orders = db.exec(select(Order).where(Order.orderId.in_(order_ids))).all()
-    now = datetime.utcnow()
+    # A cancelled order is skipped: it may have been cancelled while the queue was open, and
+    # flagging its items "cut" would mislead any later reversal.
+    orders = db.exec(select(Order).where(Order.orderId.in_(order_ids), Order.status != "cancelled")).all()
+    shown = set(item_ids) if item_ids is not None else None
+    now = nairobi_now()
     updated_items = []
     updated_orders = []  # orders processed — their workflow status is left untouched
     for order in orders:
         for item in order.orderItems:
-            if not item.cutting_completed:
+            if not item.cutting_completed and (shown is None or item.item_id in shown):
                 item.cutting_completed = True
                 item.cutting_completed_at = now
                 db.add(item)
@@ -2051,7 +2181,8 @@ def _restore_and_cancel(
             amount=-float(amount_paid),
             payment_method=resolved_method,
             reason="refund",
-            payment_details=resolved_details,
+            # Signed like the row (the modal sends what goes back as positive amounts).
+            payment_details=normalize_payment_details(resolved_method, resolved_details, -float(amount_paid)),
             recorded_by=current_user.userId if current_user else None,
         ))
         order.amountPayed = 0.0
@@ -2088,6 +2219,7 @@ def get_reversal_plan(order_id: int, db: Session, current_user, incoming_items=N
     # operator is never asked about a line that then turns out not to move (or vice versa).
     reversing_item_ids = None
     if incoming_items is not None:
+        _assert_cart_is_this_orders(db, order_id, incoming_items)
         existing = db.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all()
         _, reversing, _ = _match_items(existing, incoming_items)
         reversing_item_ids = {oi.item_id for oi in reversing}
@@ -2164,6 +2296,7 @@ def cancel_order_with_pin(
     refund_details: dict | None = None,
     cut_confirmations: dict | None = None,
     plan_token: str | None = None,
+    expected_refund: float | None = None,
 ) -> model.OrderStatusUpdateResponse:
     """
     Cancel an order from Order History. Requires the CEO-configured 4-digit PIN.
@@ -2173,7 +2306,7 @@ def cancel_order_with_pin(
     apply_cancel, which never commits, so the undo tool can re-run a cancel with corrected
     cut answers inside the undo's transaction.
     """
-    from core.settings.service import verify_cancel_pin, cancel_pin_is_configured
+    from core.settings.service import check_cancel_pin, cancel_pin_is_configured
 
     require_role(["manager", "ceo", "admin"], current_user)
     if not cancel_pin_is_configured(db):
@@ -2181,7 +2314,7 @@ def cancel_order_with_pin(
             status_code=400,
             detail="No cancel PIN has been set up yet. Ask the CEO to configure one.",
         )
-    if not verify_cancel_pin(db, pin):
+    if not check_cancel_pin(db, pin, current_user):
         raise HTTPException(status_code=403, detail="Incorrect PIN.")
 
     try:
@@ -2190,7 +2323,7 @@ def cancel_order_with_pin(
             "cut_confirmations": cut_confirmations, "plan_token": plan_token,
         }):
             apply_cancel(order_id, db, current_user, refund_method, refund_details,
-                         cut_confirmations, plan_token)
+                         cut_confirmations, plan_token, expected_refund=expected_refund)
         db.commit()
     except HTTPException:
         db.rollback()
@@ -2213,6 +2346,7 @@ def apply_cancel(
     cut_confirmations: dict | None = None,
     plan_token: str | None = None,
     enforce_window: bool = True,
+    expected_refund: float | None = None,
 ) -> dict:
     """Cancel an order without committing (see cancel_order_with_pin).
 
@@ -2223,6 +2357,10 @@ def apply_cancel(
 
     `enforce_window=False` is for the undo tool re-running a cancel that was allowed when it
     was first made.
+
+    `expected_refund`: the amount the cashier was shown as going back. The refund is always
+    what the order has actually been paid, so when that changed meanwhile (a debt collected
+    on another till) the cancel is refused rather than refunding a figure nobody saw.
     """
     from core.inventory import reversalPlan
 
@@ -2231,6 +2369,13 @@ def apply_cancel(
         raise HTTPException(status_code=404, detail="Order not found")
     if enforce_window and order.status != "cancelled" and _order_age(db, order) > CANCEL_WINDOW:
         raise HTTPException(status_code=400, detail="This order is more than a week old and can no longer be cancelled.")
+    if (expected_refund is not None and order.status != "cancelled"
+            and abs(float(order.amountPayed or 0) - float(expected_refund)) > 0.5):
+        raise HTTPException(
+            status_code=409,
+            detail=(f"This order has now been paid KSH {float(order.amountPayed or 0):,.0f}, not "
+                    f"KSH {float(expected_refund):,.0f}. Close this and open the cancel again to refund the right amount."),
+        )
 
     # Already-cut orders used to be refused outright here. They can now be cancelled, one
     # confirmed cut line at a time - the material just doesn't come back as whole bars.

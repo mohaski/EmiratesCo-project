@@ -43,6 +43,10 @@ def userRegistration(register_user_request: model.UserRegistrationRequest, db: S
         }))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User with this email already exists")
     
+    import secrets, string
+    generated = register_user_request.password is None
+    temp_password = register_user_request.password if not generated else "".join(
+        secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
     try:
         
         create_user = User(
@@ -52,7 +56,7 @@ def userRegistration(register_user_request: model.UserRegistrationRequest, db: S
         role=register_user_request.role,
         username=register_user_request.username,
         email=register_user_request.email,
-        password=hash_password(register_user_request.password),
+        password=hash_password(temp_password),
         phoneNumber=register_user_request.phoneNumber,
         mustChangePassword= True)
         
@@ -67,6 +71,8 @@ def userRegistration(register_user_request: model.UserRegistrationRequest, db: S
             "email": create_user.email,
             "role": create_user.role,
         }))
+        # Shown once to the admin who created the account; it must be changed at first sign-in.
+        return {"message": "User registered", "temporaryPassword": temp_password if generated else None}
 
     except IntegrityError:
         db.rollback()
@@ -165,25 +171,35 @@ def create_access_token(username: str, email: str, userId: UUID, role: str, must
             detail="An unexpected error occurred",
         )
     
-def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: Session = Depends(get_session)) -> model.Token:
+def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], db: Session = Depends(get_session),
+                           client_ip: str | None = None) -> model.Token:
+        from .throttle import login_throttle
+        # Keyed on username AND address: tills behind one router (or the Cloudflare tunnel,
+        # where every request arrives from 127.0.0.1) don't slow each other's staff down.
+        throttle_key = f"{(form_data.username or '').strip().lower()}|{client_ip or '-'}"
+        login_throttle.check(throttle_key)
+
         result= authenticate_user(form_data.username, form_data.password, db)
         if not result["success"]:
             if result["reason"] == "inactive":
+                # Only reachable with the right password (checked first), so saying why
+                # reveals nothing to someone guessing.
+                login_throttle.succeeded(throttle_key)
                 raise HTTPException(
                     status_code = status.HTTP_401_UNAUTHORIZED,
                     detail = "This account has been deactivated. Contact your administrator.",
                     headers={"WWW-Authenticate": "Bearer"}
                 )
-            messages = {
-                'no user': f"No account with username {form_data.username}",
-                'wrong password': "The password is incorrect"
-            }
+            login_throttle.failed(throttle_key)
+            # One message for an unknown username and a wrong password, so the sign-in form
+            # can't be used to find out which usernames exist.
             raise HTTPException(
                 status_code = status.HTTP_401_UNAUTHORIZED,
-                detail = f"{messages.get(result['reason'])}, Authentication failure",
+                detail = "Incorrect username or password.",
                 headers={"WWW-Authenticate": "Bearer"}
             )
 
+        login_throttle.succeeded(throttle_key)
         user = result['user']
 
         access_token = create_access_token(
@@ -223,7 +239,46 @@ def verify_token(token: str) -> model.TokenData:
             )
             
             
-def get_current_user(token: Annotated[str, Depends(auth_scheme)]) -> model.TokenData:
-    return verify_token(token)
+PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
+
+
+def _load_session_user(token: str, db: Session) -> tuple[model.TokenData, User]:
+    """The token proves who is calling; the database says what they may do NOW.
+
+    Role, active status and the forced-password-change flag are read from the users table
+    on every request, so deactivating a user, changing their role or resetting their
+    password takes effect immediately instead of when their 8-hour token expires.
+    """
+    claims = verify_token(token)
+    try:
+        user = db.get(User, UUID(claims.userId)) if claims.userId else None
+    except ValueError:
+        user = None
+    if user is None or not user.isActive:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Your session has ended. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return model.TokenData(
+        userId=str(user.userId), username=user.username, role=user.role,
+        mustChangePassword=bool(user.mustChangePassword),
+    ), user
+
+
+def get_current_user(token: Annotated[str, Depends(auth_scheme)], db: Session = Depends(get_session)) -> model.TokenData:
+    current, _ = _load_session_user(token, db)
+    if current.mustChangePassword:
+        # A temporary password (new account or admin reset) only opens the change-password
+        # screen; everything else waits until it has been replaced.
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=PASSWORD_CHANGE_REQUIRED)
+    return current
+
+
+def get_current_user_allow_pending(token: Annotated[str, Depends(auth_scheme)], db: Session = Depends(get_session)) -> model.TokenData:
+    """Same as get_current_user but lets a user who must change their password through —
+    only for the endpoints the change-password flow itself needs."""
+    current, _ = _load_session_user(token, db)
+    return current
 
 current_user = Annotated[model.TokenData, Depends(get_current_user)]

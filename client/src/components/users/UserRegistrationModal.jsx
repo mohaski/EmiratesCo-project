@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import api from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
+import { extractErrorMessage } from '../../utils/toast';
 
 const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
+    const { user } = useAuth();
     const [formData, setFormData] = useState({
         firstName: '', secondName: '', username: '', role: 'cashier', email: '', phoneNumber: ''
     });
@@ -17,13 +20,17 @@ const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
         e.preventDefault();
         setLoading(true); setError(''); setSuccess('');
         try {
-            await api.userService.register({ ...formData, password: '1234' });
-            setSuccess('User registered! Default password is "1234".');
+            // No password sent: the server makes up a random temporary one (every account used
+            // to start on "1234"). Shown once here — the dialog stays open so it can be noted.
+            const result = await api.userService.register({ ...formData });
+            const temp = result?.temporaryPassword;
+            setSuccess(temp
+                ? `User registered. Temporary password: ${temp} — give it to ${formData.firstName || 'them'}; they must change it when they first sign in.`
+                : 'User registered.');
             if (onSuccess) onSuccess();
             setFormData({ firstName: '', secondName: '', username: '', role: 'cashier', email: '', phoneNumber: '' });
-            setTimeout(() => { onClose(); setSuccess(''); }, 2000);
         } catch (err) {
-            setError(err.response?.data?.detail || 'Registration failed. Please try again.');
+            setError(extractErrorMessage(err, 'Registration failed. Please try again.'));
         } finally { setLoading(false); }
     };
 
@@ -106,8 +113,9 @@ const UserRegistrationModal = ({ isOpen, onClose, onSuccess }) => {
                                 style={{ ...inputStyle, cursor: 'pointer', appearance: 'none', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpath d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 0.875rem center' }}>
                                 <option value="cashier">Cashier</option>
                                 <option value="manager">Manager</option>
-                                <option value="admin">Admin</option>
-                                <option value="ceo">CEO</option>
+                                {/* Only the CEO may create admin or CEO accounts (the server enforces it too). */}
+                                {user?.role === 'ceo' && <option value="admin">Admin</option>}
+                                {user?.role === 'ceo' && <option value="ceo">CEO</option>}
                             </select>
                         </div>
 

@@ -16,6 +16,19 @@ def set_cancel_pin(
 ):
     """CEO/admin-only: set or replace the 4-digit PIN required to cancel an order."""
     require_role(["ceo", "admin"], current_user)
+    if service.cancel_pin_is_configured(db):
+        from uuid import UUID
+        from fastapi import HTTPException
+        from entities.users import User
+        from core.userManagement.authService import verify_password
+        from core.userManagement.throttle import login_throttle
+        key = f"pin-change|{current_user.userId}"
+        login_throttle.check(key)
+        actor = db.get(User, UUID(current_user.userId))
+        if not body.currentPassword or not actor or not verify_password(body.currentPassword, actor.password):
+            login_throttle.failed(key)
+            raise HTTPException(status_code=403, detail="Enter your account password to change the PIN.")
+        login_throttle.succeeded(key)
     service.set_cancel_pin(db, body.pin, current_user)
     return model.MessageResponse(message="Cancel PIN updated.")
 

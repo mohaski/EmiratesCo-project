@@ -31,11 +31,12 @@ async def create_order(
 def get_orders(
     skip: int = 0,
     limit: int = 100,
+    search: Optional[str] = None,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
     require_role(["manager", "cashier", "ceo", "admin"], current_user)
-    return orderService.get_all_orders(db, skip, limit)
+    return orderService.get_all_orders(db, skip, limit, search=search)
 
 
 @router.get("/audit/history", response_model=List[model.EditHistoryResponse])
@@ -59,8 +60,10 @@ def get_orders_by_customer(
     customer_id: int,
     skip: int = 0,
     limit: int = 20,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
 ):
+    # A customer's order history (names, amounts) — signed-in staff only.
     return orderService.get_orders_by_customerId(customer_id, db, skip, limit)
 
 
@@ -117,7 +120,7 @@ async def mark_orders_cutting_done(
     cutting-queue page (multi-select of whole orders). CEO kept out, same as
     the queue's GET above."""
     require_role(["manager", "cashier", "admin"], current_user)
-    result = orderService.mark_cutting_complete_for_orders_batch(body.order_ids, db, current_user)
+    result = orderService.mark_cutting_complete_for_orders_batch(body.order_ids, db, current_user, item_ids=body.item_ids)
     background_tasks.add_task(manager.broadcast, "cutting_status_updated")
     background_tasks.add_task(manager.broadcast, "orders_updated")
     return model.MarkOrdersCuttingDoneResponse(**result)
@@ -193,6 +196,8 @@ async def correct_offcut(
         **_correction_opts(body),
     )
     background_tasks.add_task(manager.broadcast, "products_updated")
+    # The order's cutting records changed too — open Order Summary screens must refresh.
+    background_tasks.add_task(manager.broadcast, "orders_updated")
     return model.CorrectOffcutResponse(
         message="Offcut corrected", before=result["before"], after=result["after"],
         replacement_events=result["replacement_events"],
@@ -215,6 +220,8 @@ async def correct_profile_offcut(
         **_correction_opts(body),
     )
     background_tasks.add_task(manager.broadcast, "products_updated")
+    # The order's cutting records changed too — open Order Summary screens must refresh.
+    background_tasks.add_task(manager.broadcast, "orders_updated")
     return model.CorrectProfileOffcutResponse(
         message="Offcut corrected", before=result["before"], after=result["after"],
         replacement_event=result["replacement_event"],
@@ -223,7 +230,7 @@ async def correct_profile_offcut(
 
 def _correction_opts(body) -> dict:
     return body.model_dump(include={"source_unused", "source_fate", "remeasure", "force_new_source", "use_original",
-                                    "original_part", "assignments"})
+                                    "original_part", "assignments", "expected_event"})
 
 
 @router.post("/{order_id}/correct-offcut/preview")
@@ -290,6 +297,7 @@ async def cancel_order(
         order_id, body.pin, db, current_user, body.refundMethod, body.refundDetails,
         cut_confirmations=body.cutConfirmations,
         plan_token=body.planToken,
+        expected_refund=body.expectedRefund,
     )
     background_tasks.add_task(manager.broadcast, "orders_updated")
     background_tasks.add_task(manager.broadcast, "products_updated")

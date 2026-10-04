@@ -13,18 +13,19 @@ from entities.opJournal import STATUS_APPLIED, UNDOABLE_KINDS, StockOperation
 from entities.orders import Order
 from loggiing import logger
 from utils import require_role
+from config import NAIROBI_TZ
 
 from core.audit import undo as undo_engine
 
 UNDO_ROLES = ["manager", "ceo", "admin"]
 
 
-def _check_pin(db: Session, pin: Optional[str]) -> None:
-    from core.settings.service import cancel_pin_is_configured, verify_cancel_pin
+def _check_pin(db: Session, pin: Optional[str], current_user=None) -> None:
+    from core.settings.service import cancel_pin_is_configured, check_cancel_pin
 
     if not cancel_pin_is_configured(db):
         raise HTTPException(status_code=400, detail="No cancel PIN has been set up yet. Ask the CEO to configure one.")
-    if not pin or not verify_cancel_pin(db, pin):
+    if not check_cancel_pin(db, pin, current_user):
         raise HTTPException(status_code=403, detail="Incorrect PIN.")
 
 
@@ -46,7 +47,7 @@ def list_order_operations(order_id: int, db: Session, current_user) -> list:
             "op_id": op.op_id,
             "kind": op.kind,
             "status": op.status,
-            "created_at": op.created_at.isoformat() + "Z",
+            "created_at": op.created_at.replace(tzinfo=NAIROBI_TZ).isoformat(),
             "actor_name": op.actor_name,
             "notes": op.notes,
             "cut_confirmations": summary.get("cut_confirmations") or [],
@@ -76,7 +77,7 @@ def preview_undo(op_id: str, db: Session, current_user) -> dict:
 
 def undo(op_id: str, pin: str, reason: str, db: Session, current_user, money_handled=None) -> dict:
     require_role(UNDO_ROLES, current_user)
-    _check_pin(db, pin)
+    _check_pin(db, pin, current_user)
     if not (reason or "").strip():
         raise HTTPException(status_code=422, detail="Say why this change is being undone.")
     _op_or_404(db, op_id)
@@ -160,7 +161,7 @@ def preview_correction(op_id: str, cut_confirmations: dict, db: Session, current
 
 def correct(op_id: str, pin: str, reason: str, cut_confirmations: dict, db: Session, current_user) -> dict:
     require_role(UNDO_ROLES, current_user)
-    _check_pin(db, pin)
+    _check_pin(db, pin, current_user)
     if not (reason or "").strip():
         raise HTTPException(status_code=422, detail="Say what was wrong with the original answers.")
     _op_or_404(db, op_id)

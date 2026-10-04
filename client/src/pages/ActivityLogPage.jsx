@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import api from '../services/api';
 import { UndoDialog, CorrectDialog } from '../components/orders/OrderChanges';
 import { activityMeta, activityMetaForItem, summarizeActivity, diffSnapshot, colorForName, initials, describeStockBatchLine } from '../utils/activityMeta';
+import { parseServerDate } from '../utils/dates';
 
 const MANAGEABLE_ROLES = new Set(['manager', 'cashier']);
 const PAGE_SIZE = 50;
@@ -9,7 +10,7 @@ const PAGE_SIZE = 50;
 const ENTITY_TYPES = [
     'order', 'order_status', 'order_cancellation', 'restock', 'stock_batch',
     'stock_batch_correction', 'manual_offcut', 'offcut_admin', 'offcut_correction', 'profile_offcut_correction',
-    'open_container',
+    'open_container', 'cutting_report', 'order_undo', 'product_update',
 ];
 
 const fieldStyle = {
@@ -18,7 +19,7 @@ const fieldStyle = {
 };
 
 const dateGroupLabel = (iso) => {
-    const d = new Date(iso);
+    const d = parseServerDate(iso);
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
@@ -86,7 +87,7 @@ function OperationActions({ item, onChanged }) {
 function ActivityRow({ item, expanded, onToggle, onChanged }) {
     const meta = activityMetaForItem(item);
     const summary = summarizeActivity(item);
-    const date = new Date(item.edited_at);
+    const date = parseServerDate(item.edited_at);
     // stock_batch carries a per-line breakdown (product/variant/qty) that doesn't
     // fit a flat before→after diff — render it as its own list instead.
     const batchLines = item.entity_type === 'stock_batch' ? (item.after_snapshot?.lines || []) : null;
@@ -214,19 +215,31 @@ export default function ActivityLogPage() {
             .catch(() => {});
     }, []);
 
+    // Latest request wins: a "Load more" still in flight when the filter changes must not
+    // append the old filter's rows under the new one.
+    const reqRef = useRef(0);
     const load = useCallback(async (nextSkip) => {
+        const req = ++reqRef.current;
         setLoading(true);
         try {
             const data = await api.orderService.getAuditHistory(
                 entityType || null, nextSkip, PAGE_SIZE + 1, userId || null, since || null, until || null
             );
+            if (req !== reqRef.current) return;
             setHasMore(data.length > PAGE_SIZE);
-            setRows(prev => nextSkip === 0 ? data.slice(0, PAGE_SIZE) : [...prev, ...data.slice(0, PAGE_SIZE)]);
+            const page = data.slice(0, PAGE_SIZE);
+            // Offset paging over a newest-first list repeats a row when new activity arrives
+            // between pages — skip ids already shown.
+            setRows(prev => {
+                if (nextSkip === 0) return page;
+                const seen = new Set(prev.map(r => r.id));
+                return [...prev, ...page.filter(r => !seen.has(r.id))];
+            });
             setSkip(nextSkip);
         } catch {
             /* toast handled globally by the api interceptor */
         } finally {
-            setLoading(false);
+            if (req === reqRef.current) setLoading(false);
         }
     }, [entityType, userId, since, until]);
 

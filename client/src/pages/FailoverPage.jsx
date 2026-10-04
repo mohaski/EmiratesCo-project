@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FailoverService } from '../services/api';
 import { useToast } from '../context/ToastContext';
-import { useAuth } from '../context/AuthContext';
 import { wsEvents } from '../utils/wsEvents';
+import { parseServerDate } from '../utils/dates';
 
 const cardStyle = {
     background: 'rgba(255,255,255,0.03)',
@@ -36,7 +36,7 @@ function Dot({ ok }) {
 function formatTimestamp(ts) {
     if (!ts) return 'Never';
     try {
-        return new Date(ts).toLocaleString();
+        return parseServerDate(ts).toLocaleString();
     } catch {
         return ts;
     }
@@ -71,10 +71,11 @@ function EventTile({ label, record }) {
 export default function FailoverPage() {
     const navigate = useNavigate();
     const toast = useToast();
-    const { user } = useAuth();
     const [status, setStatus] = useState(null);
     const [loading, setLoading] = useState(true);
     const [pushing, setPushing] = useState(false);
+    // The push request timed out but the push may still be running server-side.
+    const [pushPending, setPushPending] = useState(false);
     const pollRef = useRef(null);
 
     const fetchStatus = useCallback(async () => {
@@ -105,14 +106,44 @@ export default function FailoverPage() {
         if (!confirmed) return;
 
         setPushing(true);
+        const startedAt = Date.now();
         try {
             const result = await FailoverService.pushToPeer();
             toast(result.message || 'Backup pushed and restored on peer.', 'success');
-        } catch {
-            // interceptor already shows a toast on failure
-        } finally {
             setPushing(false);
             fetchStatus();
+        } catch (err) {
+            const httpStatus = err?.response?.status;
+            if (httpStatus && httpStatus < 500) {
+                // A real refusal (409 already running, 403, ...) — the toast says why.
+                setPushing(false);
+                fetchStatus();
+                return;
+            }
+            // No answer, or a gateway timeout: the push can take minutes and keeps running on
+            // the server after this request gives up (a proxy cuts it at ~100 s). Don't call
+            // it failed — follow the server's own record until it finishes.
+            setPushPending(true);
+            const deadline = Date.now() + 10 * 60 * 1000;
+            const follow = async () => {
+                let data = null;
+                try { data = await FailoverService.getStatus(); setStatus(data); } catch { /* keep trying */ }
+                const last = data?.last_push;
+                const finished = data && !data.operation_in_progress && last && Date.parse(last.timestamp) >= startedAt - 5000;
+                if (finished) {
+                    setPushPending(false); setPushing(false);
+                    toast(last.success ? 'The push finished — the peer now has this machine\'s data.' : `The push failed: ${last.detail || 'see history'}`,
+                        last.success ? 'success' : 'error');
+                    return;
+                }
+                if (Date.now() > deadline) {
+                    setPushPending(false); setPushing(false);
+                    toast('Still no result from the push after 10 minutes — check the history below before trying again.', 'warning');
+                    return;
+                }
+                setTimeout(follow, 5000);
+            };
+            setTimeout(follow, 3000);
         }
     };
 
@@ -179,6 +210,12 @@ export default function FailoverPage() {
                     <button onClick={handlePush} disabled={disabled} style={primaryBtn(disabled)}>
                         {pushing ? 'Pushing…' : `Fail over to ${status?.peer_machine_name || 'peer'}`}
                     </button>
+                    {pushPending && (
+                        <p role="status" style={{ fontSize: '0.78rem', color: '#fbbf24', fontWeight: 600, margin: '0.75rem 0 0' }}>
+                            The request timed out, but the push may still be running on this machine. Waiting for its
+                            result — do not start another push.
+                        </p>
+                    )}
                     <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0.75rem 0 0' }}>
                         Sends this machine's current data to the peer and has it restore there. Only
                         the manager or CEO should trigger this, and only when this machine is known

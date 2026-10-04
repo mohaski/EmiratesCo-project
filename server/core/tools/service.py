@@ -87,14 +87,26 @@ def update_tool(tool_id: int, data: model.ToolUpdate, db: Session) -> model.Tool
     if not tool:
         raise HTTPException(status_code=404, detail="Tool not found")
 
-    if data.status and data.status not in ("available", "non_functional"):
+    update_dict = data.model_dump(exclude_unset=True)
+    # Sending the status the tool already has is not a change (an edit form echoes it back
+    # with a name fix) — dropped, so editing a checked-out tool's name works.
+    if update_dict.get("status") == tool.status:
+        update_dict.pop("status")
+    new_status = update_dict.get("status")
+    if new_status and new_status not in ("available", "non_functional"):
         raise HTTPException(
             status_code=400,
             detail="Status can only be set to 'available' or 'non_functional' here — "
                    "'taken' is managed automatically by checkout/return.",
         )
+    if new_status and tool.status == "taken":
+        # A form opened before the tool was checked out would otherwise mark a tool that is
+        # out on loan "available", and it could be lent out twice.
+        raise HTTPException(
+            status_code=409,
+            detail="This tool is checked out right now. Its status changes when it is returned.",
+        )
 
-    update_dict = data.model_dump(exclude_unset=True)
     for key, value in update_dict.items():
         setattr(tool, key, value)
 

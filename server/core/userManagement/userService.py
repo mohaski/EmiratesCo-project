@@ -51,6 +51,12 @@ def password_reset(id: str, password_data: model.passwordResetRequest, db: Sessi
                 detail="Current password is incorrect"
             )
 
+        if password_data.newPassword != password_data.confirmNewPassword:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="New password and confirm password do not match"
+            )
+
         # ✅ Prevent reusing the same password
         if verify_password(password_data.newPassword, user.password):
             logger.warning(f"User {id} attempted to reuse the same password.")
@@ -76,9 +82,24 @@ def password_reset(id: str, password_data: model.passwordResetRequest, db: Sessi
         raise HTTPException(status_code=500, detail="Internal server error")
 
 def password_change(id: str, passwordChangeRequest: model.passwordChangeRequest, db: Session = Depends(get_session)):
-    """Change a user's password while already logged on."""
+    """Replace a temporary password (new account, or reset by an admin) — the forced change.
+
+    Only while the account is flagged mustChangePassword, and only with the temporary
+    password: a normal change goes through password_reset, which checks the current one.
+    """
     try:
         user = get_user_by_id(id, db)
+        if not user.mustChangePassword:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Use Change Password in Settings (it asks for your current password)."
+            )
+        if not verify_password(passwordChangeRequest.currentPassword, user.password):
+            logger.warning(f"User {id} gave a wrong temporary password on the forced change.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The temporary password is incorrect"
+            )
         new_password = passwordChangeRequest.newPassword
         confirm_password = passwordChangeRequest.confirmNewPassword
         if new_password != confirm_password:
@@ -108,10 +129,12 @@ def password_change(id: str, passwordChangeRequest: model.passwordChangeRequest,
         logger.error(f"Error changing password for user {id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
-def admin_reset_password(id: str, new_password: str, db: Session = Depends(get_session)) -> dict:
+def admin_reset_password(id: str, new_password: str, db: Session = Depends(get_session), actor=None) -> dict:
     """CEO/admin reset of another user's forgotten password. No current-password check."""
     try:
         user = get_user_by_id(id, db)
+        if actor is not None:
+            assert_may_manage(actor, user, db)
         user.password = hash_password(new_password)
         user.mustChangePassword = True
         db.add(user)
@@ -127,6 +150,25 @@ def admin_reset_password(id: str, new_password: str, db: Session = Depends(get_s
         raise HTTPException(status_code=500, detail="Internal server error")
 
 CHANGEABLE_ROLES = {"manager", "cashier"}
+PRIVILEGED_ROLES = {"ceo", "admin"}
+
+
+def assert_may_manage(actor, target: User, db: Session) -> None:
+    """An admin manages staff (managers, cashiers); only a CEO manages admin and CEO
+    accounts. Without this an admin could reset the CEO's password and sign in as them."""
+    if target.role in PRIVILEGED_ROLES and actor.role != "ceo":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Only the CEO can manage admin and CEO accounts.")
+
+
+def _assert_not_last_active_ceo(target: User, db: Session) -> None:
+    if target.role != "ceo" or not target.isActive:
+        return
+    others = db.exec(select(User).where(User.role == "ceo", User.isActive == True,  # noqa: E712
+                                        User.userId != target.userId)).first()
+    if others is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="This is the only active CEO account; it can't be removed or deactivated.")
 
 def update_role(id: str, role: str, db: Session = Depends(get_session)) -> dict:
     """Change a user's role. Restricted to switching between manager and cashier."""
@@ -155,6 +197,9 @@ def set_active_status(id: str, is_active: bool, current_user, db: Session = Depe
         user = get_user_by_id(id, db)
         if str(user.userId) == current_user.userId and not is_active:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot deactivate your own account")
+        assert_may_manage(current_user, user, db)
+        if not is_active:
+            _assert_not_last_active_ceo(user, db)
         user.isActive = is_active
         db.add(user)
         db.commit()
@@ -168,10 +213,15 @@ def set_active_status(id: str, is_active: bool, current_user, db: Session = Depe
         logger.error(f"Error setting active status for user {id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
-def delete_user(id: str, db: Session = Depends(get_session)) -> dict:
+def delete_user(id: str, db: Session = Depends(get_session), actor=None) -> dict:
     """Delete a user by ID."""
     try:
         user = get_user_by_id(id, db)
+        if actor is not None:
+            if str(user.userId) == actor.userId:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delete your own account")
+            assert_may_manage(actor, user, db)
+            _assert_not_last_active_ceo(user, db)
         db.delete(user)
         db.commit()
         logger.info(f"User {id} deleted successfully.")

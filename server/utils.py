@@ -19,3 +19,21 @@ def require_role(allowed_roles: list[str], current_user= Depends(get_current_use
     logger.info(f"User {current_user.userId} authorized for operation.")
     return True
         
+
+
+def require_roles(*allowed_roles: str):
+    """Dependency form of require_role: `current_user = Depends(require_roles("ceo", "admin"))`.
+
+    Checked before the endpoint body runs, so a refusal is always a clean 403 (a service
+    that wraps everything in `except Exception` can't turn it into a 500).
+    """
+    def _dependency(current_user=Depends(get_current_user)):
+        require_role(list(allowed_roles), current_user)
+        return current_user
+    return _dependency
+
+
+# Catalogue maintenance (products, variants, categories, attributes): Product Management,
+# which the app opens to the CEO and admins only.
+CATALOG_ROLES = ("ceo", "admin")
+STAFF_ROLES = ("ceo", "admin", "manager", "cashier")

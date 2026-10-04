@@ -12,10 +12,11 @@ let connectPromise = null;
 function ensureConnected() {
     if (qz.websocket.isActive()) return Promise.resolve();
     if (!connectPromise) {
-        connectPromise = qz.websocket.connect().catch(err => {
-            connectPromise = null;
-            throw err;
-        });
+        connectPromise = qz.websocket.connect()
+            // Settled either way: once connected, isActive() answers above; if QZ Tray
+            // later restarts, isActive() goes false and the next call reconnects
+            // instead of reusing a promise that resolved for a socket now closed.
+            .finally(() => { connectPromise = null; });
     }
     return connectPromise;
 }
@@ -41,8 +42,16 @@ export async function printTapesViaQZ(nodes) {
         margins: 0,
     });
 
+    let printed = 0;
     for (const node of nodes) {
         const data = [{ type: 'pixel', format: 'html', flavor: 'plain', data: toStandaloneHtml(node) }];
-        await qz.print(config, data);
+        try {
+            await qz.print(config, data);
+        } catch (err) {
+            // How many slips already came out, so the caller's fallback prints only the rest.
+            err.printedCount = printed;
+            throw err;
+        }
+        printed += 1;
     }
 }

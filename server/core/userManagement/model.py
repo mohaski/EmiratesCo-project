@@ -1,15 +1,21 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from uuid import UUID
-from typing import Optional, Annotated
+from typing import Optional, Annotated, Literal
 import re
+
+# The roles the users table accepts (a Postgres enum). Anything else is refused at the edge
+# instead of failing deep inside the insert.
+StaffRole = Literal["admin", "ceo", "manager", "cashier"]
 
 class UserRegistrationRequest(BaseModel):
     firstName: str
     secondName: str
     username: str
-    role: str
+    role: StaffRole
     email: EmailStr
-    password: str = "1234"
+    # Omit it and the server makes up a random temporary password (returned once, for the
+    # admin to hand over). Every account used to start on "1234".
+    password: Optional[str] = None
     phoneNumber: str
 
 class Token(BaseModel):
@@ -46,11 +52,14 @@ class userDetailsResponse(BaseModel):
 
 class passwordResetRequest(BaseModel):
     currentPassword: str
-    newPassword: str
+    newPassword: str = Field(min_length=6)
     confirmNewPassword: str
 
 class passwordChangeRequest(BaseModel):
-    newPassword: str
+    """The forced change after a temporary password. currentPassword is that temporary
+    password — without it anyone at an unlocked till could take over the account."""
+    currentPassword: str
+    newPassword: str = Field(min_length=6)
     confirmNewPassword: str
 
 class AdminPasswordResetRequest(BaseModel):

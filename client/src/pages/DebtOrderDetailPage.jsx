@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import { parseServerDate } from '../utils/dates';
 
 const STATUS_COLORS = {
     pending:   { bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.25)', text: '#cbd5e1' },
@@ -49,8 +50,9 @@ const Row = ({ label, value, strong, color }) => (
 function formatMethod(payment) {
     if (payment.method === 'split' && payment.paymentDetails) {
         const parts = Object.entries(payment.paymentDetails)
-            .filter(([, v]) => Number(v) > 0)
-            .map(([k, v]) => `${METHOD_LABELS[k] || k} KSH ${Number(v).toLocaleString()}`);
+            // Refund parts are stored negative; show what moved through each method.
+            .filter(([, v]) => Number(v) !== 0 && Number.isFinite(Number(v)))
+            .map(([k, v]) => `${METHOD_LABELS[k] || k} KSH ${Math.abs(Number(v)).toLocaleString()}`);
         return parts.length ? `Split (${parts.join(' + ')})` : 'Split';
     }
     return METHOD_LABELS[payment.method] || payment.method;
@@ -94,9 +96,10 @@ export default function DebtOrderDetailPage() {
         return () => { cancelled = true; };
     }, [orderId]);
 
+    // Refund rows are stored as negative amounts, so a plain sum nets them out
+    // (subtracting them as well counted every refund twice).
     const totalPaid = useMemo(
-        () => payments.filter(p => p.reason !== 'refund').reduce((sum, p) => sum + p.amount, 0)
-            - payments.filter(p => p.reason === 'refund').reduce((sum, p) => sum + p.amount, 0),
+        () => payments.reduce((sum, p) => sum + p.amount, 0),
         [payments]
     );
 
@@ -162,7 +165,7 @@ export default function DebtOrderDetailPage() {
                         }}>{isCleared ? '✅ Debt Cleared' : '⏳ Debt Outstanding'}</span>
                     </div>
                     <p style={{ fontSize: '0.78rem', color: '#475569', margin: '2px 0 0' }}>
-                        {new Date(order.created_at).toLocaleString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {parseServerDate(order.created_at).toLocaleString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
                 </div>
             </div>
@@ -199,14 +202,14 @@ export default function DebtOrderDetailPage() {
                                                 <span style={{ fontSize: '0.78rem', color: '#94a3b8', fontWeight: 600 }}>{formatMethod(p)}</span>
                                             </div>
                                             <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: '4px' }}>
-                                                {new Date(p.payedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                {parseServerDate(p.payedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                                 {p.recordedByName && ` · by ${p.recordedByName}`}
                                             </div>
                                         </div>
                                         <div style={{
                                             fontSize: '0.9rem', fontWeight: 800, fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap',
                                             color: isRefund ? '#f87171' : '#4ade80',
-                                        }}>{isRefund ? '- ' : ''}KSH {p.amount.toLocaleString()}</div>
+                                        }}>{isRefund ? '- ' : ''}KSH {Math.abs(p.amount).toLocaleString()}</div>
                                     </div>
                                 );
                             })}

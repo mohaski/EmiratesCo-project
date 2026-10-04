@@ -9,6 +9,7 @@ import { AttributeProvider } from './context/AttributeContext';
 import { ToastProvider } from './context/ToastContext';
 import { WebSocketProvider } from './context/WebSocketContext';
 import PWAPrompt from './components/PWAPrompt';
+import ErrorBoundary from './components/common/ErrorBoundary';
 
 // Eager: auth pages load instantly on first visit
 import Login from './pages/Login';
@@ -25,7 +26,6 @@ const DashboardPage       = lazy(() => import('./pages/DashboardPage'));
 const InventoryPage       = lazy(() => import('./pages/InventoryPage'));
 const OffcutManagementPage = lazy(() => import('./pages/OffcutManagementPage'));
 const ProductManagementPage = lazy(() => import('./pages/ProductManagementPage'));
-const RoleSelectionPage   = lazy(() => import('./pages/RoleSelectionPage'));
 const InvoiceGenPage      = lazy(() => import('./pages/InvoiceGenPage'));
 const InvoiceReviewPage   = lazy(() => import('./pages/InvoiceReviewPage'));
 const OrdersPage          = lazy(() => import('./pages/OrdersPage'));
@@ -86,16 +86,13 @@ function App() {
 
                   {/* Standalone protected */}
                   <Route path="/change-password" element={
-                    <ProtectedRoute><ChangePasswordPage /></ProtectedRoute>
+                    <ProtectedRoute><ErrorBoundary><ChangePasswordPage /></ErrorBoundary></ProtectedRoute>
                   } />
                   <Route path="/checkout" element={
-                    <ProtectedRoute roles={ROUTE_ROLES['/checkout']}><CheckoutPage /></ProtectedRoute>
+                    <ProtectedRoute roles={ROUTE_ROLES['/checkout']}><ErrorBoundary><CheckoutPage /></ErrorBoundary></ProtectedRoute>
                   } />
                   <Route path="/checkout/receipt" element={
-                    <ProtectedRoute roles={ROUTE_ROLES['/checkout/receipt']}><ReceiptPage /></ProtectedRoute>
-                  } />
-                  <Route path="/select-role" element={
-                    <ProtectedRoute><RoleSelectionPage /></ProtectedRoute>
+                    <ProtectedRoute roles={ROUTE_ROLES['/checkout/receipt']}><ErrorBoundary><ReceiptPage /></ErrorBoundary></ProtectedRoute>
                   } />
 
                   {/* Main layout */}
@@ -133,10 +130,10 @@ function App() {
 
 function AppWithPWA() {
   return (
-    <>
+    <ErrorBoundary fullScreen>
       <App />
       <PWAPrompt />
-    </>
+    </ErrorBoundary>
   );
 }
 

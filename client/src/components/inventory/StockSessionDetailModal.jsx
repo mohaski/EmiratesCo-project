@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import api from '../../services/api';
+import { extractErrorMessage } from '../../utils/toast';
+import { parseServerDate } from '../../utils/dates';
 
 const rowInput = {
     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px',
@@ -47,31 +49,32 @@ export default function StockSessionDetailModal({ isOpen, onClose, session, onCo
         try {
             if (item.line_type === 'offcut') {
                 const is2D = item.offcut_width != null;
-                const quantity = parseInt(editOffcut.quantity, 10);
-                if (isNaN(quantity) || quantity < 1) { setSaving(false); return; }
+                // Each refusal says why — these used to just do nothing.
+                const quantity = Number(editOffcut.quantity);
+                if (!Number.isInteger(quantity) || quantity < 1) { showToast('Quantity must be a whole number of pieces (1 or more).', 'warning'); setSaving(false); return; }
                 const payload = { quantity };
                 if (is2D) {
                     const width = parseFloat(editOffcut.width);
                     const height = parseFloat(editOffcut.height);
-                    if (isNaN(width) || width <= 0 || isNaN(height) || height <= 0) { setSaving(false); return; }
+                    if (isNaN(width) || width <= 0 || isNaN(height) || height <= 0) { showToast('Width and height must be greater than 0.', 'warning'); setSaving(false); return; }
                     payload.width = width;
                     payload.height = height;
                 } else {
                     const length = parseFloat(editOffcut.length);
-                    if (isNaN(length) || length <= 0) { setSaving(false); return; }
+                    if (isNaN(length) || length <= 0) { showToast('Length must be greater than 0.', 'warning'); setSaving(false); return; }
                     payload.length = length;
                 }
                 await api.stockSessionService.correctItem(session.id, item.id, payload);
             } else {
                 const qty = parseFloat(editValue);
-                if (isNaN(qty) || qty < 0) { setSaving(false); return; }
+                if (isNaN(qty) || qty < 0) { showToast('Enter a quantity of 0 or more.', 'warning'); setSaving(false); return; }
                 await api.stockSessionService.correctItem(session.id, item.id, { entered_quantity: qty });
             }
             showToast('Line corrected', 'success');
             cancelEdit();
             onCorrected?.();
         } catch (err) {
-            showToast(err?.response?.data?.detail || 'Failed to correct line.', 'error');
+            showToast(extractErrorMessage(err, 'Failed to correct line.'), 'error');
         } finally {
             setSaving(false);
         }
@@ -86,7 +89,7 @@ export default function StockSessionDetailModal({ isOpen, onClose, session, onCo
             cancelEdit();
             onCorrected?.();
         } catch (err) {
-            showToast(err?.response?.data?.detail || 'Failed to delete offcut.', 'error');
+            showToast(extractErrorMessage(err, 'Failed to delete offcut.'), 'error');
         } finally {
             setSaving(false);
         }
@@ -119,7 +122,7 @@ export default function StockSessionDetailModal({ isOpen, onClose, session, onCo
                     }}>📋</div>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#f1f5f9', margin: '0 0 4px' }}>Stock Session #{session.id}</h3>
                     <p style={{ fontSize: '0.78rem', color: '#64748b', margin: 0 }}>
-                        {session.created_by} · {new Date(session.created_at).toLocaleString()}
+                        {session.created_by} · {parseServerDate(session.created_at).toLocaleString()}
                     </p>
                 </div>
 
@@ -155,7 +158,7 @@ export default function StockSessionDetailModal({ isOpen, onClose, session, onCo
                                             )}
                                             {item.edited_by && (
                                                 <div style={{ fontSize: '0.62rem', color: '#f59e0b', marginTop: '2px' }}>
-                                                    {isDeleted ? 'Deleted' : 'Corrected'} by {item.edited_by} · {new Date(item.edited_at).toLocaleString()}
+                                                    {isDeleted ? 'Deleted' : 'Corrected'} by {item.edited_by} · {parseServerDate(item.edited_at).toLocaleString()}
                                                 </div>
                                             )}
                                         </div>

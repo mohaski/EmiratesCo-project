@@ -6,7 +6,11 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt', not 'autoUpdate': autoUpdate reloaded every open tab the moment a deploy
+      // landed — mid-checkout included (a reload after the sale was sent but before the cart
+      // cleared invited a second sale). The new version now waits; PWAPrompt applies it
+      // when the till is idle, or when someone presses "Update now".
+      registerType: 'prompt',
       includeAssets: ['icon.svg', 'apple-touch-icon-180x180.png', 'favicon.ico'],
 
       manifest: {

@@ -28,7 +28,7 @@ def create_product(
         logger.info(f"Creating Product: {product_data.name}")
         logger.info(f"Variants Payload ({len(product_data.variants)}): {product_data.variants}")
         
-        # require_role(["admin", "CEO", "manager"], current_user) # Uncomment when roles active
+        # Role enforced by the controller (require_roles(*CATALOG_ROLES)).
         
         # 1. Check Duplicates — name only needs to be unique within the same category
         # (e.g. "Jam" can exist under both Tanzanian Profile and Euro Profile).
@@ -165,6 +165,24 @@ def update_product(
             raise HTTPException(status_code=404, detail="Product not found")
 
         update_dict = update_data.dict(exclude_unset=True)
+
+        if 'name' in update_dict and not (update_dict['name'] or '').strip():
+            raise HTTPException(status_code=400, detail="The product name can't be blank.")
+        if 'name' in update_dict:
+            update_dict['name'] = update_dict['name'].strip()
+
+        # Offcut tracking and open-pack stock can't be combined. Checked on the state the
+        # request LEAVES the product in — the mode-switch check below alone let "turn on
+        # offcuts" through for a product already in open-pack mode. A product that is
+        # already in that state (older data) can still be edited otherwise.
+        final_track = update_dict.get('trackOffcuts', update_dict.get('track_offcuts', product.track_offcuts))
+        final_mode = update_dict.get('unit_stock_mode') or product.unit_stock_mode or 'counted'
+        already_mixed = bool(product.track_offcuts) and (product.unit_stock_mode or 'counted') == 'open_container'
+        if final_track and final_mode == 'open_container' and not already_mixed:
+            raise HTTPException(
+                status_code=400,
+                detail="A product can't both track offcuts and be sold from open packs — turn one of them off.",
+            )
 
         # unit_stock_mode is not a plain field write: the two modes keep
         # stock_quantity in DIFFERENT units (pieces vs whole packs), so
@@ -330,6 +348,11 @@ def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Sessio
         if not variant:
              raise HTTPException(status_code=404, detail="Variant not found")
 
+        for label, value in (("price", update_data.price), ("half price", update_data.price_half),
+                             ("unit price", update_data.price_unit)):
+             if value is not None and value < 0:
+                  raise HTTPException(status_code=400, detail=f"The {label} can't be negative.")
+
         # 1. Update Prices
         if update_data.price is not None:
              logger.info(f"Updating Variant {variant_id} Price: {variant.price} -> {update_data.price}")
@@ -370,8 +393,16 @@ def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Sessio
              variant.attributes = merged_attrs
              variant.name = " - ".join(str(v) for v in merged_attrs.values())
 
-        # 2. Update Stock (Delta)
-        if update_data.stock_change is not None:
+        # 2. Update Stock (Delta). A 0 change (sent with every price-only save) moves nothing
+        # and must not write a "restock, change 0" audit row.
+        if update_data.stock_change:
+             # Only a decrease is checked: a row that is already negative (older data) can
+             # still be topped up.
+             if update_data.stock_change < 0 and (variant.stock_quantity or 0) + update_data.stock_change < 0:
+                  raise HTTPException(
+                      status_code=400,
+                      detail=f"Can't remove {abs(update_data.stock_change):g} — only {variant.stock_quantity or 0:g} in stock.",
+                  )
              logger.info(f"Adjusting Variant {variant_id} Stock: {variant.stock_quantity} + {update_data.stock_change}")
 
              old_stock = variant.stock_quantity
@@ -411,6 +442,10 @@ def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Sessio
         db.commit()
         db.refresh(variant)
         return variant
+    except HTTPException:
+        # 404/400 above must reach the client as themselves, not as a 500.
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Update Variant Error: {e}", exc_info=True)
@@ -500,6 +535,39 @@ def add_subcategory(category_id: int, name: str, db: Session = Depends(get_sessi
         db.rollback()
         logger.error(f"Add Sub-Category Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def delete_category(category_id: int, db: Session) -> dict:
+    """Remove an empty category. Refused while any product is filed under it — the
+    catalogue "×" used to only hide it on screen, so it came back on the next refresh."""
+    category = db.get(Category, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    used = db.exec(select(Product.name).where(Product.category_id == category_id)).all()
+    if used:
+        shown = ", ".join(used[:5]) + (f" and {len(used) - 5} more" if len(used) > 5 else "")
+        raise HTTPException(status_code=409, detail=f"'{category.name}' still has {len(used)} product(s): {shown}. Move or delete them first.")
+    db.delete(category)
+    db.commit()
+    return {"message": "Category deleted", "id": category_id}
+
+
+def remove_subcategory(category_id: int, sub_id: str, db: Session) -> Category:
+    """Remove an unused sub-category from a category (refused while products use it)."""
+    category = db.get(Category, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    subs = list(category.sub_categories or [])
+    if not any(s.get('id') == sub_id for s in subs):
+        raise HTTPException(status_code=404, detail="Sub-category not found")
+    used = db.exec(select(Product.name).where(Product.category_id == category_id, Product.sub_category == sub_id)).all()
+    if used:
+        shown = ", ".join(used[:5]) + (f" and {len(used) - 5} more" if len(used) > 5 else "")
+        raise HTTPException(status_code=409, detail=f"This sub-category still has {len(used)} product(s): {shown}. Move them first.")
+    category.sub_categories = [s for s in subs if s.get('id') != sub_id]
+    db.add(category)
+    db.commit()
+    db.refresh(category)
+    return category
 
 # --- STOCK ---
 

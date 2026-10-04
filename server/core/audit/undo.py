@@ -419,11 +419,21 @@ def undo_operation(db: Session, op_id: str, *, actor, reason: str,
                     # The refund was never handed back / the extra never collected: record the
                     # opposite amount, so the day's cash totals and the order are both right.
                     from entities.payments import Payment
-                    first = next(rec for key, rec in rows_of("payments") if rec["inserted"])
+                    from core.financials.splitDetails import signed_split_parts
+                    inserted = [rec for key, rec in rows_of("payments") if rec["inserted"]]
+                    first_after = inserted[0]["last"].after or {}
+                    method = first_after.get("payment_method") or "cash"
+                    # A split keeps its breakdown, reversed — without it the whole amount
+                    # would land in the cash bucket. Only exact for a single payment row.
+                    details = None
+                    if method == "split" and len(inserted) == 1:
+                        parts = signed_split_parts(first_after.get("payment_details"), _qty(first_after, "amount"))
+                        details = {k: -v + 0.0 for k, v in parts.items()} or None
                     db.add(Payment(
                         orderId=order.orderId, amount=-moved,
-                        payment_method=(first["last"].after or {}).get("payment_method") or "cash",
+                        payment_method=method,
                         reason="order" if -moved > 0 else "refund",
+                        payment_details=details,
                         recorded_by=undo_op.actor_id,
                     ))
                     moved = 0.0
@@ -503,7 +513,7 @@ def correct_operation(db: Session, op_id: str, *, actor, reason: str, cut_confir
         with operation(db, OP_EDIT, actor=actor, order_id=target.order_id, new=True,
                        request=req.model_dump(mode="json"),
                        notes=f"re-run of {op_id} with corrected cut answers") as rerun:
-            apply_order_edit(target.order_id, req, db, actor)
+            apply_order_edit(target.order_id, req, db, actor, money_check=False)
             if dropped:
                 record_summary(rerun, money_note=None, picks_note=(
                     f"{dropped} hand-picked returned piece(s) replaced by the automatic choice"))

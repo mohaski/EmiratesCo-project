@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from typing import Optional
 
@@ -68,3 +69,17 @@ class Settings:
 
 # Create settings instance
 settings = Settings()
+
+
+# ── Business timezone ────────────────────────────────────────────────────────
+# Every naive `timestamp without time zone` column holds Africa/Nairobi wall-clock
+# time: server_default now() runs in a DB session pinned to this zone (see
+# db/database.py), and Python-side writes use nairobi_now(). Kenya has no DST, so a
+# fixed UTC+3 offset is exact and needs no tz database (Windows Python ships none).
+DB_TIMEZONE = "Africa/Nairobi"
+NAIROBI_TZ = timezone(timedelta(hours=3), "EAT")
+
+
+def nairobi_now() -> datetime:
+    """Current Nairobi wall-clock time as a naive datetime, matching DB now()."""
+    return datetime.now(NAIROBI_TZ).replace(tzinfo=None)

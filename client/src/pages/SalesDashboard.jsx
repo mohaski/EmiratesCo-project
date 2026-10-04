@@ -8,6 +8,11 @@ import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext';
 import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 import CustomerSelectionOverlay from '../components/sales/CustomerSelectionOverlay';
+import { editSignature } from '../utils/orderItemMapping';
+
+// VAT is on by default except for individual customers (businesses and walk-ins are
+// invoiced with VAT). One rule for picking a customer, linking and converting.
+const defaultVat = (customer) => !customer || customer.type !== 'individual';
 
 const SearchIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -76,11 +81,11 @@ export default function SalesDashboard() {
         setLinkedRef,
         editSession,
         setEditSession,
+        // VAT lives with the cart (saved with it): page-local state reset it to "on" every
+        // time Sales was opened, so coming back to an individual's cart added 16%.
+        taxEnabled: enableTax,
+        setTaxEnabled: setEnableTax,
     } = useCart();
-
-    const [enableTax, setEnableTax] = useState(() =>
-        location.state?.enableTax !== undefined ? location.state.enableTax : true
-    );
 
     useEffect(() => {
         if (!location.state?.mode && sessionType !== 'sales') {
@@ -180,7 +185,7 @@ export default function SalesDashboard() {
                 };
             });
 
-            const vat = orderData.VAT_status ?? (!cust || cust.type === 'corporate');
+            const vat = orderData.VAT_status ?? defaultVat(cust);
             loadOrder({ ...orderData, items: mappedItems }, {
                 editSession: isEdit ? {
                     orderId,
@@ -188,7 +193,12 @@ export default function SalesDashboard() {
                     nonce,
                     originalTotal: orderData.amountPayed ?? orderData.amountPaid ?? 0,
                     originalBalance: orderData.balance ?? 0,
+                    // The order's discount — checkout starts from it, so an edit keeps it.
+                    discount: orderData.discount ?? 0,
                     vat,
+                    // What the order is now; checkout compares against it to spot an edit
+                    // that changes nothing.
+                    originalSig: editSignature(mappedItems, { customerId: cust?.id ?? orderData.customerId ?? null, vat, discount: orderData.discount ?? 0 }),
                 } : null,
             });
             setEnableTax(vat);
@@ -199,7 +209,7 @@ export default function SalesDashboard() {
             if (editSession) clearCart();
             setSelectedCustomer(location.state.customer);
             setLinkedRef({ type: 'link', id: location.state.parentOrderId ?? null });
-            setEnableTax(!location.state.customer || location.state.customer.type === 'corporate');
+            setEnableTax(defaultVat(location.state.customer));
         } else if (location.state?.mode === 'convert' && location.state?.cartItems) {
             // Editing a to-be-converted invoice's items — cartItems are already in
             // frontend cart-item shape (they round-trip from invoice.items as-is),
@@ -207,8 +217,8 @@ export default function SalesDashboard() {
             if (loadedStateRef.current?.startsWith('convert')) return;
             loadedStateRef.current = stateKey;
             loadOrder({ items: location.state.cartItems, customer: location.state.customer || null });
-            setLinkedRef({ type: 'convert', id: location.state.sourceInvoiceId ?? null });
-            setEnableTax(location.state.enableTax ?? (!location.state.customer || location.state.customer.type === 'corporate'));
+            setLinkedRef({ type: 'convert', id: location.state.sourceInvoiceId ?? null, discount: location.state.discount ?? 0 });
+            setEnableTax(location.state.enableTax ?? defaultVat(location.state.customer));
         } else if (!location.state?.mode) {
             loadedStateRef.current = null;
             if (editSession) {
@@ -218,10 +228,13 @@ export default function SalesDashboard() {
                 if (editSession.vat !== undefined) setEnableTax(editSession.vat);
                 return;
             }
-            setSelectedCustomer(null);
-            setLinkedRef(null);
+            // The customer is left alone: a finished sale already cleared it (clearCart), and
+            // clearing it here dropped the customer of a cart in progress (VAT then switched on
+            // for an individual's cart) — or, with the cart shared between tabs, the customer
+            // another tab had just picked. Only a link with nothing in the cart is stale.
+            if (cartLength === 0) setLinkedRef(null);
         }
-    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, PRODUCTS]);
+    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, setEnableTax, PRODUCTS]);
 
     const handleProductClick = useCallback((product) => {
         setSelectedProduct(product);
@@ -254,12 +267,19 @@ export default function SalesDashboard() {
 
     const handleCustomerSelect = useCallback((customer) => {
         setSelectedCustomer(customer);
-        setEnableTax(!customer || customer.type !== 'individual');
-    }, [setSelectedCustomer]);
+        // A customer just registered in the overlay isn't in the list fetched on load —
+        // add them, so searching finds them without reloading the page.
+        if (customer?.id) setCustomers(prev => (prev.some(c => c.id === customer.id) ? prev : [...prev, customer]));
+        setEnableTax(defaultVat(customer));
+    }, [setSelectedCustomer, setEnableTax]);
 
     // Keep the session's tax choice in step with the toggle, so it survives a reload too.
+    // Functional update: this runs in the same commit as loadOrder when another order is
+    // opened for editing, and spreading the render's `editSession` here wrote the PREVIOUS
+    // order's session back over the new one — the cart then held order B while checkout
+    // charged against, and saved to, order A.
     useEffect(() => {
-        if (editSession && editSession.vat !== enableTax) setEditSession({ ...editSession, vat: enableTax });
+        setEditSession(prev => (prev && prev.vat !== enableTax ? { ...prev, vat: enableTax } : prev));
     }, [enableTax, editSession, setEditSession]);
 
     // Edit mode is "an edit is in progress", not "arrived here from the Edit button": Back
@@ -673,6 +693,7 @@ export default function SalesDashboard() {
                             navigate('/checkout', {
                                 state: {
                                     cartItems: cart,
+                                    fromCart: true,
                                     customer: selectedCustomer,
                                     enableTax,
                                     mode: 'edit',
@@ -680,6 +701,8 @@ export default function SalesDashboard() {
                                     originalTotal: editSession.originalTotal ?? 0,
                                     // balance = outstanding balance before this edit (shown to the cashier for context)
                                     originalBalance: editSession.originalBalance ?? 0,
+                                    discount: editSession.discount ?? 0,
+                                    orderVersion: editSession.version ?? null,
                                     orderData: { id: editSession.orderId },
                                 },
                             });
@@ -687,6 +710,7 @@ export default function SalesDashboard() {
                             navigate('/checkout', {
                                 state: {
                                     cartItems: cart,
+                                    fromCart: true,
                                     customer: selectedCustomer,
                                     enableTax,
                                     parentOrderId: linkedRef.id,
@@ -696,9 +720,11 @@ export default function SalesDashboard() {
                             navigate('/checkout', {
                                 state: {
                                     cartItems: cart,
+                                    fromCart: true,
                                     customer: selectedCustomer,
                                     enableTax,
                                     sourceInvoiceId: linkedRef.id,
+                                    discount: linkedRef.discount ?? 0,
                                 },
                             });
                         } : undefined}

@@ -47,10 +47,9 @@ references here are plain indexed integers with no FK constraint. The
 self-referencing parent/root links DO carry real FKs — piece rows are never
 deleted, so those can never dangle.
 
-Timestamps use datetime.utcnow() to match offcuts.created_at and
-orderitems.cutting_completed_at, which is what ledger times get compared against.
-(The DB session TZ is Africa/Nairobi; anything comparing a ledger timestamp to a
-server_default now() column — e.g. orders.created_at — must account for that.)
+Timestamps use config.nairobi_now(), the same Africa/Nairobi wall-clock frame as
+offcuts.created_at, orderitems.cutting_completed_at and every server_default now()
+column (the DB session TZ is pinned to Africa/Nairobi), so they compare directly.
 """
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -58,6 +57,7 @@ from uuid import UUID
 
 from sqlalchemy import JSON, Column
 from sqlmodel import Field, SQLModel
+from config import nairobi_now
 
 # -- Vocabulary ---------------------------------------------------------------
 
@@ -165,7 +165,7 @@ class OffcutPiece(SQLModel, table=True):
     # operation journal.
     produced_by_op_id: Optional[str] = Field(default=None, index=True, max_length=32)
 
-    produced_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    produced_at: datetime = Field(default_factory=nairobi_now, nullable=False)
     consumed_at: Optional[datetime] = Field(default=None)
 
     # Which pooled `offcuts` row this piece currently contributes a unit to.
@@ -199,7 +199,7 @@ class OffcutPieceEvent(SQLModel, table=True):
     order_id: Optional[int] = Field(default=None, index=True)
     actor_id: Optional[UUID] = Field(default=None)
 
-    at: datetime = Field(default_factory=datetime.utcnow, nullable=False, index=True)
+    at: datetime = Field(default_factory=nairobi_now, nullable=False, index=True)
 
     # The operation this event was part of, and the piece's state just before it — together
     # they answer "what did edit X do to this piece, and what was it before?".

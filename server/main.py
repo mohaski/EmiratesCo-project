@@ -156,6 +156,23 @@ CLIENT_DIST = pathlib.Path(__file__).resolve().parent.parent / "client" / "dist"
 if CLIENT_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=CLIENT_DIST / "assets"), name="assets")
 
+    # A browser page load (Accept: text/html) of an app route that shares its path with an
+    # API route — /orders, /orders/review, /users, /tools — used to be answered by the API
+    # (raw JSON / a 401) whenever no service worker intercepted the navigation: first visit,
+    # a hard reload, a fresh browser. Page loads get the app; the app's own requests
+    # (axios: Accept application/json) and real files never ask for HTML.
+    _NOT_PAGES = ("/docs", "/redoc", "/openapi.json", "/assets", "/ws")
+
+    @app.middleware("http")
+    async def serve_app_for_page_loads(request: Request, call_next):
+        path = request.url.path
+        if (request.method == "GET"
+                and "text/html" in request.headers.get("accept", "")
+                and not path.startswith(_NOT_PAGES)
+                and "." not in path.rsplit("/", 1)[-1]):
+            return FileResponse(CLIENT_DIST / "index.html")
+        return await call_next(request)
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_frontend(full_path: str):
         candidate = CLIENT_DIST / full_path

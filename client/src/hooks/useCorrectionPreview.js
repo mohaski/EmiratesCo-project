@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { extractErrorMessage } from '../utils/toast';
 
 /** Debounced server dry run of an offcut-correction payload: { data, loading, error }.
  * The last answer stays visible while a newer one loads (so the replacement list doesn't
@@ -16,7 +17,7 @@ export default function useCorrectionPreview(fetcher, payload, enabled) {
                 .then(data => { if (latest.current === key) setState({ key, data, error: data?.error || '' }); })
                 .catch(err => {
                     if (latest.current === key) {
-                        setState({ key, data: null, error: err.response?.data?.detail || 'Could not preview this correction.' });
+                        setState({ key, data: null, error: extractErrorMessage(err, 'Could not preview this correction.') });
                     }
                 });
         }, 400);

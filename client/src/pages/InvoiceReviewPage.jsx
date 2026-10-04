@@ -6,6 +6,8 @@ import { useProducts } from '../context/ProductContext';
 import InvoiceItemRow from '../components/invoices/InvoiceItemRow';
 import { useCart } from '../context/CartContext';
 import { useCartTotals } from '../hooks/useCartTotals';
+import { parseServerDate } from '../utils/dates';
+import { extractErrorMessage } from '../utils/toast';
 
 export default function InvoiceReviewPage() {
     const { addInvoice } = useOrders();
@@ -27,7 +29,7 @@ export default function InvoiceReviewPage() {
     const invoiceMeta = useMemo(() => ({
         number: savedInvoice ? savedInvoice.id : `INV-${Date.now().toString().slice(-6)}`,
         date: savedInvoice
-            ? new Date(savedInvoice.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+            ? parseServerDate(savedInvoice.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
             : new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
     }), [savedInvoice]);
 
@@ -35,6 +37,7 @@ export default function InvoiceReviewPage() {
     const totals = useMemo(() => ({ grandTotal: subtotal, vat: tax, total }), [subtotal, tax, total]);
 
     const [isSaving, setIsSaving] = useState(false);
+    const [saveError, setSaveError] = useState('');
     const alreadySaved = Boolean(savedInvoice);
 
     const handleSave = async () => {
@@ -43,11 +46,14 @@ export default function InvoiceReviewPage() {
         // isSaving guards against a second click firing before the first request resolves.
         if (!customer || cartItems.length === 0 || alreadySaved || isSaving) return;
         setIsSaving(true);
+        setSaveError('');
         try {
             await addInvoice({ customer, items: cartItems, totals, enableTax });
             navigate('/orders');
         } catch (err) {
             console.error('Failed to save invoice:', err);
+            // Said on the page, next to the button — the quotation was NOT saved.
+            setSaveError(`Not saved: ${extractErrorMessage(err, 'please try again.')}`);
             setIsSaving(false);
         }
     };
@@ -98,6 +104,9 @@ export default function InvoiceReviewPage() {
                         onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}>
                             {alreadySaved ? '✓ Saved' : isSaving ? 'Saving...' : '💾 Save as Draft'}
                         </button>
+                        {saveError && (
+                            <span role="alert" style={{ alignSelf: 'center', fontSize: '0.78rem', fontWeight: 700, color: '#f87171' }}>{saveError}</span>
+                        )}
                         <button onClick={handlePrint} style={{
                             padding: '0.625rem 1.5rem', borderRadius: '0.75rem', border: 'none',
                             background: 'linear-gradient(135deg, rgba(245,158,11,0.85), rgba(234,88,12,0.85))',

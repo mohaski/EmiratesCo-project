@@ -26,6 +26,27 @@ export default function PWAPrompt() {
         },
     });
 
+    // A waiting update is applied on its own once the till is idle, so nobody keeps running
+    // an old build for days because "Update now" was never pressed: no cart or edit in
+    // progress, not on a checkout / receipt / password screen, nobody typing.
+    useEffect(() => {
+        if (!needRefresh) return undefined;
+        const BUSY_PATHS = ['/checkout', '/checkout/receipt', '/change-password'];
+        const isIdle = () => {
+            if (BUSY_PATHS.includes(window.location.pathname)) return false;
+            try {
+                const cart = JSON.parse(localStorage.getItem('emirates_pos_cart') || '[]');
+                if (Array.isArray(cart) && cart.length > 0) return false;
+                if (localStorage.getItem('emirates_pos_edit_session')) return false;
+            } catch { return false; }
+            const el = document.activeElement;
+            if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return false;
+            return true;
+        };
+        const timer = setInterval(() => { if (isIdle()) updateServiceWorker(true); }, 20000);
+        return () => clearInterval(timer);
+    }, [needRefresh, updateServiceWorker]);
+
     useEffect(() => {
         const handler = (e) => {
             e.preventDefault();

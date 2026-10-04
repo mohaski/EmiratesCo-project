@@ -41,7 +41,11 @@ export function ManageProductsTab({ onAddProduct }) {
     ), [products, selectedCategory, selectedUsage]);
 
     const confirmDeleteProduct = () => {
-        if (deleteModal.product) { deleteProduct(deleteModal.product.id); setDeleteModal({ open: false, product: null }); }
+        if (!deleteModal.product) return;
+        // Closed only once it really went (the error toast explains a refusal).
+        deleteProduct(deleteModal.product.id)
+            .then(() => setDeleteModal({ open: false, product: null }))
+            .catch(() => {});
     };
 
     const statCards = [
@@ -206,7 +210,9 @@ export function ManageProductsTab({ onAddProduct }) {
 
             <EditProductModal isOpen={editModal.open} onClose={() => setEditModal({ open: false, product: null })} product={editModal.product ? products.find(p => p.id === editModal.product.id) || editModal.product : null} />
             <ConfirmationModal isOpen={deleteModal.open} onClose={() => setDeleteModal({ open: false, product: null })} onConfirm={confirmDeleteProduct} title="Delete Product" message={`Are you sure you want to delete "${deleteModal.product?.name}"? This will permanently remove all variants.`} confirmText="Delete Permanently" confirmStyle="danger" />
-            <ManageVariantsModal isOpen={variantsModal.open} onClose={() => setVariantsModal({ open: false, product: null })} product={variantsModal.product ? products.find(p => p.id === variantsModal.product.id) || variantsModal.product : null} />
+            {/* Keyed by product: the modal keeps its editing state while mounted, so without a
+                remount an edit left open on one product reappeared on the next. */}
+            <ManageVariantsModal key={variantsModal.open ? `variants-${variantsModal.product?.id}` : 'variants-closed'} isOpen={variantsModal.open} onClose={() => setVariantsModal({ open: false, product: null })} product={variantsModal.product ? products.find(p => p.id === variantsModal.product.id) || variantsModal.product : null} />
         </div>
     );
 }

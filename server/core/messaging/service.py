@@ -54,7 +54,7 @@ def update_message_read_status(message_id: int, status_data: model.messageReadSt
         ).first()
         
         if not message_recipient:
-            logger.warning(f"MessageRecipient not found for message {message_id} and user {current_user.id}.")
+            logger.warning(f"MessageRecipient not found for message {message_id} and user {current_user.userId}.")
             raise HTTPException(status_code=404, detail="Message or recipient not found")
         
         message_recipient.has_read = status_data.has_read
@@ -63,7 +63,7 @@ def update_message_read_status(message_id: int, status_data: model.messageReadSt
         db.add(message_recipient)
         db.commit()
         
-        logger.info(f"User {current_user.id} updated read status for message {message_id} to {status_data.has_read}.")
+        logger.info(f"User {current_user.userId} updated read status for message {message_id} to {status_data.has_read}.")
         return {"message": "Read status updated successfully"}
         
     except HTTPException:
@@ -84,15 +84,15 @@ def read_inbox(current_user: User = Depends(get_current_user), db: Session = Dep
         ).all()
         
         if not messages:
-            logger.info(f"No messages found for user {current_user.id}.")
+            logger.info(f"No messages found for user {current_user.userId}.")
             return []
         
-        logger.info(f"{len(messages)} messages fetched for user {current_user.id}.")
+        logger.info(f"{len(messages)} messages fetched for user {current_user.userId}.")
         return messages
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching inbox for user {current_user.id}: {e}", exc_info=True)
+        logger.error(f"Error fetching inbox for user {current_user.userId}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
     
 

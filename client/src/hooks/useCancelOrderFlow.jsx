@@ -25,6 +25,17 @@ export default function useCancelOrderFlow({ cancelOrder, onCancelled }) {
     const [pending, setPending] = useState(null);              // { order, confirmations, token }
 
     const startCancel = useCallback(async (order) => {
+        // The refund shown must be what the order has been paid NOW — the row or summary
+        // this was opened from can predate a debt collected on another till. The server
+        // also refuses a cancel whose expected refund no longer matches.
+        try {
+            const fresh = await api.orderService.getOrder(idOf(order));
+            if (fresh && typeof fresh.amountPaid === 'number') {
+                order = { ...order, amountPaid: fresh.amountPaid, balance: fresh.balance };
+            }
+        } catch (err) {
+            console.error('Failed to refresh the order before cancelling', err);
+        }
         try {
             const plan = await api.orderService.getReversalPlan(idOf(order));
             // ANY cut line means the floor confirms first, even one the cutting queue still

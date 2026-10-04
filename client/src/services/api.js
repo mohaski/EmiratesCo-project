@@ -31,9 +31,27 @@ api.interceptors.response.use(
     (response) => response,
     (error) => {
         const status = error.response?.status;
+        const url = error.config?.url || '';
 
+        // A wrong password at sign-in is a 401 too — the Login page explains it inline.
+        if (url.includes('/users/token')) {
+            return Promise.reject(error);
+        }
         if (status === 401) {
-            showToast('Your session has expired. Please log in again.', 'warning');
+            // The session is over (expired 8-hour token, account deactivated). End it once —
+            // AuthContext drops the token and the login screen takes over, keeping the cart.
+            // Requests failing in the same moment find the token already gone and stay quiet.
+            if (localStorage.getItem('token')) {
+                localStorage.removeItem('token');
+                showToast('Your session has ended. Please sign in again.', 'warning');
+                window.dispatchEvent(new Event('pos:session-expired'));
+            }
+            return Promise.reject(error);
+        }
+        if (status === 403 && error.response?.data?.detail === 'PASSWORD_CHANGE_REQUIRED') {
+            // The account still has a temporary password; only the change-password screen
+            // works until it's replaced (App routes there on its own).
+            if (window.location.pathname !== '/change-password') window.location.assign('/change-password');
             return Promise.reject(error);
         }
         if (status === 403) {
@@ -61,8 +79,10 @@ export const OrderService = {
         const response = await api.get(`/orders/${id}`);
         return response.data;
     },
-    getAllOrders: async (skip = 0, limit = 100) => {
-        const response = await api.get(`/orders/?skip=${skip}&limit=${limit}`);
+    getAllOrders: async (skip = 0, limit = 100, search = null) => {
+        const params = new URLSearchParams({ skip, limit });
+        if (search) params.append('search', search);
+        const response = await api.get(`/orders/?${params}`);
         return response.data;
     },
     getCustomerOrders: async (customerId) => {
@@ -70,7 +90,9 @@ export const OrderService = {
         return response.data;
     },
     /** Orders with an outstanding balance — feeds the Collect Payments page. */
-    getOutstandingOrders: async (skip = 0, limit = 200) => {
+    // Ordered oldest-first on the server, so a low cap hid the NEWEST debts once there
+    // were more than it. Debts are a short list; 1000 covers it.
+    getOutstandingOrders: async (skip = 0, limit = 1000) => {
         const response = await api.get(`/orders/with-balance?skip=${skip}&limit=${limit}`);
         return response.data;
     },
@@ -159,6 +181,8 @@ export const OrderService = {
             pin,
             refundMethod: refund?.method || null,
             refundDetails: refund?.details || null,
+            // The refund the cashier was shown; the server refuses (409) if it changed.
+            expectedRefund: refund?.expected ?? null,
             cutConfirmations,
             planToken,
         });
@@ -204,13 +228,15 @@ export const OrderService = {
     /** Order-queue batch report: marks every still-pending item across the given
      * orders as cut, and each order as completed. Used by the cutting-queue
      * multi-select page (whole orders, not individual items). */
-    markOrdersCuttingDone: async (orderIds) => {
-        const response = await api.put('/orders/cutting-queue/mark-orders-done', { order_ids: orderIds });
+    markOrdersCuttingDone: async (orderIds, itemIds = null) => {
+        // itemIds: the items the queue showed — anything added since stays pending.
+        const response = await api.put('/orders/cutting-queue/mark-orders-done', { order_ids: orderIds, item_ids: itemIds });
         return response.data;
     },
     /** Orders with at least one item still awaiting a cutting report, for the
      * order-level cutting-queue page. */
-    getCuttingQueue: async (skip = 0, limit = 100) => {
+    // Oldest-first too — the cap must not hide the newest jobs.
+    getCuttingQueue: async (skip = 0, limit = 500) => {
         const response = await api.get(`/orders/cutting-queue?skip=${skip}&limit=${limit}`);
         return response.data;
     },
@@ -251,6 +277,15 @@ export const ProductService = {
     },
     addSubCategory: async (categoryDbId, name) => {
         const response = await api.post(`/products/categories/${categoryDbId}/subcategories`, { name });
+        return response.data;
+    },
+    // Refused (409) while products are still filed under it.
+    deleteCategory: async (categoryDbId) => {
+        const response = await api.delete(`/products/categories/${categoryDbId}`);
+        return response.data;
+    },
+    deleteSubCategory: async (categoryDbId, subId) => {
+        const response = await api.delete(`/products/categories/${categoryDbId}/subcategories/${encodeURIComponent(subId)}`);
         return response.data;
     },
     addVariant: async (productId, variantData) => {
@@ -493,7 +528,7 @@ export const UserService = {
         return response.data;
     },
     changePassword: async (userId, data) => {
-        // data: { newPassword, confirmNewPassword }
+        // data: { currentPassword (the temporary one), newPassword, confirmNewPassword }
         const response = await api.post(`/users/${userId}/change-password`, data);
         return response.data;
     },
@@ -518,7 +553,7 @@ export const InvoiceService = {
         return response.data;
     },
     /** List all invoices. Pass status to filter: 'draft'|'sent'|'converted'|'cancelled' */
-    getAll: async (skip = 0, limit = 100, status = null) => {
+    getAll: async (skip = 0, limit = 500, status = null) => { // quotations: 100 hid older ones
         const params = new URLSearchParams({ skip, limit });
         if (status) params.append('status', status);
         const response = await api.get(`/invoices/?${params}`);
@@ -599,8 +634,9 @@ export const ToolService = {
 };
 
 export const SettingsService = {
-    setCancelPin: async (pin) => {
-        const response = await api.put('/settings/cancel-pin', { pin });
+    setCancelPin: async (pin, currentPassword = null) => {
+        // currentPassword (your account password) is required to replace an existing PIN.
+        const response = await api.put('/settings/cancel-pin', { pin, currentPassword });
         return response.data;
     },
     getCancelPinStatus: async () => {

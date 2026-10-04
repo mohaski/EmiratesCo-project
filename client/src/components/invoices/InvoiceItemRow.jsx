@@ -1,7 +1,5 @@
 // InvoiceItemRow — rendered inside a white print-safe table, light styles intentional
-const InvoiceItemRow = ({ item, index, productDef }) => {
-    const def = productDef || {};
-
+const InvoiceItemRow = ({ item, index }) => {
     return (
         <tr className="break-inside-avoid page-break-inside-avoid">
             <td style={{ padding: '12px 0', color: '#94a3b8', fontFamily: 'monospace', verticalAlign: 'top', fontSize: '0.8rem' }}>{index + 1}</td>

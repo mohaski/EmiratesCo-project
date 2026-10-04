@@ -4,6 +4,7 @@ import { useToast } from '../../context/ToastContext';
 import { useProducts } from '../../context/ProductContext';
 import { useAuth } from '../../context/AuthContext';
 import OpenStockHistory from './OpenStockHistory';
+import { parseServerDate } from '../../utils/dates';
 
 /**
  * Manager panel for the open-container stock model.
@@ -63,6 +64,9 @@ export default function OpenStockModal({ onClose }) {
     const [openable, setOpenable] = useState([]);
     const [loading, setLoading] = useState(true);
     const [busyId, setBusyId] = useState(null);
+    // The pack just marked finished, for an Undo: one misclick used to close a pack for
+    // good from here, blocking sub-pack sales until a second pack was opened.
+    const [lastFinished, setLastFinished] = useState(null);
     // container id -> the measured yield the manager is typing while closing it.
     const [closingQty, setClosingQty] = useState({});
 
@@ -105,6 +109,7 @@ export default function OpenStockModal({ onClose }) {
     };
 
     const handleClose = async (container) => {
+        if (!window.confirm(`Mark this open pack of ${container.product_name || 'this product'} as finished?`)) return;
         const typed = closingQty[container.id];
         const actual = typed === '' || typed == null ? null : parseFloat(typed);
         setBusyId(`c${container.id}`);
@@ -112,7 +117,20 @@ export default function OpenStockModal({ onClose }) {
             await api.openContainerService.close(container.id, { actualQuantity: Number.isFinite(actual) ? actual : null });
             showToast('Pack marked finished', 'success');
             setClosingQty(prev => ({ ...prev, [container.id]: '' }));
+            setLastFinished({ id: container.id, name: container.product_name || 'pack' });
             await afterChange();
+        } catch { /* toasted */ } finally { setBusyId(null); }
+    };
+
+    const handleUndoFinish = async () => {
+        if (!lastFinished) return;
+        setBusyId(`u${lastFinished.id}`);
+        try {
+            await api.openContainerService.reopen(lastFinished.id);
+            showToast('Pack reopened', 'success');
+            setLastFinished(null);
+            await afterChange();
+            setTab('open');
         } catch { /* toasted */ } finally { setBusyId(null); }
     };
 
@@ -161,6 +179,12 @@ export default function OpenStockModal({ onClose }) {
                 </div>
 
                 {/* Body */}
+                {lastFinished && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.6rem 1.25rem', background: 'rgba(245,158,11,0.08)', borderBottom: '1px solid rgba(245,158,11,0.2)', fontSize: '0.78rem', color: '#fbbf24' }}>
+                        <span>Marked the {lastFinished.name} pack finished.</span>
+                        <button onClick={handleUndoFinish} disabled={busyId === `u${lastFinished.id}`} style={{ background: 'none', border: '1px solid rgba(245,158,11,0.4)', borderRadius: '0.5rem', color: '#fbbf24', fontWeight: 700, padding: '0.25rem 0.75rem', cursor: 'pointer' }}>Undo</button>
+                    </div>
+                )}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.25rem' }} className="custom-scrollbar">
                     {tab === 'history' ? (
                         <OpenStockHistory />
@@ -187,7 +211,7 @@ export default function OpenStockModal({ onClose }) {
                                 </div>
 
                                 <p style={{ fontSize: '0.68rem', color: '#475569', margin: '0.5rem 0 0' }}>
-                                    Opened {c.opened_at ? new Date(c.opened_at).toLocaleString() : '—'}
+                                    Opened {c.opened_at ? parseServerDate(c.opened_at).toLocaleString() : '—'}
                                     {c.opened_by_name ? ` by ${c.opened_by_name}` : ''}
                                     {c.nominal_quantity ? ` · labelled ${c.nominal_quantity}${c.unit || ''}` : ''}
                                 </p>

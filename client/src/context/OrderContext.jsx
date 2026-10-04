@@ -52,46 +52,76 @@ export const OrderProvider = ({ children }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
-    // Prevent overlapping concurrent fetches
-    const fetchingRef = useRef(false);
+    // One fetch at a time. A request that arrives while one is running marks a
+    // rerun and waits for it, so the caller always resolves on data fetched
+    // *after* it asked (a WS event or a just-made sale is never dropped).
+    // Never throws: a sale that succeeded must not look failed because the
+    // follow-up refresh did.
+    const inFlightRef = useRef(null);
+    const rerunRef = useRef(false);
+    // Bumped on login/logout so a fetch started by the previous session can't
+    // repopulate the lists after they were cleared.
+    const sessionGenRef = useRef(0);
 
-    const fetchOrders = useCallback(async ({ showLoading = false } = {}) => {
-        if (fetchingRef.current) return;
-        fetchingRef.current = true;
-        if (showLoading) setLoading(true);
+    const loadOnce = useCallback(async () => {
+        const gen = sessionGenRef.current;
         try {
             const [ordersResult, invoicesResult] = await Promise.allSettled([
                 api.orderService.getAllOrders(),
                 api.invoiceService.getAll(),
             ]);
+            if (gen !== sessionGenRef.current) return;
 
+            // On failure keep what is already on screen and flag the error,
+            // rather than blanking the list ("No orders found") on a network blip.
             if (ordersResult.status === 'fulfilled') {
                 setOrders(ordersResult.value.map(mapBackendOrder));
             } else {
                 console.error('Failed to fetch orders:', ordersResult.reason);
-                setOrders([]);
             }
 
             if (invoicesResult.status === 'fulfilled') {
                 setInvoices(invoicesResult.value.map(mapBackendInvoice));
             } else {
                 console.error('Failed to fetch invoices:', invoicesResult.reason);
-                setInvoices([]);
             }
 
             const anyFailed = ordersResult.status === 'rejected' || invoicesResult.status === 'rejected';
             setError(anyFailed ? 'Some data failed to load.' : null);
-        } finally {
-            setLoading(false);
-            fetchingRef.current = false;
+        } catch (err) {
+            console.error('Failed to process orders:', err);
+            if (gen === sessionGenRef.current) setError('Some data failed to load.');
         }
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, []);
+
+    const fetchOrders = useCallback(({ showLoading = false } = {}) => {
+        if (showLoading) setLoading(true);
+        if (inFlightRef.current) {
+            rerunRef.current = true;
+            return inFlightRef.current;
+        }
+        const run = (async () => {
+            try {
+                do {
+                    rerunRef.current = false;
+                    await loadOnce();
+                } while (rerunRef.current);
+            } finally {
+                inFlightRef.current = null;
+                setLoading(false);
+            }
+        })();
+        inFlightRef.current = run;
+        return run;
+    }, [loadOnce]);
 
     // Refetch on login/logout — this provider lives above the router for the
     // whole app lifetime, so a mount-only effect never re-runs when the same
     // session logs out and back in (see WebSocketContext for the same pattern).
     useEffect(() => {
-        if (user) {
+        sessionGenRef.current += 1;
+        // Nothing loads until a temporary password is replaced (the server refuses it).
+        if (user && !user.mustChangePassword) {
             fetchOrders({ showLoading: true });
         } else {
             setOrders([]);

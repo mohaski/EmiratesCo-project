@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useProducts } from '../context/ProductContext';
 import { useOrders } from '../context/OrderContext';
@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { ROUTE_ROLES } from '../config/routePermissions';
 import { useToast } from '../context/ToastContext';
 import api from '../services/api';
+import { wsEvents } from '../utils/wsEvents';
 import useCancelOrderFlow from '../hooks/useCancelOrderFlow';
 import CorrectOffcutModal from '../components/orders/CorrectOffcutModal';
 import CorrectProfileOffcutModal from '../components/orders/CorrectProfileOffcutModal';
@@ -14,6 +15,8 @@ import CuttingInstructions from '../components/orders/CuttingInstructions';
 import { REVIEW_THEME, groupJointGlassSources } from '../utils/cuttingInstructionFormat';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 import { getProfileColorHex, getContrastText, getCategoryAccent, tileGradient, hexToRgba } from '../utils/colors';
+import { extractErrorMessage } from '../utils/toast';
+import { parseServerDate } from '../utils/dates';
 
 const STATUS_COLORS = {
     pending:   { bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.25)', text: '#cbd5e1' },
@@ -238,23 +241,50 @@ export default function OrderSummaryPage() {
     const canCorrectOffcuts = ['manager', 'ceo', 'admin'].includes(user?.role) && order?.status !== 'cancelled';
     const canMarkCuttingDone = ['cashier', 'admin'].includes(user?.role);
 
-    const refreshOrder = async () => {
-        const full = await api.orderService.getOrder(order.orderId);
-        setOrder({ ...full, id: full.orderId, customer: order.customer });
+    const orderId = order?.orderId;
+    const refreshOrder = useCallback(async () => {
+        if (!orderId) return;
+        const full = await api.orderService.getOrder(orderId);
+        setOrder(prev => ({ ...full, id: full.orderId, customer: prev?.customer }));
+    }, [orderId]);
+
+    // Another device editing, cancelling or correcting this order: show its current records,
+    // so a correction is never made against ones that have moved.
+    useEffect(() => {
+        let timer = null;
+        const off = wsEvents.on('orders_updated', () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => { refreshOrder().catch(() => {}); }, 400);
+        });
+        return () => { off(); clearTimeout(timer); };
+    }, [refreshOrder]);
+
+    // The cutting event as this screen shows it. Events are addressed by position and a
+    // correction shifts positions, so the server refuses (409) if what is there now differs.
+    const withExpectedEvent = (payload) => {
+        const item = (order?.items || []).find(i => i.itemId === payload.item_id);
+        const event = item?.details?.lineItems?.[payload.line_idx]?.offcut_sources?.[payload.event_idx];
+        return event ? { ...payload, expected_event: event } : payload;
+    };
+
+    // Saved first, refreshed second: a failed refresh must not read as a failed correction —
+    // retrying would apply it twice.
+    const afterCorrection = async () => {
+        showToast('Offcut correction saved', 'success');
+        try { await refreshOrder(); }
+        catch { showToast('Saved — but the order could not be reloaded. Reload the page before correcting again.', 'warning'); }
     };
 
     // The modals build the full request (see correctionPayload in SourceCorrectionFields);
     // the same payload drives their live preview.
     const handleOffcutCorrected = async (payload) => {
-        await api.orderService.correctOffcutEvent(order.orderId, payload);
-        await refreshOrder();
-        showToast('Offcut correction saved', 'success');
+        await api.orderService.correctOffcutEvent(order.orderId, withExpectedEvent(payload));
+        await afterCorrection();
     };
 
     const handleProfileOffcutCorrected = async (payload) => {
-        await api.orderService.correctProfileOffcutEvent(order.orderId, payload);
-        await refreshOrder();
-        showToast('Offcut correction saved', 'success');
+        await api.orderService.correctProfileOffcutEvent(order.orderId, withExpectedEvent(payload));
+        await afterCorrection();
     };
 
     const handleMarkItemDone = async (itemId) => {
@@ -263,7 +293,7 @@ export default function OrderSummaryPage() {
             await refreshOrder();
             showToast('Cutting reported done', 'success');
         } catch (err) {
-            showToast(err.response?.data?.detail || 'Failed to report cutting done.', 'error');
+            showToast(extractErrorMessage(err, 'Failed to report cutting done.'), 'error');
         }
     };
 
@@ -273,7 +303,7 @@ export default function OrderSummaryPage() {
             await refreshOrder();
             showToast('Order cutting reported done', 'success');
         } catch (err) {
-            showToast(err.response?.data?.detail || 'Failed to report cutting done.', 'error');
+            showToast(extractErrorMessage(err, 'Failed to report cutting done.'), 'error');
         }
     };
 
@@ -300,7 +330,9 @@ export default function OrderSummaryPage() {
         return present;
     }, [items]);
 
-    const [receiptCategories, setReceiptCategories] = useState(() => ({ profile: false, glass: false, accessory: false }));
+    // Starts with every department the order actually has ticked (Reprint used to open with
+    // none selected and refuse to print until each was ticked by hand).
+    const [receiptCategories, setReceiptCategories] = useState(() => ({ ...presentBuckets }));
     // Re-sync whenever the set of present departments changes (order loads/reloads) —
     // default every present department to checked, same as Checkout.
     const [syncedPresentBuckets, setSyncedPresentBuckets] = useState(presentBuckets);
@@ -336,7 +368,10 @@ export default function OrderSummaryPage() {
 
     const isCancelled = order.status === 'cancelled';
     const statusColor = STATUS_COLORS[order.status] || STATUS_COLORS.pending;
-    const vatAmount = order.VAT_status ? Math.max(0, order.total - (order.subtotal - (order.discount || 0))) : 0;
+    // order.subtotal is stored AFTER the discount, so VAT is simply total - subtotal, and the
+    // goods before discount are subtotal + discount (Subtotal - Discount + VAT = Total).
+    const vatAmount = order.VAT_status ? Math.max(0, (order.total || 0) - (order.subtotal || 0)) : 0;
+    const grossSubtotal = (order.subtotal || 0) + (order.discount || 0);
     // Cashier can view the summary but not edit or cancel — read-only + Add To only
     const canEditOrCancel = ['manager', 'ceo', 'admin'].includes(user?.role);
     // Editing happens in the Sales terminal - a role that can't open it (CEO, admin) would
@@ -352,9 +387,18 @@ export default function OrderSummaryPage() {
     const isCompleted = order.status === 'completed';
     // Mirrors the backend's 7-day cutoff in cancel_order_with_pin — cancelling an
     // order that old is no longer allowed, so hide the option before the user tries.
-    const orderTooOldToCancel = (new Date() - new Date(order.created_at)) > 7 * 24 * 60 * 60 * 1000;
+    const orderTooOldToCancel = (new Date() - parseServerDate(order.created_at)) > 7 * 24 * 60 * 60 * 1000;
 
-    const handleEdit = () => navigate('/sales', { state: { mode: 'edit', editNonce: Date.now(), orderData: { ...order, id: order.orderId } } });
+    // Loaded fresh: the order on this screen can be a list row (no items, no version) or
+    // older than another device's change.
+    const handleEdit = async () => {
+        try {
+            const full = await api.orderService.getOrder(order.orderId);
+            navigate('/sales', { state: { mode: 'edit', editNonce: Date.now(), orderData: { ...full, id: full.orderId, customer: order.customer } } });
+        } catch {
+            showToast('Could not load this order to edit it. Check the connection and try again.', 'error');
+        }
+    };
 
 
     return (
@@ -381,7 +425,7 @@ export default function OrderSummaryPage() {
                         }}>{order.status}</span>
                     </div>
                     <p style={{ fontSize: '0.78rem', color: '#475569', margin: '2px 0 0' }}>
-                        {new Date(order.created_at).toLocaleString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {parseServerDate(order.created_at).toLocaleString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
                 </div>
 
@@ -493,7 +537,7 @@ export default function OrderSummaryPage() {
                     </Card>
 
                     <Card title="Totals">
-                        <Row label="Subtotal" value={`KSH ${(order.subtotal || 0).toFixed(0)}`} />
+                        <Row label="Subtotal" value={`KSH ${grossSubtotal.toFixed(0)}`} />
                         {order.discount > 0 && <Row label="Discount" value={`- KSH ${order.discount.toFixed(0)}`} />}
                         {order.VAT_status && <Row label="VAT" value={`KSH ${vatAmount.toFixed(0)}`} />}
                         <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', margin: '0.5rem 0' }} />

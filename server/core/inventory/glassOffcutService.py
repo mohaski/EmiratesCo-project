@@ -78,6 +78,7 @@ from entities.offcuts import Offcut
 from entities.products import Product
 from entities.variants import Variant
 from entities.orderItems import OrderItem
+from config import nairobi_now
 from entities.orders import Order
 from core.inventory.poolKey import compute_pool_key, safe_delete_offcut
 from core.inventory import offcutLedger as ledger
@@ -1239,7 +1240,7 @@ def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], nee
             f"({full_w:.1f}x{full_h:.1f}mm) for product '{product.name}'"
         )
 
-    now = datetime.utcnow()
+    now = nairobi_now()
 
     variant_popular_ranges = (variant.popular_size_ranges if variant else None) or []
     offcut_candidates = [c for c in candidates if c["source_kind"] == "offcut"]
@@ -1764,7 +1765,7 @@ def apply_manual_glass_selection(db: Session, product: Product, variant: Optiona
             f"({full_w:.1f}x{full_h:.1f}mm) for product '{product.name}'"
         )
 
-    now = datetime.utcnow()
+    now = nairobi_now()
     best = min(candidates, key=lambda c: _candidate_sort_key(c, variant, now))
     return _apply_candidate(db, product, variant, best, pool_key=pool_key)[0]
 
@@ -1822,7 +1823,7 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
             candidates = [c for c in candidates if c["source_kind"] == "offcut" and c["source_id"] == forced_offcut_id]
             if not candidates:
                 raise ValueError(f"Offcut #{forced_offcut_id} doesn't fit any of the corrected pieces")
-            now = datetime.utcnow()
+            now = nairobi_now()
             best = min(candidates, key=lambda c: _candidate_sort_key(c, variant, now))
             events_by_line = _apply_candidate(db, product, variant, best, item_id, pool_key=pool_key)
             forced_pending = False
@@ -1831,7 +1832,7 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
                           if c["source_kind"] == "sheet"]
             if not candidates:
                 raise ValueError(f"The missed piece(s) don't fit a full sheet ({full_w:.0f}x{full_h:.0f}mm)")
-            now = datetime.utcnow()
+            now = nairobi_now()
             best = min(candidates, key=lambda c: _candidate_sort_key(c, variant, now))
             events_by_line = _apply_candidate(db, product, variant, best, item_id, pool_key=pool_key)
         else:

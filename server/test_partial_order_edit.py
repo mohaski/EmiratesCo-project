@@ -124,8 +124,10 @@ def main():
     prod_b, var_b = seed_product(db, "Bar B")
 
     order = Order(orderId=3001, servedby=FakeUser.userId, customer_name="Edit Test",
-                  subtotal=1000, total=1000, amountPayed=1000, balance=0,
-                  status="confirmed", payment_status="Paid")
+                  # Unpaid: this suite is about stock. A paid fixture whose items reprice
+                  # lower would need the edit to carry the refund (else the edit is refused).
+                  subtotal=1000, total=1000, amountPayed=0, balance=1000,
+                  status="confirmed", payment_status="Unpaid")
     db.add(order)
     db.flush()
 

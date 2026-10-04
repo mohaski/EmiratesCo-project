@@ -1,9 +1,20 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import api from '../../services/api';
+import { extractErrorMessage } from '../../utils/toast';
 
 const SetCancelPinModal = ({ onClose }) => {
     const [pin, setPin] = useState('');
     const [confirmPin, setConfirmPin] = useState('');
+    const [password, setPassword] = useState('');
+    // Replacing an existing PIN needs the account password; the first setup doesn't.
+    const [pinExists, setPinExists] = useState(false);
+    useEffect(() => {
+        let alive = true;
+        api.settingsService.getCancelPinStatus()
+            .then(r => { if (alive) setPinExists(!!r?.configured); })
+            .catch(() => { if (alive) setPinExists(true); });
+        return () => { alive = false; };
+    }, []);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
@@ -21,13 +32,17 @@ const SetCancelPinModal = ({ onClose }) => {
             setError('PINs do not match.');
             return;
         }
+        if (pinExists && !password) {
+            setError('Enter your account password to change the PIN.');
+            return;
+        }
         setLoading(true);
         try {
-            await api.settingsService.setCancelPin(pin);
+            await api.settingsService.setCancelPin(pin, pinExists ? password : null);
             setSuccess('Cancel PIN updated.');
             setTimeout(() => { onClose(); }, 1500);
         } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to update PIN. Please try again.');
+            setError(extractErrorMessage(err, 'Failed to update PIN. Please try again.'));
         } finally {
             setLoading(false);
         }
@@ -96,6 +111,16 @@ const SetCancelPinModal = ({ onClose }) => {
                                 style={inputStyle} onFocus={onFocus} onBlur={onBlur}
                             />
                         </div>
+                        {pinExists && (
+                            <div>
+                                <label style={labelStyle}>Your account password</label>
+                                <input
+                                    type="password" autoComplete="current-password" placeholder="Required to change the PIN"
+                                    value={password} onChange={e => setPassword(e.target.value)}
+                                    style={{ ...inputStyle, fontSize: '0.9rem', letterSpacing: 'normal' }} onFocus={onFocus} onBlur={onBlur}
+                                />
+                            </div>
+                        )}
 
                         <button type="submit" disabled={loading} style={{
                             marginTop: '0.5rem', padding: '0.875rem', borderRadius: '0.875rem', border: 'none', cursor: loading ? 'not-allowed' : 'pointer',

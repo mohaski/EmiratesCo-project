@@ -1,4 +1,5 @@
-import { useOrders } from '../context/OrderContext';
+import { useOrders, mapBackendOrder } from '../context/OrderContext';
+import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { ROUTE_ROLES } from '../config/routePermissions';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -8,12 +9,14 @@ import InvoiceCard from '../components/orders/InvoiceCard';
 import SetCancelPinModal from '../components/orders/SetCancelPinModal';
 import CuttingQueueSection from '../components/orders/CuttingQueueSection';
 import useCancelOrderFlow from '../hooks/useCancelOrderFlow';
+import { showToast } from '../utils/toast';
+import { parseServerDate } from '../utils/dates';
 
 export default function OrdersPage() {
     const navigate = useNavigate();
     const location = useLocation();
     const { user } = useAuth();
-    const { orders, invoices, loading, error, convertInvoiceToOrder, cancelOrder, deleteInvoice } = useOrders();
+    const { orders, invoices, loading, error, cancelOrder } = useOrders();
     // Returning from View/Convert can ask to land back on the Invoices tab, on the
     // exact card that was clicked — both come in via navigation state.
     const [activeTab, setActiveTab] = useState(() => location.state?.activeTab || 'orders');
@@ -40,9 +43,9 @@ export default function OrdersPage() {
 
     const groupItemsByDate = useCallback((items) => {
         const groups = {};
-        const sorted = [...items].sort((a, b) => new Date(b.date) - new Date(a.date));
+        const sorted = [...items].sort((a, b) => parseServerDate(b.date) - parseServerDate(a.date));
         sorted.forEach(item => {
-            const date = new Date(item.date);
+            const date = parseServerDate(item.date);
             const today = new Date();
             const yesterday = new Date();
             yesterday.setDate(yesterday.getDate() - 1);
@@ -55,11 +58,43 @@ export default function OrdersPage() {
         return Object.entries(groups).map(([title, items]) => ({ title, items }));
     }, []);
 
+    // The list holds the most recent orders only. Searching for an order number that isn't
+    // among them looks it up on the server, so an older order can still be found, edited
+    // or cancelled from here.
+    const [lookedUp, setLookedUp] = useState(null); // { id, order | null }
+    const wantedId = activeTab === 'orders' && /^\d+$/.test(deferredQuery.trim()) ? Number(deferredQuery.trim()) : null;
+    const inList = wantedId != null && orders.some(o => o.id === wantedId);
+    useEffect(() => {
+        if (wantedId == null || inList) return undefined;
+        let alive = true;
+        api.orderService.getOrder(wantedId)
+            .then(o => { if (alive) setLookedUp({ id: wantedId, order: mapBackendOrder(o) }); })
+            .catch(() => { if (alive) setLookedUp({ id: wantedId, order: null }); });
+        return () => { alive = false; };
+    }, [wantedId, inList]);
+
+    // A customer-name search also asks the server, which searches every order, not just the
+    // newest page loaded here.
+    const nameQuery = activeTab === 'orders' && wantedId == null && deferredQuery.trim().length >= 2 ? deferredQuery.trim() : null;
+    const [nameHits, setNameHits] = useState({ q: null, orders: [] });
+    useEffect(() => {
+        if (!nameQuery) return undefined;
+        let alive = true;
+        api.orderService.getAllOrders(0, 200, nameQuery)
+            .then(list => { if (alive) setNameHits({ q: nameQuery, orders: list.map(mapBackendOrder) }); })
+            .catch(() => {});
+        return () => { alive = false; };
+    }, [nameQuery]);
+
     const groupedOrders = useMemo(() => {
         if (activeTab !== 'orders') return [];
         const lq = deferredQuery.toLowerCase();
-        return groupItemsByDate(orders.filter(o => !lq || String(o.id).toLowerCase().includes(lq) || (o.customer?.name || '').toLowerCase().includes(lq)));
-    }, [activeTab, deferredQuery, orders, groupItemsByDate]);
+        const matches = orders.filter(o => !lq || String(o.id).toLowerCase().includes(lq) || (o.customer?.name || '').toLowerCase().includes(lq));
+        const extra = lookedUp && lookedUp.order && lookedUp.id === wantedId && !inList ? [lookedUp.order] : [];
+        const shown = new Set(matches.map(o => o.id));
+        const older = nameHits.q === nameQuery && nameQuery ? nameHits.orders.filter(o => !shown.has(o.id)) : [];
+        return groupItemsByDate([...matches, ...extra, ...older]);
+    }, [activeTab, deferredQuery, orders, groupItemsByDate, lookedUp, wantedId, inList, nameHits, nameQuery]);
 
     const groupedInvoices = useMemo(() => {
         if (activeTab !== 'invoices') return [];
@@ -76,8 +111,9 @@ export default function OrdersPage() {
             navigate('/sales', { state: { mode: 'edit', editNonce: Date.now(), orderData: { ...full, id: full.orderId, customer: order.customer } } });
         } catch (err) {
             console.error('Failed to fetch order for editing', err);
-            // Fallback with shallow data
-            navigate('/sales', { state: { mode: 'edit', editNonce: Date.now(), orderData: order } });
+            // No fallback to the list row: it has no items and no version, so editing it opened
+            // an empty cart whose save rebuilt the order from nothing.
+            showToast('Could not load this order to edit it. Check the connection and try again.', 'error');
         }
     }, [navigate]);
     const handleViewOrder = useCallback(async (order) => {
@@ -98,6 +134,7 @@ export default function OrdersPage() {
             customer: invoice.customer,
             enableTax: invoice.vat_enabled ?? false,
             sourceInvoiceId: invoice.id,
+            discount: invoice.discount ?? 0,
         }
     }), [navigate]);
 

@@ -14,7 +14,7 @@ const buildSubCategoriesMap = cats => {
 // controls bar and the form itself — so it can be dropped into
 // ProductManagementPage's "Add Product" tab. Same split as CollectDebtTab/DuesTab.
 export function AddProductTab() {
-    const { products, categories, addProduct, addCategory, addSubCategory, addProductVariants } = useProducts();
+    const { products, categories, addProduct, addCategory, addSubCategory, deleteCategory, deleteSubCategory, addProductVariants } = useProducts();
     const {
         attributeClasses,
         createAttributeClass, renameAttributeClass, deleteAttributeClass,
@@ -190,10 +190,13 @@ export function AddProductTab() {
         });
     }
 
-    const matrixPreview = useMemo(() => {
+    // Each generated variant name with the attribute values it was built from. Reading the
+    // values back by splitting the name on " - " gave the wrong attributes whenever a value
+    // itself contained " - ".
+    const matrixCombos = useMemo(() => {
         if (mode === 'variant' && !selectedExistingProduct) return [];
         // No distinguishing attributes selected — every product still gets a single variant row.
-        if (generationKeys.length === 0) return ['Standard'];
+        if (generationKeys.length === 0) return [{ name: 'Standard', combo: [] }];
         // Candidate values a generating attribute can take: Dimensions (length×width pairs),
         // "custom" classes (per-product free values, e.g. Box/Pcs), or a shared preset list.
         const potentialValues = generationKeys.map(k => {
@@ -208,8 +211,10 @@ export function AddProductTab() {
             const restCart = cartesian(rest);
             return first.flatMap(f => restCart.map(r => [f, ...r]));
         };
-        return cartesian(potentialValues).map(combo => combo.join(' - '));
+        return cartesian(potentialValues).map(combo => ({ name: combo.join(' - '), combo }));
     }, [generationKeys, dimensionLabels, matrixSelections, attributeTypesMap, customAttributeValues, mode, selectedExistingProduct]);
+    const matrixPreview = useMemo(() => matrixCombos.map(c => c.name), [matrixCombos]);
+    const comboByName = useMemo(() => new Map(matrixCombos.map(c => [c.name, c.combo])), [matrixCombos]);
 
     // Fields shown per generated variant row
     const matrixRowFields = useMemo(() => {
@@ -240,11 +245,11 @@ export function AddProductTab() {
     const attrsForVariantName = useCallback(name => {
         const attrs = {};
         if (generationKeys.length > 0) {
-            const parts = name.split(' - ');
+            const parts = comboByName.get(name) || name.split(' - ');
             generationKeys.forEach((key, i) => { attrs[key] = parts[i]; });
         }
         return attrs;
-    }, [generationKeys]);
+    }, [generationKeys, comboByName]);
     const variantSignature = attrs => JSON.stringify(Object.keys(attrs).sort().map(k => [k, String(attrs[k])]));
 
     // Attribute combinations the selected product's variants already use — so "Add Variant"
@@ -465,7 +470,7 @@ export function AddProductTab() {
         if (!newItem) return;
         if (activeConfigTab === 'categories') {
             const newId = newItem.toLowerCase().replace(/\s+/g, '-');
-            addCategory({ id: newId, label: newItem, icon: '📦' });
+            addCategory({ id: newId, label: newItem, icon: '📦' }).catch(() => {}); // refusal toasted by the interceptor
         } else if (activeConfigTab === 'subcats') {
             if (!selectedParentCategory) return;
             try { await addSubCategory(selectedParentCategory, newItem); }
@@ -484,18 +489,25 @@ export function AddProductTab() {
     };
 
     const handleRemoveConfigItem = (itemToRemove, parentId = null) => {
+        // Categories and sub-categories are deleted on the server now (refused while products
+        // use them — the error toast says which). This "×" used to only hide them on screen.
         if (activeConfigTab === 'categories') {
-            setConfig(prev => ({ ...prev, categories: prev.categories.filter(c => c.id !== itemToRemove.id) }));
+            if (!confirm(`Delete the category "${itemToRemove.label || itemToRemove.id}"?`)) return;
+            deleteCategory(itemToRemove.id).catch(() => {});
         } else if (activeConfigTab === 'subcats') {
-            setConfig(prev => ({ ...prev, subCategories: { ...prev.subCategories, [parentId]: prev.subCategories[parentId].filter(s => s.id !== itemToRemove.id) } }));
+            if (!confirm(`Delete the sub-category "${itemToRemove.label || itemToRemove.id}"?`)) return;
+            deleteSubCategory(parentId, itemToRemove.id).catch(() => {});
         } else {
             const valueId = findAttributeValueId(activeConfigTab, itemToRemove);
-            if (valueId) deleteAttributeValue(valueId);
+            if (!valueId) return;
+            if (!confirm(`Delete "${itemToRemove}" from ${activeConfigTab}?`)) return;
+            // Refused (and explained by the error toast) while products still use it.
+            deleteAttributeValue(valueId).catch(() => {});
         }
     };
 
     // Rename an existing value within the currently active attribute class (e.g. "White" -> "Ivory")
-    const handleRenameAttributeItem = oldValue => {
+    const handleRenameAttributeItem = async oldValue => {
         const attrKey = activeConfigTab;
         const input = prompt('Rename value:', oldValue);
         if (input == null) return;
@@ -504,13 +516,16 @@ export function AddProductTab() {
         if ((attributesMap[attrKey] || []).includes(trimmed)) { alert(`"${trimmed}" already exists in ${attrKey}.`); return; }
 
         const valueId = findAttributeValueId(attrKey, oldValue);
-        if (valueId) renameAttributeValue(valueId, trimmed);
+        if (!valueId) return;
+        // The server refuses while products use the value (they store it by name); the error
+        // toast says which. Nothing local changes unless it went through.
+        try { await renameAttributeValue(valueId, trimmed); } catch { return; }
         // Keep any in-progress selections pointing at the renamed value instead of going stale
         setMatrixSelections(prev => prev[attrKey] ? { ...prev, [attrKey]: prev[attrKey].map(v => v === oldValue ? trimmed : v) } : prev);
     };
 
     // Rename the attribute class itself (e.g. "Color" -> "Colour")
-    const handleRenameAttributeClass = oldName => {
+    const handleRenameAttributeClass = async oldName => {
         const input = prompt('Rename attribute class:', oldName);
         if (input == null) return;
         const trimmed = input.trim();
@@ -518,7 +533,8 @@ export function AddProductTab() {
         if (attributesMap[trimmed]) { alert(`"${trimmed}" already exists.`); return; }
 
         const classId = findAttributeClassId(oldName);
-        if (classId) renameAttributeClass(classId, trimmed);
+        if (!classId) return;
+        try { await renameAttributeClass(classId, trimmed); } catch { return; }
         setNewProductData(prev => ({
             ...prev,
             applicableAttributes: prev.applicableAttributes.map(a => a === oldName ? trimmed : a),
@@ -542,11 +558,12 @@ export function AddProductTab() {
     };
 
     // Delete an entire attribute class and all its values
-    const handleDeleteAttributeClass = className => {
+    const handleDeleteAttributeClass = async className => {
         if (!confirm(`Delete the "${className}" attribute class and all its values?`)) return;
 
         const classId = findAttributeClassId(className);
-        if (classId) deleteAttributeClass(classId);
+        if (!classId) return;
+        try { await deleteAttributeClass(classId); } catch { return; }
         setNewProductData(prev => ({
             ...prev,
             applicableAttributes: prev.applicableAttributes.filter(a => a !== className),
@@ -589,9 +606,28 @@ export function AddProductTab() {
             alert("Minimum usable offcut size must be greater than 0.");
             return;
         }
+        if (mode === 'new' && !(newProductData.name || '').trim()) {
+            alert("Please enter a product name.");
+            return;
+        }
         const variants = buildGeneratedVariants();
         if (mode === 'variant' && variants.length === 0) {
             alert("All selected variant(s) already exist for this product.");
+            return;
+        }
+        // A typo like "-5" used to create the product with negative stock, and a blank price
+        // box silently became 0 (sold for nothing).
+        const badNumber = v => !Number.isFinite(v) || v < 0;
+        if (variants.some(v => badNumber(v.stock))) {
+            alert("Stock can't be negative.");
+            return;
+        }
+        if (variants.some(v => [v.price, v.details?.priceHalf, v.details?.priceUnit].some(badNumber))) {
+            alert("Prices can't be negative.");
+            return;
+        }
+        const unpriced = variants.filter(v => !(v.price > 0)).length;
+        if (unpriced > 0 && !window.confirm(`${unpriced} variant(s) have no full price (0). Create anyway? You can set prices later in Manage Variants.`)) {
             return;
         }
         setSubmitting(true);
@@ -615,7 +651,11 @@ export function AddProductTab() {
                     setMinUsable('2'); setAllowRotation(true); setPopularSizeRanges([]); setPopularRangeInput({ min_w: '', max_w: '', min_h: '', max_h: '' });
                     setMatrixSelections({}); setMatrixValues({}); setDimensionValues([]); setDimensionInput({ length: '', width: '', unit: '' });
                     setCustomAttributeValues({}); setCustomAttributeInputs({}); setPoolTogetherMap({});
-                } catch { /* error toast already shown by api interceptor */ }
+                } catch (err) {
+                    // Server refusals are toasted by the api interceptor; a local refusal
+                    // (category not found) is not, so say it here.
+                    if (!err?.response) alert(err?.message || 'Could not create the product.');
+                }
             } else {
                 try {
                     await addProductVariants(selectedExistingProduct.id, variants);

@@ -40,6 +40,7 @@ from core.inventory.poolKey import compute_pool_key
 from entities.offcuts import Offcut
 from entities.products import Product
 from entities.variants import Variant
+from config import nairobi_now
 
 FATE_AVAILABLE = "available"   # still good - the cutter just used another piece
 FATE_AVOID = "avoid"           # fine, but not for this order: the line becomes new-material-only
@@ -194,7 +195,7 @@ def _original_row(token: str, original_rows: list) -> int:
 def _void(line: dict, event: dict, fate: str) -> None:
     line["offcut_sources"] = [e for e in (line.get("offcut_sources") or []) if e is not event]
     line.setdefault("voided_sources", []).append({
-        **event, "voided": {"reason": "source_never_used", "fate": fate, "at": datetime.utcnow().isoformat()},
+        **event, "voided": {"reason": "source_never_used", "fate": fate, "at": nairobi_now().isoformat()},
     })
     # A manual pick named the source that wasn't used; the line's material is now whatever
     # replaced it, so a later re-cut must not go looking for that piece again.
@@ -313,7 +314,7 @@ def resolve_assigned(db: Session, product: Product, variant: Optional[Variant], 
                         left = sum(n["remaining"] for n in needs)
                         raise ValueError(f"{label} can't hold {'all the pieces' if left > 1 else 'the piece'} "
                                          "you chose for it - choose another source for some of them")
-                now = datetime.utcnow()
+                now = nairobi_now()
                 best = min(cands, key=lambda c: _candidate_sort_key(c, variant, now))
                 events = _apply_candidate(db, product, variant, best, item_id, pool_key=pool_key)
             for need_idx, ev in events.items():

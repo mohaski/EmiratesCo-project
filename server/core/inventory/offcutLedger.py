@@ -63,6 +63,7 @@ from entities.offcutLedger import (
 )
 from entities.offcuts import Offcut
 from loggiing import logger
+from config import nairobi_now
 
 
 def ledger_enabled() -> bool:
@@ -259,7 +260,7 @@ def consume_piece(
     piece.state = STATE_CONSUMED
     piece.consumed_by_item_id = item_id
     piece.consumed_by_order_id = order_id
-    piece.consumed_at = datetime.utcnow()
+    piece.consumed_at = nairobi_now()
     db.add(piece)
     body = dict(payload or {})
     if cut_geom:
@@ -305,7 +306,7 @@ def retire_piece(
         return
     prior = piece.state
     piece.state = STATE_RETIRED
-    piece.consumed_at = piece.consumed_at or datetime.utcnow()
+    piece.consumed_at = piece.consumed_at or nairobi_now()
     db.add(piece)
     _log(db, piece, EVENT_RETIRED, item_id=item_id, actor_id=actor_id, payload={"reason": reason},
          from_state=prior)
@@ -768,7 +769,7 @@ def join_into(db: Session, parts: Iterable[OffcutPiece], joined: OffcutPiece, *,
         prior = part.state
         part.state = STATE_RETIRED
         part.superseded_by_piece_id = joined.piece_id
-        part.consumed_at = part.consumed_at or datetime.utcnow()
+        part.consumed_at = part.consumed_at or nairobi_now()
         db.add(part)
         _log(db, part, EVENT_JOINED, item_id=item_id, from_state=prior,
              payload={"joined_into": joined.piece_id, "reason": reason})
