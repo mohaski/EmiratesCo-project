@@ -27,7 +27,7 @@ export default function CutPreviewModal({ productId, variantId, cutPieces, edit 
         let cancelled = false;
         setLoading(true);
         setError('');
-        const cuts = cutPieces.map(c => ({ l: c.l, w: c.w, qty: c.q, u: c.u }));
+        const cuts = cutPieces.map(c => ({ l: c.l, w: c.w, qty: c.q, u: c.u, ...(c.sourcePref ? { source_pref: c.sourcePref } : {}) }));
         api.productService.previewGlassCuts(productId, variantId, cuts, editKey ? JSON.parse(editKey) : null)
             .then(response => {
                 if (cancelled) return;

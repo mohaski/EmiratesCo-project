@@ -164,18 +164,29 @@ export const OrderService = {
         });
         return response.data;
     },
-    correctOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainders, failed_cuts, forced_offcut_id, notes }) => {
-        const response = await api.put(`/orders/${orderId}/correct-offcut`, {
-            item_id, line_idx, event_idx, new_remainders, failed_cuts, forced_offcut_id, notes,
-        });
+    /** payload: { item_id, line_idx, event_idx, new_remainders, failed_cuts, forced_offcut_id, notes,
+     * source_unused, source_fate, remeasure, force_new_source, use_original } — see
+     * CorrectOffcutRequest on the server. */
+    correctOffcutEvent: async (orderId, payload) => {
+        const response = await api.put(`/orders/${orderId}/correct-offcut`, payload);
+        return response.data;
+    },
+    /** Dry run of correctOffcutEvent with the same payload: { events, candidates, original, error }.
+     * A refusal comes back as `error` (200), not as a toast. */
+    previewOffcutCorrection: async (orderId, payload) => {
+        const response = await api.post(`/orders/${orderId}/correct-offcut/preview`, payload);
         return response.data;
     },
     /** 1D (bar/profile) analogue of correctOffcutEvent — corrects a single
-     * offcut_sources entry's remainder, and/or replaces the source it came from. */
-    correctProfileOffcutEvent: async (orderId, { item_id, line_idx, event_idx, new_remainder_length, replace_source, forced_offcut_id, notes }) => {
-        const response = await api.put(`/orders/${orderId}/correct-profile-offcut`, {
-            item_id, line_idx, event_idx, new_remainder_length, replace_source, forced_offcut_id, notes,
-        });
+     * offcut_sources entry's remainder, and/or replaces the source it came from, or says the
+     * source was never used. payload: see CorrectProfileOffcutRequest. */
+    correctProfileOffcutEvent: async (orderId, payload) => {
+        const response = await api.put(`/orders/${orderId}/correct-profile-offcut`, payload);
+        return response.data;
+    },
+    /** Dry run of correctProfileOffcutEvent: { event, candidates, original, error }. */
+    previewProfileOffcutCorrection: async (orderId, payload) => {
+        const response = await api.post(`/orders/${orderId}/correct-profile-offcut/preview`, payload);
         return response.data;
     },
     /** Batch-report a set of OrderItems as cut. Used by OrderSummaryPage's

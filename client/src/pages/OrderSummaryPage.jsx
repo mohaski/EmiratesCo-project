@@ -243,28 +243,16 @@ export default function OrderSummaryPage() {
         setOrder({ ...full, id: full.orderId, customer: order.customer });
     };
 
-    const handleOffcutCorrected = async (newRemainders, notes, failedCutIndices, forcedOffcutId) => {
-        // failedCutIndices are positions in the (possibly cross-line-merged)
-        // cuts array the modal was shown — map each back to which original
-        // cut-line it actually belongs to via correcting.cutOrigins (see
-        // groupJointGlassSources).
-        const failed_cuts = (failedCutIndices || []).map(i => {
-            const origin = correcting.cutOrigins[i];
-            return { line_idx: origin.lineIdx, cut_idx: origin.cutIdx };
-        });
-        await api.orderService.correctOffcutEvent(order.orderId, {
-            item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
-            new_remainders: newRemainders, failed_cuts, forced_offcut_id: forcedOffcutId, notes,
-        });
+    // The modals build the full request (see correctionPayload in SourceCorrectionFields);
+    // the same payload drives their live preview.
+    const handleOffcutCorrected = async (payload) => {
+        await api.orderService.correctOffcutEvent(order.orderId, payload);
         await refreshOrder();
         showToast('Offcut correction saved', 'success');
     };
 
-    const handleProfileOffcutCorrected = async (newRemainderLength, replaceSource, forcedOffcutId, notes) => {
-        await api.orderService.correctProfileOffcutEvent(order.orderId, {
-            item_id: correcting.itemId, line_idx: correcting.lineIdx, event_idx: correcting.eventIdx,
-            new_remainder_length: newRemainderLength, replace_source: replaceSource, forced_offcut_id: forcedOffcutId, notes,
-        });
+    const handleProfileOffcutCorrected = async (payload) => {
+        await api.orderService.correctProfileOffcutEvent(order.orderId, payload);
         await refreshOrder();
         showToast('Offcut correction saved', 'success');
     };
@@ -528,6 +516,8 @@ export default function OrderSummaryPage() {
             {correcting && correcting.kind === 'glass' && (
                 <CorrectOffcutModal
                     event={correcting.event}
+                    orderId={order.orderId}
+                    target={correcting}
                     productId={correcting.productId}
                     variantId={correcting.variantId}
                     onClose={() => setCorrecting(null)}
@@ -538,6 +528,8 @@ export default function OrderSummaryPage() {
             {correcting && correcting.kind === 'profile' && (
                 <CorrectProfileOffcutModal
                     event={correcting.event}
+                    orderId={order.orderId}
+                    target={correcting}
                     productId={correcting.productId}
                     variantId={correcting.variantId}
                     onClose={() => setCorrecting(null)}

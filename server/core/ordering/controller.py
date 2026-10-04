@@ -190,6 +190,7 @@ async def correct_offcut(
     result = orderService.correct_offcut_for_order_item(
         order_id, body.item_id, body.line_idx, body.event_idx,
         body.new_remainders, body.failed_cuts, body.forced_offcut_id, body.notes, db, current_user,
+        **_correction_opts(body),
     )
     background_tasks.add_task(manager.broadcast, "products_updated")
     return model.CorrectOffcutResponse(
@@ -211,12 +212,41 @@ async def correct_profile_offcut(
     result = orderService.correct_profile_offcut_for_order_item(
         order_id, body.item_id, body.line_idx, body.event_idx,
         body.new_remainder_length, body.replace_source, body.forced_offcut_id, body.notes, db, current_user,
+        **_correction_opts(body),
     )
     background_tasks.add_task(manager.broadcast, "products_updated")
     return model.CorrectProfileOffcutResponse(
         message="Offcut corrected", before=result["before"], after=result["after"],
         replacement_event=result["replacement_event"],
     )
+
+
+def _correction_opts(body) -> dict:
+    return body.model_dump(include={"source_unused", "source_fate", "remeasure", "force_new_source", "use_original",
+                                    "original_part", "assignments"})
+
+
+@router.post("/{order_id}/correct-offcut/preview")
+def preview_correct_offcut(
+    order_id: int,
+    body: model.CorrectOffcutRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Dry run of PUT /correct-offcut: the replacement it would make, and which sources can
+    supply the pieces. Nothing is saved."""
+    return orderService.preview_offcut_correction(order_id, body, db, current_user)
+
+
+@router.post("/{order_id}/correct-profile-offcut/preview")
+def preview_correct_profile_offcut(
+    order_id: int,
+    body: model.CorrectProfileOffcutRequest,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user),
+):
+    """Dry run of PUT /correct-profile-offcut. Nothing is saved."""
+    return orderService.preview_profile_offcut_correction(order_id, body, db, current_user)
 
 
 @router.put("/{order_id}/mark-cutting-done", response_model=model.MarkCuttingDoneResponse)

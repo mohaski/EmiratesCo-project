@@ -274,6 +274,7 @@ class GlassCutPreviewCut(BaseModel):
     w: float
     qty: int = 1
     u: str = "mm"  # 'ft' | 'inch' | 'mm' — matches GlassCalculator's per-cut unit dropdown
+    source_pref: Optional[str] = None  # "new" - this cut comes from a new sheet (see glassOffcutService.wants_new_source)
 
 
 class GlassCutPreviewRequest(BaseModel):

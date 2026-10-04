@@ -20,10 +20,13 @@ import api from '../../../services/api';
  *                           length joined onto what's left of the bar, the cut piece itself...).
  *                           A pick of one of those carries `returned_ref`, which the edit
  *                           resolves to the piece it actually produces.
- *   onConfirm(selection)  – called with the chosen [{offcut_id, length_used, returned_ref?}]
+ *   initialNewBar         – the cut was set to come from a new bar
+ *   onConfirm(selection, { newBar }) – called with the chosen [{offcut_id, length_used, returned_ref?}],
+ *                           or with newBar true: cut from a new bar, offcuts ignored (line source_pref)
  *   onClose               – close callback
  */
-export default function OffcutSelectorModal({ productId, variantId, requiredLength, initialSelection, cart = [], cartIndex = null, projection = null, onConfirm, onClose }) {
+export default function OffcutSelectorModal({ productId, variantId, requiredLength, initialSelection, initialNewBar = false, cart = [], cartIndex = null, projection = null, onConfirm, onClose }) {
+    const [newBar, setNewBar] = useState(!!initialNewBar);
     const [offcuts, setOffcuts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -117,10 +120,15 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
 
     const overSelected = selectedTotal > requiredLength + 0.02;
     const fullyCovered = shortfall <= 0.01;
-    const canSubmit = !overSelected && Object.keys(selected).length > 0;
+    const canSubmit = newBar || (!overSelected && Object.keys(selected).length > 0);
 
     const handleConfirm = () => {
         if (!canSubmit) return;
+        if (newBar) {
+            onConfirm([], { newBar: true });
+            onClose();
+            return;
+        }
         const selection = Object.entries(selected)
             .map(([id, len]) => {
                 const row = offcuts.find(o => String(o.offcutId) === String(id));
@@ -132,7 +140,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                 return { offcut_id: parseInt(id), length_used: parseFloat(len) };
             })
             .filter(s => s.length_used > 0);
-        onConfirm(selection);
+        onConfirm(selection, { newBar: false });
         onClose();
     };
 
@@ -177,6 +185,23 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                 </div>
 
                 <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar">
+
+                    {/* New bar: offcuts ignored even when one would fit */}
+                    <label data-testid="new-bar-option" style={{
+                        display: 'flex', alignItems: 'center', gap: '0.625rem', cursor: 'pointer', marginBottom: '1.25rem',
+                        padding: '0.75rem 1rem', borderRadius: '0.875rem',
+                        background: newBar ? 'rgba(245,158,11,0.1)' : 'rgba(255,255,255,0.03)',
+                        border: `1px solid ${newBar ? 'rgba(245,158,11,0.35)' : 'rgba(255,255,255,0.07)'}`,
+                    }}>
+                        <input type="checkbox" checked={newBar} onChange={e => setNewBar(e.target.checked)}
+                            style={{ width: '16px', height: '16px', flexShrink: 0, accentColor: '#f59e0b' }} />
+                        <span>
+                            <span style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0' }}>Cut from a new bar</span>
+                            <span style={{ display: 'block', fontSize: '0.7rem', color: '#64748b' }}>Don't use any offcut for this cut, even one that fits</span>
+                        </span>
+                    </label>
+
+                    <div style={{ opacity: newBar ? 0.35 : 1, pointerEvents: newBar ? 'none' : 'auto' }}>
 
                     {/* Available offcuts */}
                     <div style={{ marginBottom: '1.25rem' }}>
@@ -311,6 +336,8 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                         )}
                     </div>
 
+                    </div>
+
                     {error && (
                         <div style={{
                             padding: '0.625rem 0.875rem', borderRadius: '0.75rem',
@@ -350,7 +377,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                             transition: 'all 0.2s',
                         }}
                     >
-                        Use These Offcuts
+                        {newBar ? 'Use a New Bar' : 'Use These Offcuts'}
                     </button>
                 </div>
             </div>

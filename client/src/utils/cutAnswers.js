@@ -34,7 +34,7 @@ export function answersPayload(lines, answers) {
 
 // offcut_selection too: reopening an item and closing it must not read as a change. A pick-only
 // change is still a change to the server, which then asks at checkout instead.
-const IGNORED_LINE_KEYS = new Set(['offcut_sources', 'stock_sources', '_resolved_as_2d', 'rate', 'total', 'label', 'offcut_selection']);
+const IGNORED_LINE_KEYS = new Set(['offcut_sources', 'stock_sources', '_resolved_as_2d', 'voided_sources', 'rate', 'total', 'label', 'offcut_selection']);
 
 function canonical(value) {
     if (Array.isArray(value)) return value.map(canonical);

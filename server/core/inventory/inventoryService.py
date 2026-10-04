@@ -7,7 +7,7 @@ from entities.offcuts import Offcut
 from entities.openContainers import OpenContainer
 from entities.orderItems import OrderItem
 from entities.orders import Order
-from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines, half_sheet_piece_dims_mm
+from core.inventory.glassOffcutService import resolve_glass_cut_lines, restore_glass_cut_lines, half_sheet_piece_dims_mm, wants_new_source
 from core.inventory.poolKey import load_attribute_types, pool_key_from_attributes, compute_pool_key, pool_sibling_variants, safe_delete_offcut
 from core.inventory import offcutLedger as ledger
 from core.audit.opContext import current as current_op, note_cut
@@ -207,7 +207,8 @@ def _process_line_items(
                 manual_selection = line.get("offcut_selection")
                 if manual_selection:
                     line["offcut_sources"] = apply_manual_cut_selection(
-                        db, product, variant, manual_selection, cut_len * qty, full_len, item_id, pool_key
+                        db, product, variant, manual_selection, cut_len * qty, full_len, item_id, pool_key,
+                        allow_offcuts=not wants_new_source(line),
                     )
                 else:
                     _process_cut_with_offcuts(db, product, variant, cut_len, qty, full_len, line, item_id, pool_key)
@@ -837,6 +838,7 @@ def _fulfill_one_cut_via_best_fit(
     full_length: float,
     item_id: Optional[int] = None,
     pool_key: Optional[str] = None,
+    allow_offcuts: bool = True,
 ) -> dict:
     """
     Fulfil a single cut of required_length:
@@ -857,9 +859,16 @@ def _fulfill_one_cut_via_best_fit(
     non-size attributes (see core/inventory/poolKey.py), not just this exact
     variant — callers in a hot loop should compute it once and pass it down;
     left None (e.g. a direct/test call) it's computed here from `variant`.
+
+    `allow_offcuts=False` (the line asks for a new bar - source_pref) skips the offcut pool,
+    except the line's own already-cut piece handed back by the running edit: re-cutting
+    from a fresh bar would cut it a second time.
     """
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
+
+    if not allow_offcuts:
+        return _fulfill_from_own_or_new_bar(db, product, variant, required_length, full_length, item_id, pool_key)
 
     stmt = (
         select(Offcut)
@@ -875,13 +884,38 @@ def _fulfill_one_cut_via_best_fit(
     )
 
     best_offcut = db.exec(stmt).first()
+    return _cut_from(db, product, variant, required_length, full_length, item_id, pool_key, best_offcut)
 
+
+def _fulfill_from_own_or_new_bar(db, product, variant, required_length: float, full_length: float,
+                                 item_id: Optional[int], pool_key: str) -> dict:
+    """The smallest of the running edit's own returned pieces that holds the cut, else a
+    fresh bar (see _fulfill_one_cut_via_best_fit's allow_offcuts)."""
+    op = current_op()
+    best_piece, best_row = None, None
+    for pid in (op.returned_own_piece_ids() if op is not None else ()):
+        piece = ledger.get_piece(db, pid)
+        if (piece is None or piece.state != ledger.STATE_AVAILABLE or not piece.offcut_row_id
+                or piece.pool_key != pool_key or (piece.length or 0) < required_length - 0.001):
+            continue
+        if best_piece is None or piece.length < best_piece.length:
+            row = db.exec(select(Offcut).where(Offcut.offcutId == piece.offcut_row_id,
+                                               Offcut.status == "available", Offcut.quantity > 0)
+                          .with_for_update()).first()
+            if row is not None:
+                best_piece, best_row = piece, row
+    return _cut_from(db, product, variant, required_length, full_length, item_id, pool_key,
+                     best_row, preferred_piece=best_piece)
+
+
+def _cut_from(db, product, variant, required_length: float, full_length: float, item_id: Optional[int],
+              pool_key: str, best_offcut: Optional[Offcut], preferred_piece=None) -> dict:
+    """Cut `required_length` from `best_offcut`, or from a fresh bar when it is None."""
     # On an equal fit, prefer a piece this operation just returned (an edit re-cutting a
     # line): it is the material the cashier is looking at, and when it is the line's own
     # already-cut piece at exactly the new size, no cutting is needed at all.
-    preferred_piece = None
     op = current_op()
-    if best_offcut is not None and op is not None and op.returned:
+    if best_offcut is not None and preferred_piece is None and op is not None and op.returned:
         returned_ids = op.returned_piece_ids()
         own_ids = op.returned_own_piece_ids()
         tie_rows = [r for r in db.exec(
@@ -1034,8 +1068,10 @@ def _process_cut_with_offcuts(
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
 
+    allow_offcuts = not wants_new_source(line_item_dict)
     sources = [
-        _fulfill_one_cut_via_best_fit(db, product, variant, required_length, full_length, item_id, pool_key)
+        _fulfill_one_cut_via_best_fit(db, product, variant, required_length, full_length, item_id, pool_key,
+                                      allow_offcuts=allow_offcuts)
         for _ in range(qty_cuts)
     ]
 
@@ -1641,6 +1677,7 @@ def apply_manual_cut_selection(
     full_length: float,
     item_id: Optional[int] = None,
     pool_key: Optional[str] = None,
+    allow_offcuts: bool = True,
 ) -> list:
     """
     Consume cashier-specified offcuts for a cut at order-creation time.
@@ -1668,7 +1705,8 @@ def apply_manual_cut_selection(
 
     shortfall = round(required_total_length - selected_total, 4)
     if shortfall > 0.01:
-        result.append(_fulfill_one_cut_via_best_fit(db, product, variant, shortfall, full_length, item_id, pool_key))
+        result.append(_fulfill_one_cut_via_best_fit(db, product, variant, shortfall, full_length, item_id, pool_key,
+                                                    allow_offcuts=allow_offcuts))
 
     return result
 
@@ -1773,6 +1811,8 @@ def correct_profile_offcut_event(
     new_remainder_length: float,
     replace_source: bool,
     forced_offcut_id: Optional[int] = None,
+    force_new_bar: bool = False,
+    item_id: Optional[int] = None,
 ) -> dict:
     """
     Manager-facing correction for a single 1D (bar/profile) offcut_sources entry
@@ -1829,30 +1869,45 @@ def correct_profile_offcut_event(
     }
 
     # ── Remainder correction — always applied ───────────────────────────────
+    # The exact recorded piece is retired, and the corrected one hangs off the same source
+    # with its id recorded, so a later edit/cancel (or "never used") can follow the chain.
     old_remainder = float(event.get("remainder_created", 0) or 0)
     if old_remainder > 0.01:
-        _remove_offcut(db, product, variant, old_remainder)
+        _remove_offcut(db, product, variant, old_remainder, remainder_piece_id=event.get("remainder_piece_id"))
     new_remainder = round(float(new_remainder_length), 4)
     new_remainder_status = "scrap" if new_remainder > 0.01 and _is_scrap_1d(new_remainder, variant) else "available"
+    rem_ledger: dict = {}
     if new_remainder > 0.01:
-        _upsert_offcut(db, product, variant, new_remainder, status=new_remainder_status)
+        _upsert_offcut(db, product, variant, new_remainder, status=new_remainder_status,
+                       parent_piece=ledger.get_piece(db, event.get("source_piece_id")),
+                       origin=ledger.ORIGIN_CORRECTION, ledger_notes="remainder corrected by a manager",
+                       ledger_out=rem_ledger)
     event["remainder_created"] = new_remainder if new_remainder > 0.01 else 0
     event["remainder_status"] = new_remainder_status if new_remainder > 0.01 else None
+    if "remainder_piece_id" in event or rem_ledger.get("piece_id"):
+        event["remainder_piece_id"] = rem_ledger.get("piece_id")
 
     if not replace_source:
         return {"before": before, "after": dict(event), "replacement_event": None}
 
     # ── Source replacement — independent of the remainder edit above ────────
-    length_used = float(event.get("length_used", 0))
-    full_length = _get_full_length(product, variant)
-
-    if forced_offcut_id is not None:
-        replacement_event = _consume_offcut_sources(
-            db, product, variant, [{"offcut_id": forced_offcut_id, "length_used": length_used}],
-        )[0]
-    else:
-        replacement_event = _fulfill_one_cut_via_best_fit(db, product, variant, length_used, full_length)
+    replacement_event = resolve_profile_replacement(db, product, variant, float(event.get("length_used", 0)),
+                                                    forced_offcut_id, force_new_bar, item_id=item_id)
 
     event["superseded"] = True
 
     return {"before": before, "after": dict(event), "replacement_event": replacement_event}
+
+
+def resolve_profile_replacement(db: Session, product: Product, variant: Optional[Variant], length_used: float,
+                                forced_offcut_id: Optional[int] = None, force_new_bar: bool = False,
+                                item_id: Optional[int] = None) -> dict:
+    """Supply a corrected cut of `length_used`: the manager's chosen offcut, a fresh bar, or
+    the normal best fit. `item_id`: the order item it is for - recorded in the ledger as
+    holding the material, and tagged on the leftover."""
+    if forced_offcut_id is not None:
+        return _consume_offcut_sources(
+            db, product, variant, [{"offcut_id": forced_offcut_id, "length_used": length_used}], item_id,
+        )[0]
+    return _fulfill_one_cut_via_best_fit(db, product, variant, length_used, _get_full_length(product, variant),
+                                         item_id, allow_offcuts=not force_new_bar)

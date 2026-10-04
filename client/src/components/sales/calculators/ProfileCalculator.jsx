@@ -64,6 +64,10 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
     const [fullLengtherror, setfullLengtherror] = useState(null);
     const [cuterror, setcuterror] = useState(null);
     const [offcutSelection, setOffcutSelection] = useState(initialDetails?.offcutSelection || null);
+    // 'new': the cut comes from a new bar even when an offcut would fit (line source_pref).
+    // halfSourcePref has no control here - a manager correction can set it; it is only carried.
+    const [sourcePref, setSourcePref] = useState(initialDetails?.sourcePref || null);
+    const halfSourcePref = initialDetails?.halfSourcePref || null;
     const [showOffcutModal, setShowOffcutModal] = useState(false);
     const [feasibility, setFeasibility] = useState({ checking: false, ok: true, message: null });
 
@@ -116,14 +120,15 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
     const lineItems = useMemo(() => {
         const items = [];
         if (fullQty > 0) items.push({ type: 'profile-full', label: 'Full Length', qty: fullQty, rate: pricing.priceFull, total: fullQty * pricing.priceFull, meta: { length: extraSelections['Length'] } });
-        if (halfQty > 0) items.push({ type: 'profile-half', label: 'Half Length', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { length: extraSelections['Length'] } });
+        if (halfQty > 0) items.push({ type: 'profile-half', label: 'Half Length', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { length: extraSelections['Length'] }, ...(halfSourcePref ? { source_pref: halfSourcePref } : {}) });
         if (feet > 0) {
             const cutLine = { type: 'profile-cut', label: `Custom Cut (${feet}ft)`, qty: 1, rate: pricing.priceFoot, total: feet * pricing.priceFoot, meta: { length: feet, unit: 'ft' } };
-            if (offcutSelection && offcutSelection.length > 0) cutLine.offcut_selection = offcutSelection;
+            if (sourcePref === 'new') cutLine.source_pref = 'new';
+            else if (offcutSelection && offcutSelection.length > 0) cutLine.offcut_selection = offcutSelection;
             items.push(cutLine);
         }
         return items;
-    }, [fullQty, halfQty, feet, pricing, extraSelections, offcutSelection]);
+    }, [fullQty, halfQty, feet, pricing, extraSelections, offcutSelection, sourcePref, halfSourcePref]);
 
     // Editing a saved order: was the original cut made? Asked before material is chosen.
     const editCuts = useEditCutAnswers({ initialDetails, variantId: pricing.variantId, lineItems });
@@ -156,12 +161,13 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         onUpdate(total, {
             lineItems, attributes, full: fullQty, half: halfQty, feet, color: color || 'White', extras: extraSelections,
             variantId: pricing.variantId, offcutSelection, isValid, checkingStock: feasibility.checking,
+            ...(sourcePref ? { sourcePref } : {}), ...(halfSourcePref ? { halfSourcePref } : {}),
             stockError: feasibility.message || (!editCuts.complete ? 'Answer whether the original cut was made.' : null),
             // Edit mode: which saved item this is, and the cut answers given for it here.
             _sourceItemId: initialDetails?._sourceItemId,
             cutAnswers: editCuts.cartAnswers,
         });
-    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, onUpdate, lineItems, feasibility, editCuts.complete, editCuts.cartAnswers, initialDetails]);
+    }, [fullQty, halfQty, feet, pricing, color, extraSelections, offcutSelection, sourcePref, halfSourcePref, onUpdate, lineItems, feasibility, editCuts.complete, editCuts.cartAnswers, initialDetails]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current stock/offcuts? Reuses the real checkout deduction logic on the
@@ -285,7 +291,15 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
 
                     {allowOffcutSelection && product.trackOffcuts && feet > 0 && (
                         <div style={{ marginTop: '0.625rem', paddingTop: '0.625rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                            {offcutSelection && offcutSelection.length > 0 ? (
+                            {sourcePref === 'new' ? (
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                    <span style={{ fontSize: '0.68rem', color: '#fbbf24', fontWeight: 700 }}>From a new bar (offcuts not used)</span>
+                                    <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+                                        <button onClick={() => setShowOffcutModal(true)} style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '0.68rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Edit</button>
+                                        <button onClick={() => setSourcePref(null)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '0.68rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Clear</button>
+                                    </div>
+                                </div>
+                            ) : offcutSelection && offcutSelection.length > 0 ? (
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
                                     <span style={{ fontSize: '0.68rem', color: '#4ade80', fontFamily: 'var(--font-mono)' }}>
                                         {offcutSelection.map(s => `${parseFloat(s.length_used).toFixed(1)}ft${s.returned_ref ? ' (returned)' : ''}`).join(' + ')}
@@ -302,7 +316,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                                     disabled={editCuts.active && !editCuts.complete}
                                     title={editCuts.active && !editCuts.complete ? 'Answer the cut questions above first' : undefined}
                                     style={{ background: 'none', border: 'none', color: editCuts.active && !editCuts.complete ? '#475569' : '#60a5fa', fontSize: '0.7rem', fontWeight: 600, cursor: editCuts.active && !editCuts.complete ? 'not-allowed' : 'pointer', padding: 0 }}>
-                                    🔍 Choose offcuts for this cut
+                                    🔍 Choose offcuts or a new bar for this cut
                                 </button>
                             )}
                         </div>
@@ -327,13 +341,17 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                     variantId={pricing.variantId ?? null}
                     requiredLength={feet}
                     initialSelection={offcutSelection}
+                    initialNewBar={sourcePref === 'new'}
                     cart={cart}
                     cartIndex={cartIndex}
                     projection={editCuts.active && editCuts.complete ? {
                         orderId: editingOrderId, itemId: editCuts.sourceItemId,
                         answers: apiAnswersKey ? JSON.parse(apiAnswersKey) : null,
                     } : null}
-                    onConfirm={setOffcutSelection}
+                    onConfirm={(selection, { newBar } = {}) => {
+                        setSourcePref(newBar ? 'new' : null);
+                        setOffcutSelection(newBar ? null : selection);
+                    }}
                     onClose={() => setShowOffcutModal(false)}
                 />
             )}

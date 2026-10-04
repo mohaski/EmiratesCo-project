@@ -1072,7 +1072,8 @@ def preview_glass_cuts(
     from entities.opJournal import OP_EDIT
 
     lines = [
-        {"type": "glass-cut", "qty": c.qty, "meta": {"l": c.l, "w": c.w, "u": c.u}}
+        {"type": "glass-cut", "qty": c.qty, "meta": {"l": c.l, "w": c.w, "u": c.u},
+         **({"source_pref": c.source_pref} if c.source_pref else {})}
         for c in cuts
     ]
     try:

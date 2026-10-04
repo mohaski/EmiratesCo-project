@@ -127,15 +127,17 @@ def _describe_blocker(db: Session, piece: OffcutPiece) -> dict:
 
 def vanished_leftover(db: Session, piece: OffcutPiece) -> bool:
     """A leftover taken out of the books by hand: retired with no replacement, and never
-    consumed by an order, merged into another piece or corrected into a new one."""
+    consumed by an order, merged into another piece or replaced by a correction. A CEO
+    re-measure in place is none of those: the piece stayed where it was until it was deleted."""
     from sqlmodel import select as _select
     from entities.offcutLedger import OffcutPieceEvent
 
     if piece.state != "retired" or piece.superseded_by_piece_id is not None:
         return False
-    events = {e.event for e in db.exec(_select(OffcutPieceEvent).where(
-        OffcutPieceEvent.piece_id == piece.piece_id)).all()}
-    return not (events & {ledger.EVENT_CONSUMED, ledger.EVENT_JOINED, ledger.EVENT_CORRECTED})
+    events = db.exec(_select(OffcutPieceEvent).where(OffcutPieceEvent.piece_id == piece.piece_id)).all()
+    return not any(e.event in (ledger.EVENT_CONSUMED, ledger.EVENT_JOINED)
+                   or (e.event == ledger.EVENT_CORRECTED and ledger.event_retires(e.event, e.payload))
+                   for e in events)
 
 
 def _remainder_pieces_for(db: Session, src: dict, is_2d: bool) -> tuple:

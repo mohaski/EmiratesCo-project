@@ -63,6 +63,10 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const [halfQty, setHalfQty] = useState(initialDetails?.halfSheet || 0);
     const [halfSide, setHalfSide] = useState(initialDetails?.halfSide || 'width');
     const [cutPieces, setCutPieces] = useState(initialDetails?.cutPieces || []);
+    // "New sheet only" (line source_pref) - set by a manager correction on a cut piece
+    // (cutPieces[k].sourcePref) or the half sheet. No control here yet; carried so reopening
+    // the item doesn't read as a change.
+    const halfSourcePref = initialDetails?.halfSourcePref || null;
     const [extraSelections, setExtraSelections] = useState(() => {
         if (initialDetails?.extras) return initialDetails.extras;
         const defaults = {};
@@ -185,10 +189,10 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
     const lineItems = useMemo(() => {
         const items = [];
         if (fullQty > 0) items.push({ type: 'sheet-full', label: 'Full Sheet', qty: fullQty, rate: pricing.priceFull, total: fullQty * pricing.priceFull, meta: {} });
-        if (halfQty > 0) items.push({ type: 'sheet-half', label: 'Half Sheet', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { halfSide } });
-        cutPieces.forEach(cut => items.push({ type: 'glass-cut', label: cut.label, qty: cut.q, rate: cut.area * pricing.priceSqFt, total: cut.area * cut.q * pricing.priceSqFt, meta: { l: cut.l, w: cut.w, u: cut.u, area: cut.area, rateSqFt: pricing.priceSqFt } }));
+        if (halfQty > 0) items.push({ type: 'sheet-half', label: 'Half Sheet', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { halfSide }, ...(halfSourcePref ? { source_pref: halfSourcePref } : {}) });
+        cutPieces.forEach(cut => items.push({ type: 'glass-cut', label: cut.label, qty: cut.q, rate: cut.area * pricing.priceSqFt, total: cut.area * cut.q * pricing.priceSqFt, meta: { l: cut.l, w: cut.w, u: cut.u, area: cut.area, rateSqFt: pricing.priceSqFt }, ...(cut.sourcePref ? { source_pref: cut.sourcePref } : {}) }));
         return items;
-    }, [fullQty, halfQty, halfSide, cutPieces, pricing]);
+    }, [fullQty, halfQty, halfSide, cutPieces, pricing, halfSourcePref]);
 
     // Editing a saved order: was the original glass cut? Asked before the new cuts are
     // resolved - glass that was never cut is rejoined with the untouched part of its sheet.
@@ -211,10 +215,10 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         const attributes = [];
         if (extraSelections['Thickness']) attributes.push({ label: 'Thickness', value: extraSelections['Thickness'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Thickness') attributes.push({ label: key, value: val }); });
-        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, missingAttributes: missingRequired, checkingStock: feasibility.checking,
+        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, ...(halfSourcePref ? { halfSourcePref } : {}), cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, missingAttributes: missingRequired, checkingStock: feasibility.checking,
             stockError: feasibility.message || (!editCuts.complete ? 'Answer whether the original glass was cut.' : null),
             _sourceItemId: initialDetails?._sourceItemId, cutAnswers: editCuts.cartAnswers });
-    }, [fullQty, halfQty, halfSide, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired, editCuts.complete, editCuts.cartAnswers, initialDetails]);
+    }, [fullQty, halfQty, halfSide, halfSourcePref, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired, editCuts.complete, editCuts.cartAnswers, initialDetails]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current sheet stock/offcuts? Reuses the exact real checkout deduction

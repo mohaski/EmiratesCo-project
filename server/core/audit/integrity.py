@@ -25,6 +25,8 @@ from typing import Dict, List
 
 from sqlmodel import Session, text
 
+from entities.offcutLedger import event_retires
+
 
 def _fold(events: List[dict]) -> tuple:
     state, item = "available", None
@@ -34,7 +36,7 @@ def _fold(events: List[dict]) -> tuple:
             state, item = "consumed", e["item_id"]
         elif ev == "released":
             state, item = "available", None
-        elif ev in ("retired", "corrected", "joined"):
+        elif event_retires(ev, e["payload"]):
             state = "retired"
         elif ev == "undone":
             to = (e["payload"] or {}).get("to") or {}

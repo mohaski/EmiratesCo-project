@@ -710,7 +710,7 @@ def getAll_orders_VatIncluded(db: Session = Depends(get_session)) -> list[model.
 # These also drift under the order's feet: a manager offcut correction, or a container
 # being finished and reopened, rewrites them on the stored item while a cashier has the
 # order open. Comparing them would then reverse and re-deduct material nobody touched.
-_ENGINE_WRITTEN_LINE_KEYS = ("offcut_sources", "stock_sources", "_resolved_as_2d")
+_ENGINE_WRITTEN_LINE_KEYS = ("offcut_sources", "stock_sources", "_resolved_as_2d", "voided_sources")
 
 # Per-line pricing and display, written by the frontend calculators. Excluded for the same
 # reason as the item's own unitPrice: money does not describe a different consumption, and
@@ -1281,6 +1281,7 @@ def apply_order_edit(
                         else:
                             line.pop("offcut_selection")
                     line.pop("offcut_sources", None)
+                    line.pop("voided_sources", None)
 
             new_item = OrderItem(
                 order_id=order.orderId,
@@ -1417,6 +1418,108 @@ def apply_order_edit(
         raise HTTPException(status_code=422, detail=str(e))
 
 
+def _correction_target(order_id: int, item_id: int, line_idx: int, event_idx: int, db: Session, current_user):
+    """The order item, a private copy of its details, and the product a correction is about.
+    The copy keeps the loaded JSON untouched until the result is assigned back as a whole."""
+    import copy
+
+    require_role(["manager", "ceo", "admin"], current_user)
+
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status == "cancelled":
+        raise HTTPException(
+            status_code=400,
+            detail="This order has been cancelled — its stock/offcuts were already restored, so its cutting records can no longer be corrected.",
+        )
+
+    item = db.get(OrderItem, item_id)
+    if not item or item.order_id != order_id:
+        raise HTTPException(status_code=404, detail="Order item not found on this order")
+
+    details = copy.deepcopy(item.details or {})
+    line_items = details.get("lineItems") or []
+    if not (0 <= line_idx < len(line_items)):
+        raise HTTPException(status_code=422, detail="Invalid line_idx for this order item")
+
+    offcut_sources = line_items[line_idx].get("offcut_sources") or []
+    if not (0 <= event_idx < len(offcut_sources)):
+        raise HTTPException(status_code=422, detail="Invalid event_idx for this cutting line")
+
+    product = db.get(Product, item.product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    variant = db.get(Variant, item.variant_id) if item.variant_id else None
+    return item, details, line_items, product, variant
+
+
+def _mirror_source_pref(details: dict, line_items: list, line_idxs) -> None:
+    """A line a correction marked new-material-only (source_pref): mirror it onto the
+    item-level copies the calculators rebuild their lines from (a glass cut piece, the half
+    sheet/bar, the profile cut), so reopening the item doesn't read as a change."""
+    glass_k, k = {}, 0
+    for li, line in enumerate(line_items):
+        if isinstance(line, dict) and line.get("type") == "glass-cut":
+            glass_k[li], k = k, k + 1
+    for li in line_idxs:
+        l_type = line_items[li].get("type", "")
+        if l_type == "glass-cut":
+            pieces = list(details.get("cutPieces") or [])
+            k = glass_k[li]
+            if k < len(pieces) and isinstance(pieces[k], dict):
+                pieces[k] = {**pieces[k], "sourcePref": "new"}
+                details["cutPieces"] = pieces
+        elif "half" in l_type:
+            details["halfSourcePref"] = "new"
+        elif "cut" in l_type:
+            details["sourcePref"] = "new"
+
+
+def _apply_glass_correction(db, item, details, line_items, line_idx, event_idx, product, variant,
+                            new_remainders, failed_cut_refs, forced_offcut_id, opts: dict) -> dict:
+    from core.inventory import cutCorrection as cc
+    from core.inventory.glassOffcutService import correct_glass_offcut_event
+
+    if opts.get("source_unused"):
+        result = cc.glass_source_unused(
+            db, product, variant, line_items, line_idx, event_idx,
+            fate=opts.get("source_fate") or cc.FATE_AVAILABLE, remeasure=opts.get("remeasure"),
+            forced_offcut_id=forced_offcut_id, force_new_sheet=bool(opts.get("force_new_source")),
+            use_original=bool(opts.get("use_original")), original_part=opts.get("original_part") or 0,
+            assignments=opts.get("assignments"), item_id=item.item_id,
+        )
+        if result["fate"] == cc.FATE_AVOID:
+            _mirror_source_pref(details, line_items, result["voided_lines"])
+    else:
+        event = line_items[line_idx]["offcut_sources"][event_idx]
+        group_id = event.get("group_id")
+        sibling_events = {}
+        if group_id is not None:
+            for other_idx, other_line in enumerate(line_items):
+                if other_idx == line_idx:
+                    continue
+                for other_event in other_line.get("offcut_sources") or []:
+                    if other_event.get("group_id") == group_id:
+                        sibling_events[other_idx] = other_event
+                        break
+        result = correct_glass_offcut_event(
+            db, product, variant, event, [r.model_dump() if hasattr(r, "model_dump") else dict(r) for r in new_remainders],
+            failed_cut_refs, forced_offcut_id,
+            sibling_events=sibling_events, owner_line_idx=line_idx,
+            force_new_sheet=bool(opts.get("force_new_source")), assignments=opts.get("assignments"),
+            item_id=item.item_id,
+        )
+        for origin_idx, rep_events in result["replacement_events_by_line"].items():
+            target_idx = origin_idx if isinstance(origin_idx, int) and 0 <= origin_idx < len(line_items) else line_idx
+            line_items[target_idx].setdefault("offcut_sources", []).extend(rep_events)
+
+    item.details = {**details, "lineItems": line_items}
+    flag_modified(item, "details")
+    db.add(item)
+    return result
+
+
 @stock_operation(OP_CUT_CORRECTION)
 def correct_offcut_for_order_item(
     order_id: int,
@@ -1429,6 +1532,7 @@ def correct_offcut_for_order_item(
     notes: str | None,
     db: Session,
     current_user,
+    **opts,
 ) -> dict:
     """
     Manager correction for a single cutting event on a past order: real-world
@@ -1449,72 +1553,19 @@ def correct_offcut_for_order_item(
     own line_idx can address any line in the group, not just the owner's —
     and any resulting replacement event lands back on whichever line's missed
     piece it actually replaces, not always the owner's.
+
+    `opts` (CorrectOffcutRequest): source_unused - the source was never touched at all (see
+    core/inventory/cutCorrection.py; new_remainders/failed_cuts are then ignored, every piece
+    on the sheet is re-supplied); source_fate/remeasure - what happens to that source;
+    force_new_source - the replacement comes from a new sheet; use_original - the
+    replacement is the never-used source itself, chosen on purpose.
     """
-    from sqlalchemy.orm.attributes import flag_modified
-    from core.inventory.glassOffcutService import correct_glass_offcut_event
-
-    require_role(["manager", "ceo", "admin"], current_user)
-
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    if order.status == "cancelled":
-        raise HTTPException(
-            status_code=400,
-            detail="This order has been cancelled — its stock/offcuts were already restored, so its cutting records can no longer be corrected.",
-        )
-
-    item = db.get(OrderItem, item_id)
-    if not item or item.order_id != order_id:
-        raise HTTPException(status_code=404, detail="Order item not found on this order")
-
-    details = item.details or {}
-    line_items = details.get("lineItems") or []
-    if not (0 <= line_idx < len(line_items)):
-        raise HTTPException(status_code=422, detail="Invalid line_idx for this order item")
-
-    offcut_sources = line_items[line_idx].get("offcut_sources") or []
-    if not (0 <= event_idx < len(offcut_sources)):
-        raise HTTPException(status_code=422, detail="Invalid event_idx for this cutting line")
-
-    event = offcut_sources[event_idx]
-
-    group_id = event.get("group_id")
-    sibling_events = {}
-    if group_id is not None:
-        for other_idx, other_line in enumerate(line_items):
-            if other_idx == line_idx:
-                continue
-            for other_event in other_line.get("offcut_sources") or []:
-                if other_event.get("group_id") == group_id:
-                    sibling_events[other_idx] = other_event
-                    break
-
-    product = db.get(Product, item.product_id)
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    variant = db.get(Variant, item.variant_id) if item.variant_id else None
-
+    item, details, line_items, product, variant = _correction_target(order_id, item_id, line_idx, event_idx, db, current_user)
     failed_cut_refs = [{"line_idx": fc.line_idx, "cut_idx": fc.cut_idx} for fc in failed_cuts]
 
     try:
-        result = correct_glass_offcut_event(
-            db, product, variant, event, [r.model_dump() for r in new_remainders],
-            failed_cut_refs, forced_offcut_id,
-            sibling_events=sibling_events, owner_line_idx=line_idx,
-        )
-        for origin_idx, rep_events in result["replacement_events_by_line"].items():
-            target_idx = origin_idx if isinstance(origin_idx, int) and 0 <= origin_idx < len(line_items) else line_idx
-            target_sources = line_items[target_idx].get("offcut_sources")
-            if target_sources is None:
-                target_sources = []
-                line_items[target_idx]["offcut_sources"] = target_sources
-            target_sources.extend(rep_events)
-
-        item.details = {**details, "lineItems": line_items}
-        flag_modified(item, "details")
-        db.add(item)
-
+        result = _apply_glass_correction(db, item, details, line_items, line_idx, event_idx, product, variant,
+                                         new_remainders, failed_cut_refs, forced_offcut_id, opts)
         audit = EditHistory(
             entity_type="offcut_correction",
             entity_id=order_id,
@@ -1524,6 +1575,7 @@ def correct_offcut_for_order_item(
             after_snapshot={
                 "item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "remainders": result["after"],
                 "failed_cuts": failed_cut_refs, "replacement_events": result["replacement_events"],
+                "source_unused": bool(opts.get("source_unused")), "source_fate": result.get("fate"),
             },
             notes=notes,
         )
@@ -1544,6 +1596,122 @@ def correct_offcut_for_order_item(
         raise HTTPException(status_code=500, detail="Something went wrong while correcting the offcut. Please try again.")
 
 
+def _dry_run(db: Session, fn):
+    """Run `fn` inside a savepoint that is always rolled back: (result, error message)."""
+    savepoint = db.begin_nested()
+    try:
+        return fn(), None
+    except ValueError as e:
+        return None, str(e)
+    finally:
+        savepoint.rollback()
+
+
+def _listing_fate(opts: dict, is_2d: bool) -> str:
+    """The fate to list replacement options under while the manager is still typing a
+    re-measured size."""
+    from core.inventory import cutCorrection as cc
+
+    fate = opts.get("source_fate") or cc.FATE_AVAILABLE
+    if fate == cc.FATE_REMEASURE and not cc.parts_entered(opts.get("remeasure"), is_2d):
+        return cc.FATE_AVAILABLE
+    return fate
+
+
+def _returned_for_listing(db, product, variant, event: dict, is_2d: bool, opts: dict):
+    """Inside a dry run: put a never-used source back as the manager chose, so the options
+    list shows the pool as it will be. Returns (original_rows, exclude_row): the rows of the
+    original's usable parts ("original:<k>"), and a row to leave off the list."""
+    from core.inventory import cutCorrection as cc
+    from core.inventory.poolKey import compute_pool_key
+
+    rev = cc.plan_unused(db, event, is_2d)
+    pool_key = compute_pool_key(db, variant)
+    cc._retire_remainders(db, product, variant, rev, pool_key)
+    fate = _listing_fate(opts, is_2d)
+    if fate == cc.FATE_AVOID and rev.kind == cc.resolver.KIND_FULL_UNIT:
+        fate = cc.FATE_AVAILABLE
+    rows = cc._return_source(db, product, variant, rev, is_2d, fate, opts.get("remeasure"), pool_key)
+    if fate == cc.FATE_AVOID:
+        return [], (rows[0] if rows else None)
+    return rows, None
+
+
+def preview_offcut_correction(order_id: int, body, db: Session, current_user) -> dict:
+    """Dry run of correct_offcut_for_order_item with the same payload: the replacement it
+    would make, and for each piece the sources that can cut it (offcuts, the original's usable
+    parts, a new sheet) - see cutCorrection.glass_piece_options."""
+    from core.inventory import cutCorrection as cc
+    from core.inventory.cutCorrection import group_pieces as _glass_group_pieces
+
+    opts = body.model_dump(include={"source_unused", "source_fate", "remeasure", "force_new_source", "use_original",
+                                    "original_part", "assignments"})
+    try:
+        item, details, line_items, product, variant = _correction_target(
+            order_id, body.item_id, body.line_idx, body.event_idx, db, current_user)
+        event = line_items[body.line_idx]["offcut_sources"][body.event_idx]
+        refs = [{"line_idx": fc.line_idx, "cut_idx": fc.cut_idx} for fc in body.failed_cuts]
+
+        def candidates():
+            if opts.get("source_unused"):
+                original_rows, exclude_row = _returned_for_listing(db, product, variant, event, True, opts)
+                pieces = _glass_group_pieces(line_items, body.line_idx, body.event_idx, None)
+            else:
+                original_rows, exclude_row = [], None
+                pieces = _glass_group_pieces(line_items, body.line_idx, body.event_idx, refs)
+            if not pieces:
+                return None
+            return cc.glass_piece_options(db, product, variant, pieces, original_rows, exclude_row)
+
+        listing, error = _dry_run(db, candidates)
+        out = {"events": [], "candidates": listing, "original": None, "error": error}
+        wants_replacement = opts.get("source_unused") or refs
+        if error is None and wants_replacement:
+            res, error = _dry_run(db, lambda: _apply_glass_correction(
+                db, item, details, line_items, body.line_idx, body.event_idx, product, variant,
+                body.new_remainders, refs, body.forced_offcut_id, opts))
+            out["error"] = error
+            if res is not None:
+                out["events"], out["original"] = res["replacement_events"], res.get("original")
+        return out
+    finally:
+        db.rollback()  # dry run only — never persist
+
+
+def _apply_profile_correction(db, item, details, line_items, line_idx, event_idx, product, variant,
+                              new_remainder_length, replace_source, forced_offcut_id, opts: dict) -> dict:
+    from core.inventory import cutCorrection as cc
+    from core.inventory.inventoryService import correct_profile_offcut_event
+
+    line = line_items[line_idx]
+    if opts.get("source_unused"):
+        had_pick = bool(line.get("offcut_selection"))
+        result = cc.profile_source_unused(
+            db, product, variant, line, event_idx,
+            fate=opts.get("source_fate") or cc.FATE_AVAILABLE, remeasure=opts.get("remeasure"),
+            forced_offcut_id=forced_offcut_id, force_new_bar=bool(opts.get("force_new_source")),
+            use_original=bool(opts.get("use_original")), original_part=opts.get("original_part") or 0,
+            item_id=item.item_id,
+        )
+        if had_pick:
+            details.pop("offcutSelection", None)  # the calculator's copy of the spent pick
+        if result["fate"] == cc.FATE_AVOID:
+            _mirror_source_pref(details, line_items, [line_idx])
+    else:
+        offcut_sources = line["offcut_sources"]
+        result = correct_profile_offcut_event(
+            db, product, variant, offcut_sources[event_idx], new_remainder_length, replace_source, forced_offcut_id,
+            force_new_bar=bool(opts.get("force_new_source")), item_id=item.item_id,
+        )
+        if result["replacement_event"]:
+            offcut_sources.append(result["replacement_event"])
+
+    item.details = {**details, "lineItems": line_items}
+    flag_modified(item, "details")
+    db.add(item)
+    return result
+
+
 @stock_operation(OP_CUT_CORRECTION)
 def correct_profile_offcut_for_order_item(
     order_id: int,
@@ -1556,58 +1724,21 @@ def correct_profile_offcut_for_order_item(
     notes: str | None,
     db: Session,
     current_user,
+    **opts,
 ) -> dict:
     """
     Manager correction for a single 1D (bar/profile) cutting event on a past
     order — the 1D analogue of correct_offcut_for_order_item. See
     inventoryService.correct_profile_offcut_event for the actual offcut
-    inventory mutation (remainder-only edit vs. full source replacement).
+    inventory mutation (remainder-only edit vs. full source replacement), and
+    core/inventory/cutCorrection.py for `opts.source_unused` (the source was never used:
+    a new bar goes back to STOCK, not into the offcut pool).
     """
-    from sqlalchemy.orm.attributes import flag_modified
-    from core.inventory.inventoryService import correct_profile_offcut_event
-
-    require_role(["manager", "ceo", "admin"], current_user)
-
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    if order.status == "cancelled":
-        raise HTTPException(
-            status_code=400,
-            detail="This order has been cancelled — its stock/offcuts were already restored, so its cutting records can no longer be corrected.",
-        )
-
-    item = db.get(OrderItem, item_id)
-    if not item or item.order_id != order_id:
-        raise HTTPException(status_code=404, detail="Order item not found on this order")
-
-    details = item.details or {}
-    line_items = details.get("lineItems") or []
-    if not (0 <= line_idx < len(line_items)):
-        raise HTTPException(status_code=422, detail="Invalid line_idx for this order item")
-
-    offcut_sources = line_items[line_idx].get("offcut_sources") or []
-    if not (0 <= event_idx < len(offcut_sources)):
-        raise HTTPException(status_code=422, detail="Invalid event_idx for this cutting line")
-
-    event = offcut_sources[event_idx]
-
-    product = db.get(Product, item.product_id)
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found")
-    variant = db.get(Variant, item.variant_id) if item.variant_id else None
+    item, details, line_items, product, variant = _correction_target(order_id, item_id, line_idx, event_idx, db, current_user)
 
     try:
-        result = correct_profile_offcut_event(
-            db, product, variant, event, new_remainder_length, replace_source, forced_offcut_id,
-        )
-        if result["replacement_event"]:
-            offcut_sources.append(result["replacement_event"])
-
-        item.details = {**details, "lineItems": line_items}
-        flag_modified(item, "details")
-        db.add(item)
-
+        result = _apply_profile_correction(db, item, details, line_items, line_idx, event_idx, product, variant,
+                                           new_remainder_length, replace_source, forced_offcut_id, opts)
         audit = EditHistory(
             entity_type="profile_offcut_correction",
             entity_id=order_id,
@@ -1617,6 +1748,7 @@ def correct_profile_offcut_for_order_item(
             after_snapshot={
                 "item_id": item_id, "line_idx": line_idx, "event_idx": event_idx, "event": result["after"],
                 "replacement_event": result["replacement_event"],
+                "source_unused": bool(opts.get("source_unused")), "source_fate": result.get("fate"),
             },
             notes=notes,
         )
@@ -1635,6 +1767,41 @@ def correct_profile_offcut_for_order_item(
         db.rollback()
         logger.error(f"Error correcting profile offcut for order {order_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Something went wrong while correcting the offcut. Please try again.")
+
+
+def preview_profile_offcut_correction(order_id: int, body, db: Session, current_user) -> dict:
+    """1D analogue of preview_offcut_correction."""
+    from core.inventory import cutCorrection as cc
+
+    opts = body.model_dump(include={"source_unused", "source_fate", "remeasure", "force_new_source", "use_original",
+                                    "original_part", "assignments"})
+    try:
+        item, details, line_items, product, variant = _correction_target(
+            order_id, body.item_id, body.line_idx, body.event_idx, db, current_user)
+        event = line_items[body.line_idx]["offcut_sources"][body.event_idx]
+        wants_replacement = bool(opts.get("source_unused") or body.replace_source)
+
+        def candidates():
+            if opts.get("source_unused"):
+                original_rows, exclude_row = _returned_for_listing(db, product, variant, event, False, opts)
+            else:
+                # The recorded source stays consumed; never offer it back.
+                original_rows, exclude_row = [], event.get("offcut_id")
+            return cc.profile_candidates(db, product, variant, float(event.get("length_used") or 0),
+                                         original_rows, exclude_row)
+
+        listing, error = _dry_run(db, candidates) if wants_replacement else (None, None)
+        out = {"event": None, "candidates": listing, "original": None, "error": error}
+        if error is None and wants_replacement:
+            res, error = _dry_run(db, lambda: _apply_profile_correction(
+                db, item, details, line_items, body.line_idx, body.event_idx, product, variant,
+                body.new_remainder_length, body.replace_source, body.forced_offcut_id, opts))
+            out["error"] = error
+            if res is not None:
+                out["event"], out["original"] = res["replacement_event"], res.get("original")
+        return out
+    finally:
+        db.rollback()  # dry run only — never persist
 
 
 @stock_operation(OP_CUTTING_REPORT, order_arg=None)

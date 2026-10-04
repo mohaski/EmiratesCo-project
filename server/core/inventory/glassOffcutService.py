@@ -503,8 +503,17 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
     )
     offcuts = db.exec(stmt).all()
 
+    # A line marked "new sheet only" (source_pref) is never packed into an existing offcut -
+    # except a piece this same edit handed back as the line's own already-cut glass, which
+    # must not be cut a second time from a fresh sheet.
+    offcut_needs = [n for n in needs if not n.get("new_only")]
+    own_rows = _own_returned_rows(db) if len(offcut_needs) < len(needs) else set()
+
     for oc in offcuts:
-        pack = _pack_rect_multi(oc.width, oc.height, needs, allow_rotation, strategy, min_usable)
+        use_needs = needs if oc.offcutId in own_rows else offcut_needs
+        if not use_needs:
+            continue
+        pack = _pack_rect_multi(oc.width, oc.height, use_needs, allow_rotation, strategy, min_usable)
         if not pack["placed"]:
             continue
         candidates.append({
@@ -525,6 +534,27 @@ def _generate_candidates(db: Session, product: Product, variant: Optional[Varian
             })
 
     return candidates
+
+
+def _own_returned_rows(db: Session) -> set:
+    """Pool rows holding a piece the running operation returned as a line's own already-cut
+    glass (see opContext.returned)."""
+    from core.audit.opContext import current as _current_op
+
+    op = _current_op()
+    own_ids = op.returned_own_piece_ids() if op is not None else set()
+    rows = set()
+    for pid in own_ids:
+        piece = ledger.get_piece(db, pid)
+        if piece is not None and piece.state == ledger.STATE_AVAILABLE and piece.offcut_row_id:
+            rows.add(piece.offcut_row_id)
+    return rows
+
+
+def wants_new_source(line: dict) -> bool:
+    """The cashier (or a manager correction) asked for this line to come from a fresh
+    bar/sheet rather than an existing offcut."""
+    return isinstance(line, dict) and line.get("source_pref") == "new"
 
 
 # ── Decision agents ─────────────────────────────────────────────────────────────
@@ -1294,7 +1324,8 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
             logger.warning(f"glass-cut line missing l/w or qty; skipping deduction: {line}")
             continue
         cut_w, cut_h, qty = dims
-        needs.append({"line_idx": idx, "piece_w": cut_w, "piece_h": cut_h, "remaining": qty})
+        needs.append({"line_idx": idx, "piece_w": cut_w, "piece_h": cut_h, "remaining": qty,
+                      "new_only": wants_new_source(line)})
 
     sources_by_line = {idx: [] for idx in range(len(glass_cut_lines))}
     while any(n["remaining"] > 0 for n in needs):
@@ -1738,7 +1769,9 @@ def apply_manual_glass_selection(db: Session, product: Product, variant: Optiona
     return _apply_candidate(db, product, variant, best, pool_key=pool_key)[0]
 
 
-def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[Variant], pieces: list, forced_offcut_id: Optional[int] = None) -> list:
+def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[Variant], pieces: list,
+                               forced_offcut_id: Optional[int] = None, sheets_only: bool = False,
+                               item_id: Optional[int] = None) -> list:
     """
     Manager-facing correction for a "the cutter missed" scenario: one or more
     delivered pieces never actually came out of their recorded source, so a
@@ -1758,6 +1791,12 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
     fall through to normal auto-resolution — same forced-then-fallback shape as
     the 1D apply_manual_cut_selection. Uses DEFAULT_STRATEGY only (no 5-way
     strategy search), consistent with apply_manual_glass_selection.
+
+    `sheets_only` (the manager chose "New sheet") takes every piece from fresh sheets,
+    whatever offcuts would fit.
+
+    `item_id` is the order item the pieces are for: the ledger records it as holding the
+    material taken, and new leftovers are tagged with it (see _apply_candidate).
 
     Performs real DB mutations (offcut decrement/sheet deduction, new remainder
     upserts) via _apply_candidate — the caller controls whether this rides the
@@ -1785,10 +1824,18 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
                 raise ValueError(f"Offcut #{forced_offcut_id} doesn't fit any of the corrected pieces")
             now = datetime.utcnow()
             best = min(candidates, key=lambda c: _candidate_sort_key(c, variant, now))
-            events_by_line = _apply_candidate(db, product, variant, best, pool_key=pool_key)
+            events_by_line = _apply_candidate(db, product, variant, best, item_id, pool_key=pool_key)
             forced_pending = False
+        elif sheets_only:
+            candidates = [c for c in _generate_candidates(db, product, variant, needs, full_w, full_h, pool_key=pool_key)
+                          if c["source_kind"] == "sheet"]
+            if not candidates:
+                raise ValueError(f"The missed piece(s) don't fit a full sheet ({full_w:.0f}x{full_h:.0f}mm)")
+            now = datetime.utcnow()
+            best = min(candidates, key=lambda c: _candidate_sort_key(c, variant, now))
+            events_by_line = _apply_candidate(db, product, variant, best, item_id, pool_key=pool_key)
         else:
-            events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h, pool_key=pool_key)
+            events_by_line = _fulfill_pool(db, product, variant, needs, full_w, full_h, item_id=item_id, pool_key=pool_key)
 
         for event in events_by_line.values():
             events.append(event)
@@ -1804,6 +1851,7 @@ def correct_glass_offcut_event(
     db: Session, product: Product, variant: Optional[Variant], event: dict, new_remainders: list,
     failed_cut_indices: Optional[list] = None, forced_offcut_id: Optional[int] = None,
     sibling_events: Optional[dict] = None, owner_line_idx: Optional[int] = None,
+    force_new_sheet: bool = False, assignments=None, item_id: Optional[int] = None,
 ) -> dict:
     """
     Manager-facing correction for a single owning offcut_sources event: physical
@@ -1842,6 +1890,8 @@ def correct_glass_offcut_event(
     wasn't given, when a replacement can't be traced to one specific line —
     e.g. two different lines both flagged an identically-sized missed cut).
     """
+    from core.inventory.cutCorrection import assignment_map, resolve_assigned
+
     if "cuts" not in event or "remainders_created" not in event:
         raise ValueError("This cutting event isn't a correctable 2D glass-cut event")
     if not event.get("owns_consumption", True):
@@ -1856,16 +1906,25 @@ def correct_glass_offcut_event(
         if width <= 0 or height <= 0:
             raise ValueError(f"Corrected remainder dimensions must be positive (got {width}x{height})")
 
+    # The exact recorded pieces are retired, not whichever same-size sibling the pooled row
+    # hands back first; the corrected pieces hang off the same source and carry their ids, so
+    # a later edit/cancel (or "never used") of this event can still follow the chain.
     for r in before:
-        _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"), pool_key)
+        _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"), pool_key,
+                             remainder_piece_id=r.get("piece_id"))
+    source_piece = ledger.get_piece(db, event.get("source_piece_id"))
 
     after = []
     for size in new_remainders:
         width = float(size["width"])
         height = float(size["height"])
         status = size.get("status") or ("scrap" if _is_scrap((width, height), variant) else "available")
-        offcut_id = _upsert_glass_offcut(db, product, variant, width, height, status, pool_key=pool_key)
-        after.append({"width": width, "height": height, "status": status, "offcut_id": offcut_id})
+        rem_ledger: dict = {}
+        offcut_id = _upsert_glass_offcut(db, product, variant, width, height, status, pool_key=pool_key,
+                                        parent_piece=source_piece, origin=ledger.ORIGIN_CORRECTION,
+                                        ledger_notes="remainder corrected by a manager", ledger_out=rem_ledger)
+        after.append({"width": width, "height": height, "status": status, "offcut_id": offcut_id,
+                      "piece_id": rem_ledger.get("piece_id")})
 
     event["remainders_created"] = after
 
@@ -1897,12 +1956,18 @@ def correct_glass_offcut_event(
             by_line_idxs.setdefault(li, set()).add(ci)
 
         failed_pieces = []
+        assigned_pieces = []  # per-piece choices (see cutCorrection.resolve_assigned)
+        chosen = assignment_map(assignments)
+        default = "new" if force_new_sheet else (str(int(forced_offcut_id)) if forced_offcut_id is not None else "auto")
         origin_by_dims_queue: dict = {}
         for li, idxs in by_line_idxs.items():
             cuts = events_by_line[li]["cuts"]
             for ci in sorted(idxs):
                 w, h = cuts[ci]["width"], cuts[ci]["height"]
                 failed_pieces.append((w, h))
+                line_no = owner_line_idx if li == "__owner__" else li
+                assigned_pieces.append({"line": li, "width": w, "height": h,
+                                        "source": chosen.get((line_no, ci), default)})
                 # Sorted (not raw w/h) — a replacement source may place the
                 # same physical piece in the OTHER orientation than it was
                 # originally cut in (see _pack_rect_multi's own orientation
@@ -1911,22 +1976,13 @@ def correct_glass_offcut_event(
                 origin_by_dims_queue.setdefault(key, []).append(li)
             events_by_line[li]["cuts"] = [c for i, c in enumerate(cuts) if i not in idxs]
 
-        replacement_events = resolve_replacement_pieces(db, product, variant, failed_pieces, forced_offcut_id)
-        for rep_event in replacement_events:
-            rep_cuts = rep_event.get("cuts") or []
-            if not rep_cuts:
-                continue
-            # Every cut within one replacement event shares one dims key (see
-            # resolve_replacement_pieces) — attribute the whole event to
-            # whichever origin line queued the FIRST of those pieces, and
-            # consume that many entries off the queue so a later event of the
-            # same dims (e.g. a second replacement source opened for
-            # overflow) doesn't get attributed to the same origin again.
-            key = tuple(sorted((round(float(rep_cuts[0]["width"]), 3), round(float(rep_cuts[0]["height"]), 3))))
-            queue = origin_by_dims_queue.get(key, [])
-            origin_line = queue[0] if queue else owner_key
-            del queue[:len(rep_cuts)]
-            replacement_events_by_line.setdefault(origin_line, []).append(rep_event)
+        if chosen:
+            replacement_events, replacement_events_by_line = resolve_assigned(db, product, variant, assigned_pieces,
+                                                                              item_id=item_id)
+        else:
+            replacement_events = resolve_replacement_pieces(db, product, variant, failed_pieces, forced_offcut_id,
+                                                            sheets_only=force_new_sheet, item_id=item_id)
+            replacement_events_by_line = attribute_replacements(replacement_events, origin_by_dims_queue, owner_key)
 
     return {
         "before": before, "after": after,
@@ -1934,6 +1990,27 @@ def correct_glass_offcut_event(
         "replacement_events_by_line": replacement_events_by_line,
     }
 
+
+def attribute_replacements(replacement_events: list, origin_by_dims_queue: dict, fallback) -> dict:
+    """Which line's missed piece(s) each replacement event supplies. `origin_by_dims_queue`
+    maps a sorted (w, h) key to the queue of line keys that missed a piece of that size."""
+    replacement_events_by_line: dict = {}
+    for rep_event in replacement_events:
+        rep_cuts = rep_event.get("cuts") or []
+        if not rep_cuts:
+            continue
+        # Every cut within one replacement event shares one dims key (see
+        # resolve_replacement_pieces) — attribute the whole event to
+        # whichever origin line queued the FIRST of those pieces, and
+        # consume that many entries off the queue so a later event of the
+        # same dims (e.g. a second replacement source opened for
+        # overflow) doesn't get attributed to the same origin again.
+        key = tuple(sorted((round(float(rep_cuts[0]["width"]), 3), round(float(rep_cuts[0]["height"]), 3))))
+        queue = origin_by_dims_queue.get(key, [])
+        origin_line = queue[0] if queue else fallback
+        del queue[:len(rep_cuts)]
+        replacement_events_by_line.setdefault(origin_line, []).append(rep_event)
+    return replacement_events_by_line
 
 
 

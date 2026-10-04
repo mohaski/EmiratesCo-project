@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from uuid import UUID
 
 class OrderItemRequest(BaseModel):
@@ -164,6 +164,13 @@ class FailedCutRef(BaseModel):
     line_idx: int
     cut_idx: int
 
+class PieceAssignment(BaseModel):
+    """Where one re-supplied piece comes from: "auto" | "new" | an offcut id | "original:<k>"
+    (part k of a never-used source). The piece is named like a FailedCutRef."""
+    line_idx: int
+    cut_idx: int
+    source: str = "auto"
+
 class CorrectOffcutRequest(BaseModel):
     """Payload for correcting a single owning offcut_sources event on an order
     line — replaces the remainders that cutting event recorded with what the
@@ -183,6 +190,18 @@ class CorrectOffcutRequest(BaseModel):
     failed_cuts: List[FailedCutRef] = []
     forced_offcut_id: Optional[int] = None
     notes: Optional[str] = None
+    # "This source was never used" (core/inventory/cutCorrection.py). new_remainders and
+    # failed_cuts are then ignored: every piece on the sheet is re-supplied.
+    source_unused: bool = False
+    source_fate: str = "available"            # available | avoid | scrap | remeasure | missing
+    # The usable part(s) of a damaged source: [{width, height}] mm, or [{length}] for a bar.
+    remeasure: Optional[Union[List[Dict[str, float]], Dict[str, float]]] = None
+    force_new_source: bool = False            # the replacement comes from a new sheet/bar
+    use_original: bool = False                # the replacement IS the never-used source...
+    original_part: int = 0                    # ...this usable part of it
+    # One choice per re-supplied piece; overrides the three single-choice fields above for
+    # the pieces it names.
+    assignments: Optional[List[PieceAssignment]] = None
 
 class CorrectOffcutResponse(BaseModel):
     message: str
@@ -203,15 +222,23 @@ class CorrectProfileOffcutRequest(BaseModel):
     item_id: int
     line_idx: int
     event_idx: int
-    new_remainder_length: float
+    new_remainder_length: float = 0
     replace_source: bool = False
     forced_offcut_id: Optional[int] = None
     notes: Optional[str] = None
+    # See CorrectOffcutRequest. With source_unused, new_remainder_length/replace_source are
+    # ignored: a new bar goes back to stock, an offcut back to the pool (per source_fate).
+    source_unused: bool = False
+    source_fate: str = "available"
+    remeasure: Optional[Union[List[Dict[str, float]], Dict[str, float]]] = None
+    force_new_source: bool = False
+    use_original: bool = False
+    original_part: int = 0
 
 class CorrectProfileOffcutResponse(BaseModel):
     message: str
     before: Dict[str, Any]
-    after: Dict[str, Any]
+    after: Optional[Dict[str, Any]] = None
     replacement_event: Optional[Dict[str, Any]] = None
 
 class MarkCuttingDoneRequest(BaseModel):

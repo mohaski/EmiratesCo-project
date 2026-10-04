@@ -59,6 +59,7 @@ from entities.offcutLedger import (
     STATE_RETIRED,
     OffcutPiece,
     OffcutPieceEvent,
+    event_retires,
 )
 from entities.offcuts import Offcut
 from loggiing import logger
@@ -729,7 +730,7 @@ def rebuild_piece_state(db: Session, piece_id: int) -> Optional[str]:
             state, item_id, order_id, consumed_at = STATE_CONSUMED, e.item_id, e.order_id, e.at
         elif e.event == EVENT_RELEASED:
             state, item_id, order_id, consumed_at = STATE_AVAILABLE, None, None, None
-        elif e.event in (EVENT_RETIRED, EVENT_CORRECTED, EVENT_JOINED):
+        elif event_retires(e.event, e.payload):
             state = STATE_RETIRED
             consumed_at = consumed_at or e.at
         elif e.event == EVENT_UNDONE:

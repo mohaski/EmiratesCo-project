@@ -83,6 +83,7 @@ EVENT_CONSUMED = "consumed"
 EVENT_RELEASED = "released"    # the undo of `consumed` — what an edit/cancel emits
 EVENT_SCRAPPED = "scrapped"
 EVENT_RETIRED = "retired"
+# Written for two different things - see event_retires below.
 EVENT_CORRECTED = "corrected"
 # The piece was merged into a rejoined piece (see ORIGIN_REJOIN); superseded_by_piece_id
 # names it. Terminal, like retired.
@@ -90,6 +91,23 @@ EVENT_JOINED = "joined"
 # An undo put the piece back to the state it had before the undone operation. The payload
 # carries both states; the event log stays append-only.
 EVENT_UNDONE = "undone"
+
+
+def event_retires(event: str, payload: Optional[Dict[str, Any]]) -> bool:
+    """Whether a logged event ends the piece's life (state -> retired) when the log is folded.
+
+    `corrected` means two different things: record_correction logs it when a piece is REPLACED
+    by new ones (payload has `replaced_by`; the old piece is retired), and resync_row_pieces logs
+    it when the CEO re-measures a pooled row IN PLACE (payload has the new `geom`; it is the same
+    material and keeps its state). Folding every `corrected` as retired made re-measured pieces
+    look retired to the integrity check, rebuild_piece_state and vanished_leftover.
+    """
+    if event in (EVENT_RETIRED, EVENT_JOINED):
+        return True
+    if event == EVENT_CORRECTED:
+        return "replaced_by" in (payload or {})
+    return False
+
 
 GEOM_1D = "1d"   # bars/profiles — `length` only
 GEOM_2D = "2d"   # glass sheets — `width` x `height`
