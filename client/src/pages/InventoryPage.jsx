@@ -39,6 +39,9 @@ export default function InventoryPage() {
     // sidebar in their own fixed-height scrollers left each only a few rows tall.
     const paneOverflow = isMobile ? 'visible' : 'hidden';
     const paneScroll = isMobile ? 'visible' : 'auto';
+    // On mobile the panes stack and the page scrolls as a whole, so each pane must keep its
+    // content height — minHeight 0 let them shrink and the sidebar drew over the product list.
+    const paneMinHeight = isMobile ? 'auto' : 0;
     const showToast = useToast();
     const [searchTerm, setSearchTerm] = useState('');
     const [filterCategory, setFilterCategory] = useState('ke-profile');
@@ -331,7 +334,7 @@ export default function InventoryPage() {
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: isMobile ? 'auto' : '100%', minHeight: '100%', background: 'var(--color-bg)', overflow: paneOverflow }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: isMobile ? 'auto' : '100%', minHeight: '100%', flexShrink: isMobile ? 0 : 1, background: 'var(--color-bg)', overflow: paneOverflow }}>
 
             {/* Header */}
             <header style={{
@@ -372,9 +375,9 @@ export default function InventoryPage() {
             </header>
             {['manager', 'ceo', 'admin'].includes(user?.role) && <HeldStockBanner />}
 
-            <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: paneOverflow, minHeight: 0 }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: paneOverflow, minHeight: paneMinHeight }}>
                 {/* Main content */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: paneOverflow, minWidth: 0, minHeight: 0 }}>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: paneOverflow, minWidth: 0, minHeight: paneMinHeight }}>
                     {/* Filters */}
                     <div style={{ padding: 'clamp(1rem, 4vw, 1.25rem) clamp(1rem, 5vw, 2rem) 0.75rem', flexShrink: 0, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                         {/* Category tabs */}
@@ -556,7 +559,7 @@ export default function InventoryPage() {
                     background: 'rgba(0,0,0,0.2)',
                     display: 'flex', flexDirection: 'column',
                     padding: isMobile ? '1rem' : '1.25rem',
-                    overflow: paneOverflow, minHeight: 0,
+                    overflow: paneOverflow, minHeight: paneMinHeight,
                 }}>
                     {/* Tab toggle */}
                     <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.04)', borderRadius: '0.625rem', padding: '3px', marginBottom: '1rem' }}>
