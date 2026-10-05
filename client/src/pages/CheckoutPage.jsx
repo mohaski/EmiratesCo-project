@@ -11,6 +11,28 @@ import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories'
 import { getProfileColorHex, getContrastText, getCategoryAccent, tileGradient, hexToRgba } from '../utils/colors';
 import api from '../services/api';
 import ResolveCutsModal from '../components/orders/ResolveCutsModal';
+import { useWindows } from '../context/WindowContext';
+import { WindowExpiryNotice } from '../components/sales/WindowTabs';
+
+/** One idempotency key per window, kept until that window is confirmed: a confirm retried
+ * after a dropped connection (or a page reload mid-request) resends the same key, and the
+ * server answers with the order it already made instead of charging twice. */
+const confirmKeyFor = (windowId) => {
+    const storageKey = `emirates_pos_confirm_key_${windowId}`;
+    try {
+        let key = sessionStorage.getItem(storageKey);
+        if (!key) {
+            key = window.crypto?.randomUUID?.() ?? `${windowId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            sessionStorage.setItem(storageKey, key);
+        }
+        return key;
+    } catch {
+        return `${windowId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+};
+const forgetConfirmKey = (windowId) => {
+    try { sessionStorage.removeItem(`emirates_pos_confirm_key_${windowId}`); } catch { /* ignore */ }
+};
 
 function useWindowWidth() {
     const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1280));
@@ -160,27 +182,34 @@ export default function CheckoutPage() {
     const isMobile = windowWidth < 768;
 
     const { user } = useAuth();
-    const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart, editSession, removeFromCart } = useCart();
+    const { cartItems: ctxCartItems, customer: ctxCustomer, taxEnabled: ctxTaxEnabled, clearCart, editSession, removeFromCart, windowMode } = useCart();
+    const { activeWindow, saveWindow, confirmWindow, touchWindow } = useWindows();
     const { addOrder, updateOrder } = useOrders();
     const { mode, originalTotal = 0, originalBalance = 0 } = location.state || {};
     const editOrderId = mode === 'edit' ? (location.state?.orderData?.id ?? location.state?.orderData?.orderId ?? null) : null;
+    // A new sale with sale windows on checks out FROM ITS WINDOW: the items, customer, VAT and
+    // any linked order or quotation are the window's own, as held on the server.
+    const isWindowSale = windowMode && !editOrderId;
     // When arriving from invoice-convert or link mode, items & customer come via navigation state
-    const fromInvoice = Boolean(location.state?.cartItems);
+    const fromInvoice = !isWindowSale && Boolean(location.state?.cartItems);
     // Sales, edit, link and convert-from-Sales all check out the live cart (fromCart): reading
     // it from CartContext means a line removed here is gone from the cart too, and once the
     // sale clears the cart a stale history entry can't bring a filled checkout back.
     // Converting straight from Order History hands over the invoice's items without touching
     // the cart (which may hold a different sale in progress) — those stay a local copy.
-    const fromCart = Boolean(location.state?.fromCart);
+    const fromCart = isWindowSale || Boolean(location.state?.fromCart);
     const [localItems, setLocalItems] = useState(() => fromInvoice ? location.state.cartItems : ctxCartItems);
     const cartItems = fromCart ? ctxCartItems : localItems;
-    const customer = fromInvoice ? location.state.customer : ctxCustomer;
-    const enableTax = location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled;
-    const parentOrderId = location.state?.parentOrderId ?? null;
-    const sourceInvoiceId = location.state?.sourceInvoiceId ?? null;
+    const customer = isWindowSale ? ctxCustomer : (fromInvoice ? location.state.customer : ctxCustomer);
+    const enableTax = isWindowSale
+        ? ctxTaxEnabled
+        : (location.state?.enableTax !== undefined ? location.state.enableTax : ctxTaxEnabled);
+    const parentOrderId = isWindowSale ? (activeWindow?.parentOrderId ?? null) : (location.state?.parentOrderId ?? null);
+    const sourceInvoiceId = isWindowSale ? (activeWindow?.sourceInvoiceId ?? null) : (location.state?.sourceInvoiceId ?? null);
 
     const removeItem = useCallback((index) => {
-        if (fromCart) removeFromCart(index);
+        // In a window this is a save, and can be refused (the reason is on screen).
+        if (fromCart) Promise.resolve(removeFromCart(index)).catch(() => {});
         else setLocalItems(prev => prev.filter((_, i) => i !== index));
     }, [fromCart, removeFromCart]);
 
@@ -203,9 +232,31 @@ export default function CheckoutPage() {
     // An edit (or a quote conversion) starts from the discount the order already has —
     // starting blank silently dropped it, and the customer was charged it again.
     const [discount, setDiscount] = useState(() => {
-        const carried = Number(location.state?.discount ?? 0);
+        const carried = Number((isWindowSale ? activeWindow?.discount : location.state?.discount) ?? 0);
         return carried > 0 ? String(carried) : '';
     });
+    // A window can arrive after this page (a reload: windows load from the server) - take its
+    // discount then, unless the cashier has already typed one.
+    const discountTouchedRef = useRef(false);
+    const windowDiscount = isWindowSale ? Number(activeWindow?.discount ?? 0) : null;
+    useEffect(() => {
+        if (windowDiscount == null || discountTouchedRef.current) return;
+        setDiscount(prev => (prev === '' && windowDiscount > 0 ? String(windowDiscount) : prev));
+    }, [windowDiscount]);
+
+    // Working on the payment IS activity on the window (decision D1): its 15-minute idle clock
+    // restarts while the cashier types here, at most once every 30 seconds.
+    const lastTouchRef = useRef(0);
+    const pickMethod = useCallback((m) => { setPaymentMethod(m); noteActivityRef.current(); }, []);
+    const noteActivityRef = useRef(() => {});
+    const noteActivity = useCallback(() => {
+        if (!isWindowSale || !activeWindow) return;
+        const now = Date.now();
+        if (now - lastTouchRef.current < 30000) return;
+        lastTouchRef.current = now;
+        touchWindow(activeWindow.windowId).catch(() => {});
+    }, [isWindowSale, activeWindow, touchWindow]);
+    useEffect(() => { noteActivityRef.current = noteActivity; }, [noteActivity]);
     const [isPartial, setIsPartial] = useState(false);
     const [amountPaid, setAmountPaid] = useState('');
     const [cashAmount, setCashAmount] = useState('');
@@ -283,6 +334,7 @@ export default function CheckoutPage() {
                 // submit always carries a version, so the server's conflict check is never skipped.
                 orderVersion: editSession && String(editSession.orderId) === String(editOrderId)
                     ? editSession.version : (location.state?.orderVersion ?? null),
+                orderNo: editSession && String(editSession.orderId) === String(editOrderId) ? (editSession.orderNo ?? null) : null,
                 payment: {
                     method: paymentMethod, isPartial,
                     details: paymentMethod === 'split'
@@ -292,9 +344,26 @@ export default function CheckoutPage() {
                 mode: mode || 'new'
             };
 
-            const response = editOrderId
-                ? await updateOrder(editOrderId, orderData)
-                : await addOrder(orderData);
+            let response;
+            if (isWindowSale) {
+                const windowId = activeWindow?.windowId;
+                if (!windowId) throw new Error('No open window to confirm.');
+                // The discount and VAT are the last terms of the sale: save them onto the
+                // window (its stock is untouched by this), then confirm exactly that.
+                await saveWindow(windowId, { discount: discountValue, VAT_status: Boolean(enableTax) });
+                response = await confirmWindow(windowId, {
+                    idempotencyKey: confirmKeyFor(windowId),
+                    amountPaid: netPayment,
+                    paymentMethod: netPayment > 0 ? (paymentMethod || 'cash') : null,
+                    paymentDetails: orderData.payment.details,
+                });
+                forgetConfirmKey(windowId);
+            } else {
+                response = editOrderId
+                    ? await updateOrder(editOrderId, orderData)
+                    : await addOrder(orderData);
+                clearCart();
+            }
 
             // replace: Back from the receipt must not land on a filled checkout that a second
             // Confirm would turn into a duplicate sale.
@@ -302,6 +371,7 @@ export default function CheckoutPage() {
                 replace: true,
                 state: {
                     orderId: response?.orderId,
+                    orderNo: response?.orderNo ?? null,
                     cartItems,
                     customer,
                     categories: receiptCategories,
@@ -327,13 +397,24 @@ export default function CheckoutPage() {
             // no such message (a 500, a network failure).
             const status = err?.response?.status;
             const detail = err?.response?.data?.detail;
-            setPaymentError(status >= 400 && status < 500 && typeof detail === 'string'
-                ? detail
+            if (isWindowSale && status === 410) {
+                // Expired or closed: nothing left to sell here. Back to the till.
+                setPaymentError(`${detail?.message ?? 'This window has closed.'} Returning to sales...`);
+                setTimeout(() => navigate('/sales'), 2500);
+                return;
+            }
+            if (isWindowSale && status === 409) {
+                setPaymentError('This window was changed on another screen. Review the items and confirm again.');
+                return;
+            }
+            const text = typeof detail === 'string' ? detail : detail?.message;
+            setPaymentError(status >= 400 && status < 500 && text
+                ? text
                 : 'Failed to process payment. Please try again.');
         } finally {
             setLoading(false);
         }
-    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, editSession, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories, location.state?.orderVersion]);
+    }, [navigate, clearCart, addOrder, updateOrder, editOrderId, editSession, customer, cartItems, subtotal, tax, total, discountValue, netPayment, balance, paymentMethod, isPartial, isRefund, cashAmount, mpesaAutoAmount, mode, enableTax, user, parentOrderId, sourceInvoiceId, receiptCategories, location.state?.orderVersion, isWindowSale, activeWindow, saveWindow, confirmWindow]);
 
     // Edit mode: ask the backend what THIS cart would disturb, and confirm every cut line
     // it does — the cutting flags are a prefill, not evidence, so a line the queue still
@@ -385,7 +466,9 @@ export default function CheckoutPage() {
         return (
             <div style={{ minHeight: '100vh', background: 'var(--color-bg)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
                 <span style={{ fontSize: '3rem' }}>🛒</span>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f1f5f9' }}>Cart is Empty</h2>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#f1f5f9' }}>
+                    {isWindowSale && !activeWindow ? 'No open window' : 'Cart is Empty'}
+                </h2>
                 <button onClick={() => navigate('/sales')} style={{ color: '#3b82f6', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '0.875rem' }}>
                     ← Return to Sales
                 </button>
@@ -439,9 +522,11 @@ export default function CheckoutPage() {
                     {/* Back nav */}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem', flexWrap: 'wrap', gap: '0.75rem' }}>
                         <button
-                            onClick={() => sourceInvoiceId
-                                ? navigate('/orders', { state: { activeTab: 'invoices', highlightId: sourceInvoiceId } })
-                                : navigate('/sales', { state: { enableTax, mode: 'back' } })}
+                            onClick={() => isWindowSale
+                                ? navigate('/sales', { state: { mode: 'back' } })
+                                : sourceInvoiceId
+                                    ? navigate('/orders', { state: { activeTab: 'invoices', highlightId: sourceInvoiceId } })
+                                    : navigate('/sales', { state: { enableTax, mode: 'back' } })}
                             style={{
                                 display: 'flex', alignItems: 'center', gap: '0.5rem',
                                 background: 'none', border: 'none', cursor: 'pointer',
@@ -453,12 +538,14 @@ export default function CheckoutPage() {
                             onMouseLeave={e => { e.currentTarget.style.color = '#475569'; }}
                         >
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
-                            {sourceInvoiceId ? 'Back to Order History' : 'Back to Sales'}
+                            {sourceInvoiceId && !isWindowSale ? 'Back to Order History' : 'Back to Sales'}
                         </button>
 
                         {sourceInvoiceId && (
                             <button
-                                onClick={() => navigate('/sales', { state: { mode: 'convert', cartItems, customer, sourceInvoiceId, enableTax, discount: discountValue } })}
+                                onClick={() => (isWindowSale
+                                    ? navigate('/sales', { state: { mode: 'back' } })
+                                    : navigate('/sales', { state: { mode: 'convert', cartItems, customer, sourceInvoiceId, enableTax, discount: discountValue } }))}
                                 style={{
                                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                                     background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
@@ -490,8 +577,10 @@ export default function CheckoutPage() {
                             )}
                         </div>
                         <p style={{ color: '#475569', fontSize: '0.875rem' }}>
+                            {isWindowSale && activeWindow ? `${activeWindow.label} · ` : ''}
                             {cartItems.length} item{cartItems.length !== 1 ? 's' : ''} · Review before confirming payment
                         </p>
+                        {isWindowSale && <WindowExpiryNotice window={activeWindow} />}
                     </div>
 
                     {/* Items table */}
@@ -634,7 +723,7 @@ export default function CheckoutPage() {
                             <input
                                 type="number"
                                 value={discount}
-                                onChange={e => setDiscount(e.target.value)}
+                                onChange={e => { discountTouchedRef.current = true; setDiscount(e.target.value); noteActivity(); }}
                                 placeholder="0"
                                 min="0"
                                 step="1"
@@ -687,7 +776,7 @@ export default function CheckoutPage() {
                             <input
                                 type="number"
                                 value={amountPaid}
-                                onChange={e => setAmountPaid(e.target.value)}
+                                onChange={e => { setAmountPaid(e.target.value); noteActivity(); }}
                                 placeholder="Enter amount..."
                                 min="0"
                                 max={Math.max(0, effectiveTotal)}
@@ -734,9 +823,9 @@ export default function CheckoutPage() {
                                 Refund Method
                             </label>
                             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                <PaymentMethodBtn method="cash" label="Cash" icon="💵" selected={paymentMethod === 'cash'} color="#3b82f6" onClick={setPaymentMethod} />
-                                <PaymentMethodBtn method="mpesa" label="M-Pesa" icon="📱" selected={paymentMethod === 'mpesa'} color="#3b82f6" onClick={setPaymentMethod} />
-                                <PaymentMethodBtn method="split" label="Split" icon="⚖️" selected={paymentMethod === 'split'} color="#a855f7" onClick={setPaymentMethod} />
+                                <PaymentMethodBtn method="cash" label="Cash" icon="💵" selected={paymentMethod === 'cash'} color="#3b82f6" onClick={pickMethod} />
+                                <PaymentMethodBtn method="mpesa" label="M-Pesa" icon="📱" selected={paymentMethod === 'mpesa'} color="#3b82f6" onClick={pickMethod} />
+                                <PaymentMethodBtn method="split" label="Split" icon="⚖️" selected={paymentMethod === 'split'} color="#a855f7" onClick={pickMethod} />
                             </div>
                         </div>
                     ) : currentPayable > 0 && (
@@ -745,9 +834,9 @@ export default function CheckoutPage() {
                                 Payment Method
                             </label>
                             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                <PaymentMethodBtn method="cash" label="Cash" icon="💵" selected={paymentMethod === 'cash'} color="#22c55e" onClick={setPaymentMethod} />
-                                <PaymentMethodBtn method="mpesa" label="M-Pesa" icon="📱" selected={paymentMethod === 'mpesa'} color="#22c55e" onClick={setPaymentMethod} />
-                                <PaymentMethodBtn method="split" label="Split" icon="⚖️" selected={paymentMethod === 'split'} color="#a855f7" onClick={setPaymentMethod} />
+                                <PaymentMethodBtn method="cash" label="Cash" icon="💵" selected={paymentMethod === 'cash'} color="#22c55e" onClick={pickMethod} />
+                                <PaymentMethodBtn method="mpesa" label="M-Pesa" icon="📱" selected={paymentMethod === 'mpesa'} color="#22c55e" onClick={pickMethod} />
+                                <PaymentMethodBtn method="split" label="Split" icon="⚖️" selected={paymentMethod === 'split'} color="#a855f7" onClick={pickMethod} />
                             </div>
                         </div>
                     )}
@@ -766,7 +855,7 @@ export default function CheckoutPage() {
                                 <input
                                     type="number"
                                     value={cashAmount}
-                                    onChange={e => setCashAmount(e.target.value)}
+                                    onChange={e => { setCashAmount(e.target.value); noteActivity(); }}
                                     placeholder="0"
                                     min="0"
                                     step="1"

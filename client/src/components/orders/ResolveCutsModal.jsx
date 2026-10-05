@@ -64,7 +64,7 @@ function ChainView({ chain }) {
                             {p.is_scrap && <span style={{ fontSize: '0.62rem', color: '#f87171' }}>scrap</span>}
                             {consumed && p.holder && (
                                 <span style={{ fontSize: '0.62rem', color: '#f59e0b' }}>
-                                    #{p.holder.order_id}{p.holder.customer_name ? ` ${p.holder.customer_name}` : ''}
+                                    {p.holder.order_no != null ? `#${p.holder.order_no}` : 'an open sale window'}{p.holder.customer_name ? ` ${p.holder.customer_name}` : ''}
                                 </span>
                             )}
                         </div>
@@ -179,7 +179,7 @@ export function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates
                     {laterCuts.map(lc => (
                         <div key={lc.item_id} data-later-cut={lc.item_id} style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', paddingTop: '0.375rem', borderTop: '1px dashed rgba(255,255,255,0.06)' }}>
                             <span style={{ ...microLabel, color: '#b45309' }}>
-                                Later cut from the same {line.is_2d ? 'sheet' : 'bar'}: order #{lc.order_id}{lc.customer_name ? ` ${lc.customer_name}` : ''} - {lc.cut}. Was it made?
+                                Later cut from the same {line.is_2d ? 'sheet' : 'bar'}: {lc.in_window ? 'an open sale (not cut yet)' : `order #${lc.order_no ?? lc.order_id}`}{lc.customer_name ? ` ${lc.customer_name}` : ''} - {lc.cut}. Was it made?
                             </span>
                             <StateButtons small states={LATER_STATES} value={answer?.laterCuts?.[String(lc.item_id)]}
                                 onPick={id => setLater(lc.item_id, id)} />
@@ -293,7 +293,7 @@ export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel
                         }}>✂️</div>
                         <div style={{ minWidth: 0 }}>
                             <h2 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>
-                                Confirm Cutting · Order {plan.order_id}
+                                Confirm Cutting · Order {plan.order_no ?? plan.order_id}
                             </h2>
                             <p style={{ ...microLabel, margin: 0 }}>
                                 {lines.length} cut {lines.length === 1 ? 'line' : 'lines'}

@@ -265,6 +265,9 @@ def convert_invoice_to_order(
         inv.status = "converted"
         inv.converted_at = datetime.now(timezone.utc)
         db.add(inv)
+        # Gap-free receipt number, taken last so the counter lock is held only briefly.
+        from core.ordering.orderNumbers import assign_order_no
+        assign_order_no(db, new_order)
         db.commit()
 
         logger.info(

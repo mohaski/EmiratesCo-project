@@ -8,7 +8,9 @@ import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext';
 import { useProductFiltering, PROFILE_COLORS } from '../hooks/useProductFiltering';
 import CustomerSelectionOverlay from '../components/sales/CustomerSelectionOverlay';
-import { editSignature } from '../utils/orderItemMapping';
+import { editSignature, mapItemForBackend } from '../utils/orderItemMapping';
+import WindowTabs, { WindowExpiryNotice } from '../components/sales/WindowTabs';
+import { useWindows } from '../context/WindowContext';
 
 // VAT is on by default except for individual customers (businesses and walk-ins are
 // invoiced with VAT). One rule for picking a customer, linking and converting.
@@ -85,7 +87,14 @@ export default function SalesDashboard() {
         // time Sales was opened, so coming back to an individual's cart added 16%.
         taxEnabled: enableTax,
         setTaxEnabled: setEnableTax,
+        // A new sale with sale windows on: the cart is the active window on the server, and
+        // every change above is a save that can be refused (CartContext).
+        windowMode,
     } = useCart();
+    const { enabled: windowsEnabled, activeWindow, openWindowWith, loaded: windowsLoaded } = useWindows();
+    // The VAT toggle and the customer pick are saves in a window; a refused one is already on
+    // screen as a toast, and must not surface as an unhandled rejection.
+    const toggleTax = useCallback((value) => { Promise.resolve(setEnableTax(value)).catch(() => {}); }, [setEnableTax]);
 
     useEffect(() => {
         if (!location.state?.mode && sessionType !== 'sales') {
@@ -121,10 +130,10 @@ export default function SalesDashboard() {
     // change (its no-mode branch resets the customer). So it reads these through a ref, kept
     // current by this effect, which runs before it.
     const liveRef = React.useRef({});
-    useEffect(() => { liveRef.current = { editSession, cartLength: cart.length, clearCart }; });
+    useEffect(() => { liveRef.current = { editSession, cartLength: cart.length, clearCart, windowMode }; });
 
     useEffect(() => {
-        const { editSession, cartLength, clearCart } = liveRef.current;
+        const { editSession, cartLength, clearCart, windowMode: inWindow } = liveRef.current;
         // Key includes whether products are loaded — so the effect re-runs once
         // after products arrive (to resolve names) but not on cart mutations.
         const productsReady = PRODUCTS.length > 0 ? 'ready' : 'empty';
@@ -189,6 +198,7 @@ export default function SalesDashboard() {
             loadOrder({ ...orderData, items: mappedItems }, {
                 editSession: isEdit ? {
                     orderId,
+                    orderNo: orderData.orderNo ?? null,   // the number people know it by
                     version: orderData.version ?? null,
                     nonce,
                     originalTotal: orderData.amountPayed ?? orderData.amountPaid ?? 0,
@@ -202,6 +212,20 @@ export default function SalesDashboard() {
                 } : null,
             });
             setEnableTax(vat);
+        } else if (location.state?.mode === 'link' && location.state?.customer && windowsEnabled) {
+            // "Add to order" with sale windows on: a new window tied to the parent order, for
+            // its customer. Keyed by navigation so it opens exactly one window, and the
+            // instruction is consumed - router state survives a reload, which would otherwise
+            // open ANOTHER window on every refresh.
+            if (loadedStateRef.current === location.key) return;
+            loadedStateRef.current = location.key;
+            // Adding to another order ends any edit in progress - its lines must not ride along.
+            if (editSession) clearCart();
+            setSessionType('sales');
+            const cust = location.state.customer;
+            openWindowWith({ customer: cust, parentOrderId: location.state.parentOrderId ?? null, VAT_status: defaultVat(cust) })
+                .catch(() => {});
+            navigate(location.pathname, { replace: true, state: null });
         } else if (location.state?.mode === 'link' && location.state?.customer) {
             if (loadedStateRef.current?.startsWith('link')) return;
             loadedStateRef.current = stateKey;
@@ -210,6 +234,23 @@ export default function SalesDashboard() {
             setSelectedCustomer(location.state.customer);
             setLinkedRef({ type: 'link', id: location.state.parentOrderId ?? null });
             setEnableTax(defaultVat(location.state.customer));
+        } else if (location.state?.mode === 'convert' && location.state?.cartItems && windowsEnabled) {
+            // A quotation's items with sale windows on: into a new window, which HOLDS their
+            // stock from now on - with the quotation's discount and VAT. If they can't all be
+            // filled the window is closed again, and the reason is already on screen.
+            if (loadedStateRef.current === location.key) return;
+            loadedStateRef.current = location.key;
+            if (editSession) clearCart();
+            setSessionType('sales');
+            const { cartItems: quoted, customer: cust, sourceInvoiceId, enableTax: vat, discount } = location.state;
+            openWindowWith({
+                items: quoted.map(mapItemForBackend),
+                customer: cust || null,
+                sourceInvoiceId: sourceInvoiceId ?? null,
+                discount: discount ?? 0,
+                VAT_status: vat ?? defaultVat(cust),
+            }).catch(() => {});
+            navigate(location.pathname, { replace: true, state: null });
         } else if (location.state?.mode === 'convert' && location.state?.cartItems) {
             // Editing a to-be-converted invoice's items — cartItems are already in
             // frontend cart-item shape (they round-trip from invoice.items as-is),
@@ -232,9 +273,12 @@ export default function SalesDashboard() {
             // clearing it here dropped the customer of a cart in progress (VAT then switched on
             // for an individual's cart) — or, with the cart shared between tabs, the customer
             // another tab had just picked. Only a link with nothing in the cart is stale.
-            if (cartLength === 0) setLinkedRef(null);
+            // Local carts only: a sale window carries its own link, and clearing it is a save -
+            // which renews the setters this effect depends on, so it would run (and save) again
+            // without end.
+            if (!inWindow && cartLength === 0) setLinkedRef(null);
         }
-    }, [location.state, loadOrder, setSelectedCustomer, setLinkedRef, setEnableTax, PRODUCTS]);
+    }, [location.state, location.key, location.pathname, navigate, loadOrder, setSelectedCustomer, setLinkedRef, setEnableTax, setSessionType, openWindowWith, windowsEnabled, PRODUCTS]);
 
     const handleProductClick = useCallback((product) => {
         setSelectedProduct(product);
@@ -256,22 +300,20 @@ export default function SalesDashboard() {
         }
     }, [cart, PRODUCTS]);
 
+    // Returns the save: in a sale window it can be refused, and the product modal then stays
+    // open with what the cashier entered (the reason is already on screen).
     const handleAddToOrder = useCallback((orderItem) => {
-        if (editingIndex !== null) {
-            updateCartItem(editingIndex, orderItem);
-            setEditingIndex(null);
-        } else {
-            addToCart(orderItem);
-        }
+        const save = editingIndex !== null ? updateCartItem(editingIndex, orderItem) : addToCart(orderItem);
+        return Promise.resolve(save).then(() => setEditingIndex(null));
     }, [editingIndex, addToCart, updateCartItem]);
 
     const handleCustomerSelect = useCallback((customer) => {
-        setSelectedCustomer(customer);
+        // The customer and its VAT default together - one save in a sale window.
+        Promise.resolve(setSelectedCustomer(customer, { VAT_status: defaultVat(customer) })).catch(() => {});
         // A customer just registered in the overlay isn't in the list fetched on load —
         // add them, so searching finds them without reloading the page.
         if (customer?.id) setCustomers(prev => (prev.some(c => c.id === customer.id) ? prev : [...prev, customer]));
-        setEnableTax(defaultVat(customer));
-    }, [setSelectedCustomer, setEnableTax]);
+    }, [setSelectedCustomer]);
 
     // Keep the session's tax choice in step with the toggle, so it survives a reload too.
     // Functional update: this runs in the same commit as loadOrder when another order is
@@ -287,7 +329,7 @@ export default function SalesDashboard() {
     // order's lines into a new sale.
     const isEditMode = !!editSession && ['edit', 'back', undefined].includes(location.state?.mode);
     const discardEdit = useCallback(() => {
-        if (!window.confirm(`Discard your changes to order #${editSession?.orderId}? Nothing has been saved.`)) return;
+        if (!window.confirm(`Discard your changes to order #${editSession?.orderNo ?? editSession?.orderId}? Nothing has been saved.`)) return;
         clearCart();
         navigate('/sales', { replace: true });
     }, [editSession, clearCart, navigate]);
@@ -343,7 +385,7 @@ export default function SalesDashboard() {
                                     letterSpacing: '0.06em',
                                     textTransform: 'uppercase',
                                 }}>
-                                    Edit: #{String(editSession?.orderId ?? '').slice(-6)}
+                                    Edit: #{String(editSession?.orderNo ?? editSession?.orderId ?? '').slice(-6)}
                                 </span>
                             )}
                             {isEditMode && (
@@ -593,6 +635,17 @@ export default function SalesDashboard() {
                         </div>
                     )}
                 </div>
+
+                {/* ── Customer Selection Overlay (sale windows) ── covers the product browser
+                    only, never the cart panel: the window tabs must stay usable, so a cashier
+                    who opened a window by mistake can switch back or close it without
+                    inventing a customer first. */}
+                {windowMode && windowsLoaded && !selectedCustomer && (
+                    <CustomerSelectionOverlay
+                        customers={customers}
+                        onSelectCustomer={handleCustomerSelect}
+                    />
+                )}
             </div>
 
             {/* ── Mobile Cart Backdrop ── */}
@@ -633,6 +686,9 @@ export default function SalesDashboard() {
                 background: 'rgba(9,14,26,0.97)',
                 backdropFilter: 'blur(16px)',
             }}>
+                {windowMode && <WindowTabs />}
+                {windowMode && <WindowExpiryNotice window={activeWindow} />}
+
                 {/* Cart header */}
                 <div style={{
                     minHeight: '64px',
@@ -680,12 +736,12 @@ export default function SalesDashboard() {
                 <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
                     <CartSidebar
                         cartItems={cart}
-                        onRemoveItem={(index) => removeFromCart(index)}
+                        onRemoveItem={(index) => { Promise.resolve(removeFromCart(index)).catch(() => {}); }}
                         onEditItem={handleEditCartItem}
                         customer={selectedCustomer}
-                        onChangeCustomer={() => setSelectedCustomer(null)}
+                        onChangeCustomer={() => { Promise.resolve(setSelectedCustomer(null)).catch(() => {}); }}
                         enableTax={enableTax}
-                        onToggleTax={setEnableTax}
+                        onToggleTax={toggleTax}
                         mode={isEditMode ? 'edit' : undefined}
                         originalTotal={0}
                         actionLabel={isEditMode ? 'Update Order' : 'Checkout'}
@@ -706,7 +762,7 @@ export default function SalesDashboard() {
                                     orderData: { id: editSession.orderId },
                                 },
                             });
-                        } : linkedRef?.type === 'link' ? () => {
+                        } : windowMode ? undefined : linkedRef?.type === 'link' ? () => {
                             navigate('/checkout', {
                                 state: {
                                     cartItems: cart,
@@ -777,7 +833,7 @@ export default function SalesDashboard() {
             />
 
             {/* ── Customer Selection Overlay ── */}
-            {!selectedCustomer && (
+            {!windowMode && !selectedCustomer && (
                 <CustomerSelectionOverlay
                     customers={customers}
                     onSelectCustomer={handleCustomerSelect}

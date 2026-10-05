@@ -29,6 +29,7 @@ from entities.products import Product
 from entities.variants import Variant
 from entities.orders import Order
 from entities.orderItems import OrderItem
+from core.ordering.visibility import visible_orders
 from entities.users import User
 from entities.openContainers import OpenContainer
 from . import model
@@ -66,7 +67,7 @@ def container_usage(container_id: int, db: Session) -> model.ContainerUsageRespo
     stmt = (
         select(OrderItem, Order)
         .join(Order, Order.orderId == OrderItem.order_id)
-        .where(OrderItem.product_id == container.product_id)
+        .where(OrderItem.product_id == container.product_id, visible_orders())
     )
     if container.opened_at:
         stmt = stmt.where(Order.created_at >= container.opened_at)
@@ -97,6 +98,7 @@ def container_usage(container_id: int, db: Session) -> model.ContainerUsageRespo
 
         lines.append(model.ContainerUsageLine(
             order_id=order.orderId,
+            order_no=order.order_no,
             item_id=item.item_id,
             customer_name=order.customer_name,
             served_by=user_names[served_key],
@@ -122,7 +124,11 @@ def _revenue_by_container(db: Session, product_ids: List[int]) -> Dict[int, floa
     if not product_ids:
         return {}
     totals: Dict[int, float] = {}
-    items = db.exec(select(OrderItem).where(OrderItem.product_id.in_(product_ids))).all()
+    items = db.exec(
+        select(OrderItem)
+        .join(Order, Order.orderId == OrderItem.order_id)
+        .where(OrderItem.product_id.in_(product_ids), visible_orders())
+    ).all()
     for item in items:
         for line in _container_lines(item.details):
             line_qty = float(line.get("qty", 0) or 0)

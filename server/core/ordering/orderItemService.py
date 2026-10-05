@@ -91,6 +91,8 @@ def get_orderItems_by_orderId(order_id: int, db: Session = Depends(get_session))
         # Cart order, same as Order.orderItems — callers match items back to the cart
         # positionally, and an unordered result is exactly what swapped the cutting
         # instructions between worksheets on order #190.
+        from core.ordering.visibility import get_visible_order_or_404
+        get_visible_order_or_404(db, order_id)  # an open sale window is not an order
         statement = (select(OrderItem).where(OrderItem.order_id == order_id)
                      .order_by(OrderItem.position, OrderItem.item_id))
         results = db.exec(statement).all()
@@ -137,7 +139,9 @@ def update_orderItem_status_to_returned(orderItemId: int, db: Session = Depends(
         
         if not order_item:
             raise HTTPException(status_code=404, detail="Order item not found")
-        
+        from core.ordering.visibility import get_visible_order_or_404
+        get_visible_order_or_404(db, order_item.order_id)  # an open sale window's item is not sold yet
+
         order_item.status = "returned"
         db.add(order_item)
         db.commit()

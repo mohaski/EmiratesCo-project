@@ -124,7 +124,7 @@ export default function CuttingQueueSection({ onCountChange }) {
                                 style={{ width: '18px', height: '18px', flexShrink: 0, marginTop: '2px', accentColor: '#3b82f6' }} />
                             <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0' }}>Order #{order.orderId}</span>
+                                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0' }}>Order #{order.orderNo ?? order.orderId}</span>
                                     <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#94a3b8' }}>{order.customerName || 'Walk-in Customer'}</span>
                                 </div>
                                 {order.items.map(item => {

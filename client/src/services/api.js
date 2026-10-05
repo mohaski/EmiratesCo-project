@@ -79,6 +79,11 @@ export const OrderService = {
         const response = await api.get(`/orders/${id}`);
         return response.data;
     },
+    /** By the number people know it by (receipt / order card) - not its internal id. */
+    getOrderByNumber: async (orderNo) => {
+        const response = await api.get(`/orders/by-number/${orderNo}`);
+        return response.data;
+    },
     getAllOrders: async (skip = 0, limit = 100, search = null) => {
         const params = new URLSearchParams({ skip, limit });
         if (search) params.append('search', search);
@@ -304,10 +309,14 @@ export const ProductService = {
         const response = await api.delete(`/products/variants/${variantId}`);
         return response.data;
     },
-    /** Get available offcut pieces for a product. Pass variantId to filter. */
-    getOffcuts: async (productId, variantId = null) => {
-        const params = variantId ? `?variant_id=${variantId}` : '';
-        const response = await api.get(`/products/${productId}/offcuts${params}`);
+    /** Get available offcut pieces for a product. Pass variantId to filter. holdOrderId: the
+     * cashier's own open sale window (its order id) — its private leftovers are then listed too. */
+    getOffcuts: async (productId, variantId = null, holdOrderId = null) => {
+        const params = new URLSearchParams();
+        if (variantId) params.append('variant_id', variantId);
+        if (holdOrderId) params.append('hold_order_id', holdOrderId);
+        const qs = params.toString();
+        const response = await api.get(`/products/${productId}/offcuts${qs ? `?${qs}` : ''}`);
         return response.data;
     },
     /**
@@ -348,13 +357,16 @@ export const ProductService = {
      * multi-strategy search (which packing heuristics were tried and which won).
      */
     /** `edit` (optional): { orderId, itemId, answers } while editing a saved order - the
-     * preview then gives that item's material back first, as the edit will. */
-    previewGlassCuts: async (productId, variantId, cuts, edit = null) => {
+     * preview then gives that item's material back first, as the edit will.
+     * `holdOrderId` (optional): the active sale window's order, so its own held remainders
+     * count (the server checks it is the caller's own open window). */
+    previewGlassCuts: async (productId, variantId, cuts, edit = null, holdOrderId = null) => {
         const response = await api.post(`/products/${productId}/glass-cut-preview`, {
             variant_id: variantId, cuts,
             edit_order_id: edit?.orderId ?? null,
             edit_item_id: edit?.itemId ?? null,
             edit_answers: edit?.answers ?? null,
+            hold_order_id: holdOrderId ?? null,
         });
         return response.data;
     },
@@ -729,6 +741,40 @@ export const OpenContainerService = {
     },
 };
 
+/**
+ * Sale windows — parallel open checkouts (server: core/ordering/windowService.py).
+ * A window's stock is held on the server the moment its cart is saved, so every cart
+ * change goes through setCart and can be refused (422 not enough stock, 409 the window
+ * was changed elsewhere, 410 it expired or closed).
+ */
+export const WindowService = {
+    /** The current cashier's open windows. Does not count as activity. */
+    list: async () => (await api.get('/windows/')).data,
+    open: async (deviceId = null, label = null) =>
+        (await api.post('/windows/', { deviceId, label })).data,
+    get: async (windowId) => (await api.get(`/windows/${windowId}`)).data,
+    /** Replace the whole cart. payload: { version, items, customerId, customerName,
+     * VAT_status, discount, parentOrderId, sourceInvoiceId }. */
+    setCart: async (windowId, payload) => (await api.put(`/windows/${windowId}/cart`, payload)).data,
+    /** Restart the 15-minute idle clock. */
+    touch: async (windowId) => (await api.post(`/windows/${windowId}/touch`)).data,
+    /** payload: { version, idempotencyKey, amountPaid, paymentMethod, paymentDetails }.
+     * Resend the SAME idempotencyKey when retrying — the retry then returns the original
+     * order instead of charging twice. */
+    confirm: async (windowId, payload) => (await api.post(`/windows/${windowId}/confirm`, payload)).data,
+    /** Close without selling: everything the window held goes back to stock. */
+    release: async (windowId) => (await api.delete(`/windows/${windowId}`)).data,
+    /** Sign Out: close every open window of the signed-in cashier. */
+    releaseMine: async () => (await api.delete('/windows/mine')).data,
+    /** Dry run of setCart: { ok, message } - would this cart fit in stock? Nothing is kept. */
+    checkCart: async (windowId, payload) => (await api.post(`/windows/${windowId}/cart/check`, payload)).data,
+    /** { enabled } - whether sale windows are switched on (CEO/admin switch). */
+    getSettings: async () => (await api.get('/windows/settings')).data,
+    setSettings: async (enabled) => (await api.put('/windows/settings', { enabled })).data,
+    /** Managers: what every open window is holding right now. */
+    holds: async () => (await api.get('/windows/holds')).data,
+};
+
 export const FailoverService = {
     /** This machine's identity, peer reachability, last sync timestamps, and history. */
     getStatus: async () => {
@@ -757,5 +803,6 @@ api.toolService = ToolService;
 api.stockSessionService = StockSessionService;
 api.openContainerService = OpenContainerService;
 api.failoverService = FailoverService;
+api.windowService = WindowService;
 
 export default api;

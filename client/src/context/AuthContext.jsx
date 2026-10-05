@@ -13,8 +13,13 @@ const CART_KEYS = ['emirates_pos_cart', 'emirates_pos_customer', 'emirates_pos_s
 
 const clearSavedCart = () => {
   CART_KEYS.forEach(k => localStorage.removeItem(k));
-  // Stock Control sessions in progress (saved per user) go with the person too.
-  Object.keys(localStorage).filter(k => k.startsWith('emirates_pos_stock_cart_')).forEach(k => localStorage.removeItem(k));
+  // Stock Control sessions in progress (saved per user) go with the person too, and so does
+  // which sale window was active and the customers picked for them (WindowContext).
+  const personal = ['emirates_pos_stock_cart_', 'emirates_pos_active_window_', 'emirates_pos_window_customers_'];
+  Object.keys(localStorage).filter(k => personal.some(p => k.startsWith(p))).forEach(k => localStorage.removeItem(k));
+  try {
+    Object.keys(sessionStorage).filter(k => k.startsWith('emirates_pos_confirm_key_')).forEach(k => sessionStorage.removeItem(k));
+  } catch { /* storage unavailable */ }
   localStorage.removeItem(CART_OWNER_KEY);
   // CartContext empties its in-memory state on this event.
   window.dispatchEvent(new Event('pos:logout'));
@@ -104,8 +109,14 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // "Sign Out": the person is done, so their cart and any edit in progress go too.
-  const logout = () => {
+  // "Sign Out": the person is done, so their cart and any edit in progress go too - and
+  // every sale window they had open is closed, its stock back on the shelf (rather than held
+  // for up to 15 minutes by nobody). Best effort: offline, the windows still expire on time.
+  const logout = async () => {
+    // (Not for an account still on its first-sign-in password change: it can't have windows.)
+    if (localStorage.getItem('token') && user && !user.mustChangePassword) {
+      try { await api.windowService.releaseMine(); } catch { /* offline / windows off */ }
+    }
     localStorage.removeItem('token');
     clearSavedCart();
     setUnreachable(false);

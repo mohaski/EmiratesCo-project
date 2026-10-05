@@ -29,11 +29,14 @@ const inputStyle = {
 // first is not an acceptable default. Every other attribute still defaults.
 const isRequiredKey = key => /thick/i.test(key);
 
-const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
+const GlassCalculator = memo(({ product, initialDetails, onUpdate, cartIndex = null }) => {
     // Set while editing a saved order: the stock check then gives that order's own material
     // back first, as the edit will, instead of calling a cut impossible because this very
     // order used its hand-picked offcut up (see CartContext.editingOrderId).
-    const { editingOrderId } = useCart();
+    // An edit of a saved order checks with that order's material given back first; a sale
+    // window's line is checked by a dry run of the window's whole cart (checkWindowLine) -
+    // its own material counted once, its other lines still held.
+    const { editingOrderId, windowMode, checkWindowLine } = useCart();
 
     const extraAttributes = useMemo(() => {
         const extras = {};
@@ -266,9 +269,12 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         setFeasibility({ checking: true, ok: false, message: null });
 
         const timer = setTimeout(() => {
-            api.productService
-                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId,
-                    editCuts.sourceItemId, apiAnswersKey ? JSON.parse(apiAnswersKey) : null)
+            (windowMode
+                ? checkWindowLine(cartIndex, { productId: product.id, variantId: pricing.variantId ?? null, lineItems })
+                : Promise.resolve(null))
+                .then(windowRes => windowRes ?? api.productService
+                    .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId,
+                        editCuts.sourceItemId, apiAnswersKey ? JSON.parse(apiAnswersKey) : null))
                 .then(res => {
                     if (feasibilitySeqRef.current !== mySeq) return; // superseded by a newer check
                     setFeasibility({ checking: false, ok: !!res.ok, message: res.ok ? null : (res.message || 'Insufficient stock for this configuration.') });
@@ -282,7 +288,7 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate }) => {
         }, 400);
 
         return () => clearTimeout(timer);
-    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems, missingRequired, editingOrderId, apiAnswersKey, editCuts.active, editCuts.complete, editCuts.sourceItemId]);
+    }, [fullQty, halfQty, cutPieces, pricing.variantId, product.id, error, lineItems, missingRequired, editingOrderId, apiAnswersKey, editCuts.active, editCuts.complete, editCuts.sourceItemId, windowMode, checkWindowLine, cartIndex]);
 
     const getArea = (l, w, u) => {
         if (u === 'ft') { const rl = roundToHalfWithRule(l), rw = roundToHalfWithRule(w); return rl * rw; }

@@ -297,7 +297,8 @@ def c_profile():
     oa, ia = w.sale([M.line_cut_1d(4.0)])
     ob, ib = w.sale([M.line_cut_1d(1.5)])
     before = (w.stock(), w.pool())
-    ok, detail = refused(lambda: w.correct_1d(oa, ia, source_unused=True), f"order #{ob.orderId}")
+    # Named by its order number (what people see on the receipt), not the internal id.
+    ok, detail = refused(lambda: w.correct_1d(oa, ia, source_unused=True), f"order #{ob.order_no or ob.orderId}")
     w.db.rollback()
     check("refused naming the later order", ok, True)
     check("nothing moved", (w.stock(), w.pool()), before)

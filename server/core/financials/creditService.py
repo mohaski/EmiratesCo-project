@@ -16,6 +16,8 @@ from config import nairobi_now
 def create_credit(credit_data: model.CreditCreateRequest, db: Session = Depends(get_session)) -> model.CreditCreateResponse:
     """Create a new credit entry in the database."""
     try:
+        from core.ordering.visibility import get_visible_order_or_404
+        get_visible_order_or_404(db, credit_data.orderId)  # never against an open sale window
         new_credit = Credit(
             orderId=credit_data.orderId,
             customerId=credit_data.customerId,
@@ -46,6 +48,8 @@ def create_credit(credit_data: model.CreditCreateRequest, db: Session = Depends(
 def update_credit(payedAmount: float, order_id: int, credit_data: model.CreditUpdate, db: Session = Depends(get_session)) -> model.CreditUpdateResponse:
     """Update an existing credit entry."""
     try:
+        from core.ordering.visibility import get_visible_order_or_404
+        get_visible_order_or_404(db, order_id)
         credit = db.exec(
             select(Credit).where(Credit.orderId == order_id)
         ).first()
@@ -142,6 +146,7 @@ def get_all_outstanding_credits(db: Session = Depends(get_session)) -> list[mode
                 model.OutstandingCreditItem(
                     creditId=credit.creditId,
                     orderId=credit.orderId,
+                    orderNo=order.order_no,
                     customerId=credit.customerId,
                     customerName=customer.name,
                     customerPhone=customer.phoneNumber,

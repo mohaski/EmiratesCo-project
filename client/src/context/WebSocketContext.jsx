@@ -12,7 +12,7 @@ const MAX_RETRY_MS = 30000;
 // Everything the server broadcasts. After a reconnect each is re-emitted once, so every
 // screen refetches whatever it may have missed while the socket was down.
 const ALL_EVENTS = ['orders_updated', 'invoices_updated', 'products_updated', 'attributes_updated',
-    'tools_updated', 'cutting_status_updated', 'failover_status_updated'];
+    'tools_updated', 'cutting_status_updated', 'failover_status_updated', 'windows_updated'];
 // Spread so a server restart doesn't have every till reconnect and refetch at once.
 const jitter = (ms, spread = 0.3) => Math.round(ms * (1 - spread + Math.random() * spread * 2));
 

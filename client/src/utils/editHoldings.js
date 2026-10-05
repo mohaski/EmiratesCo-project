@@ -7,15 +7,17 @@
  * 1 is left on the shelf was refused - and even reopening the item unchanged was.
  *
  * Only while editing a saved item (details._sourceItemId, set by SalesDashboard in edit mode)
- * and only for the same variant: a different variant's units don't come back into this one.
+ * or reopening a sale window's line (details._heldItemId, set by CartContext), and only for
+ * the same variant: a different variant's units don't come back into this one.
  *
  *   types        line types to count (e.g. ['profile-full']); omitted -> the item's own `qty`
  *                (Standard / Dynamic calculators, which have no typed lines)
  *   perLine(l)   units each line unit is worth (e.g. a box's pieces), default 1
  */
 export function heldByEditedItem(initialDetails, variantId, types = null, perLine = null) {
-    if (!initialDetails?._sourceItemId) return 0;
-    const saved = initialDetails._source || initialDetails;
+    // A saved order's item being edited, or a sale window's line (its stock is held already).
+    if (!initialDetails?._sourceItemId && !initialDetails?._heldItemId) return 0;
+    const saved = initialDetails._source || initialDetails._heldSource || initialDetails;
     if (String(saved.variantId ?? '') !== String(variantId ?? '')) return 0;
     if (!types) return Number(saved.qty) || 0;
     return (saved.lineItems || [])

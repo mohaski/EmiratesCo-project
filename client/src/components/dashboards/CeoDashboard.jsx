@@ -360,7 +360,7 @@ const CeoDashboard = () => {
                                     icon={meta.icon}
                                     color={meta.color}
                                     title={meta.label}
-                                    desc={`${a.edited_by} · #${a.entity_id}`}
+                                    desc={`${a.edited_by} · #${a.order_no ?? a.entity_id}`}
                                     time={timeAgo(a.edited_at)}
                                 />
                             );

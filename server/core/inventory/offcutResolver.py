@@ -105,10 +105,13 @@ def _describe_blocker(db: Session, piece: OffcutPiece) -> dict:
         item = db.get(OrderItem, item_id)
         order_id = item.order_id if item else None
 
-    customer_name = None
+    customer_name = order_no = None
+    in_window = False
     if order_id is not None:
         order = db.get(Order, order_id)
         customer_name = order.customer_name if order else None
+        order_no = order.order_no if order else None
+        in_window = order is not None and order.status == "held"
 
     if piece.geom_kind == "2d":
         size = f"{piece.width:.0f}x{piece.height:.0f}mm"
@@ -118,6 +121,8 @@ def _describe_blocker(db: Session, piece: OffcutPiece) -> dict:
     return {
         "piece_id": piece.piece_id,
         "order_id": order_id,
+        "order_no": order_no,
+        "in_window": in_window,   # held by an open sale window (no order number yet)
         "item_id": item_id,
         "customer_name": customer_name,
         "size": size,
@@ -266,7 +271,8 @@ def resolve_source(
         why = []
         if blockers:
             holders = ", ".join(
-                f"order #{b['order_id']}" + (f" ({b['customer_name']})" if b["customer_name"] else "")
+                ("an open sale (sale window)" if b.get("in_window") else f"order #{b.get('order_no') or b['order_id']}")
+                + (f" ({b['customer_name']})" if b["customer_name"] else "")
                 for b in blockers
             )
             why.append(f"committed to {holders}")
@@ -433,6 +439,8 @@ def later_cut_info(db: Session, consumed: OffcutPiece) -> dict:
     return {
         "item_id": item.item_id if item else consumed.consumed_by_item_id,
         "order_id": order_id,
+        "order_no": order.order_no if order else None,
+        "in_window": order is not None and order.status == "held",
         "customer_name": order.customer_name if order else None,
         "product_name": product.name if product else None,
         "cut": label,

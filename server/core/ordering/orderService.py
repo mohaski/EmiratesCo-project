@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from fastapi import Depends, HTTPException, Query
 from sqlmodel import Session, select, update
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from entities.orders import Order
@@ -21,7 +21,7 @@ from db.database import get_session
 from loggiing import logger
 from utils import require_role, ceil_amount
 from ..userManagement.authService import get_current_user
-from ..inventory.inventoryService import deduct_stock_for_order_item
+from ..inventory.inventoryService import deduct_stock_for_order_item, lock_stock_rows
 from core.audit.opContext import (
     current as current_op,
     operation,
@@ -38,6 +38,8 @@ from entities.opJournal import (
     OP_STATUS,
 )
 from . import model
+from .visibility import HIDDEN_STATUSES, visible_orders, get_visible_order_or_404, order_label
+from .orderNumbers import assign_order_no
 from core.financials.splitDetails import normalize_payment_details
 from typing import List, Optional
 from config import nairobi_now
@@ -88,6 +90,7 @@ def _order_to_response(order: Order) -> model.OrderResponse:
 
     return model.OrderResponse(
         orderId=order.orderId,
+        orderNo=order.order_no,
         customerId=order.customerid,
         customerName=customer_name,
         customerType=customer_type,
@@ -169,6 +172,7 @@ def _order_to_shallow_response(order: Order) -> model.OrderResponse:
 
     return model.OrderResponse(
         orderId=order.orderId,
+        orderNo=order.order_no,
         customerId=order.customerid,
         customerName=customer_name,
         customerType=customer_type,
@@ -311,6 +315,75 @@ def _calculate_complex_item_total(
 # Public API
 # ---------------------------------------------------------------------------
 
+def settle_new_sale(db: Session, order: Order, final_total: Decimal, amount_paid, payment_method,
+                    payment_details, current_user) -> None:
+    """The money side of a new sale - the ONE path both checkout (create_order) and a sale
+    window's confirm take, so their rules can never drift apart.
+
+    `final_total` is the server's own total. The amount paid is refused when negative or more
+    than KSH 1 over the total, rounded like every amount (ceil_amount) and capped at the total;
+    the balance under KSH 0.10 is forgiven. A known customer left owing gets a Credit row, and
+    money actually collected gets a Payment row carrying the same rounded amount (split
+    details checked by normalize_payment_details), so the payment rows and the order agree.
+    """
+    if (amount_paid or 0) < 0:
+        raise HTTPException(status_code=400, detail="The amount paid can't be negative.")
+    amount_paid_val = ceil_amount(Decimal(str(amount_paid or 0)))
+    # The server prices the order, so the amount is checked against ITS total — a
+    # payment above it would leave amountPayed > total and the excess on the books.
+    if amount_paid_val > final_total + Decimal("1"):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The amount paid (KSH {amount_paid_val:,.0f}) is more than the order total "
+                    f"(KSH {final_total:,.0f}). Prices may have changed — check the cart and try again."),
+        )
+    amount_paid_val = min(amount_paid_val, final_total)
+    raw_balance = final_total - amount_paid_val
+    new_balance = ceil_amount(raw_balance) if raw_balance > Decimal("0.10") else Decimal("0.00")
+
+    order.total = float(final_total)
+    order.balance = float(new_balance)
+    order.amountPayed = float(amount_paid_val)
+    # Same rule as the edit path and invoice conversion.
+    order.payment_status = (
+        "Paid" if new_balance <= Decimal("0.10")
+        else ("Partial" if amount_paid_val > 0 else "Unpaid")
+    )
+    db.add(order)
+
+    # Auto-create credit record when there is an outstanding balance for a known customer
+    if order.balance > 0.01 and order.customerid:
+        from entities.credits import Credit
+        credit_status = "Partially Paid" if amount_paid_val > 0 else "Pending"
+        db.add(Credit(
+            orderId=order.orderId,
+            customerId=order.customerid,
+            amount=float(final_total),
+            amount_due=float(order.balance),
+            status=credit_status,
+        ))
+        logger.info(
+            f"Credit record created for order {order.orderId}: "
+            f"amount={float(final_total):.2f}, due={float(order.balance):.2f}, status={credit_status}"
+        )
+
+    # Record payment when money was actually collected — the same rounded amount
+    # amountPayed holds, so the payment rows and the order always agree.
+    if amount_paid_val > 0:
+        from entities.payments import Payment
+        pay_method = (payment_method or "cash").lower()
+        if pay_method not in {"cash", "mpesa", "split", "number"}:
+            pay_method = "cash"
+        db.add(Payment(
+            orderId=order.orderId,
+            amount=float(amount_paid_val),
+            payment_method=pay_method,
+            reason="order",
+            payment_details=normalize_payment_details(pay_method, payment_details, float(amount_paid_val)),
+            recorded_by=current_user.userId,
+        ))
+
+
 @stock_operation(OP_SALE, order_arg=None)
 def create_order(order_data: model.OrderCreate, db: Session = Depends(get_session), current_user=Depends(get_current_user)) -> model.OrderCreateResponse:
     """
@@ -322,6 +395,9 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # 🔐 Ensure user has privilege to create
         require_role(["manager", "cashier", "ceo", "admin"], current_user)
 
+        # Held/abandoned belong to sale windows (windowService) and are never created here.
+        if order_data.status in HIDDEN_STATUSES:
+            raise HTTPException(status_code=422, detail=f"An order cannot be created as '{order_data.status}'")
         if (order_data.amountPaid or 0) < 0:
             raise HTTPException(status_code=400, detail="The amount paid can't be negative.")
         if (order_data.discount or 0) < 0:
@@ -363,6 +439,8 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # Pre-fetch Products and Variants for performance (N+1 fix)
         product_ids = [item.productId for item in order_data.items]
         variant_ids = [item.variantId for item in order_data.items if item.variantId]
+        # Before any item is inserted: one global lock order, or two checkouts deadlock.
+        lock_stock_rows(db, product_ids, variant_ids)
 
         products_cache = {}
         if product_ids:
@@ -415,29 +493,11 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         else:
             final_total = net_subtotal
 
-        amount_paid_val = ceil_amount(Decimal(str(order_data.amountPaid or 0)))
-        # The server prices the order, so the amount is checked against ITS total — a
-        # payment above it would leave amountPayed > total and the excess on the books.
-        if amount_paid_val > final_total + Decimal("1"):
-            raise HTTPException(
-                status_code=400,
-                detail=(f"The amount paid (KSH {amount_paid_val:,.0f}) is more than the order total "
-                        f"(KSH {final_total:,.0f}). Prices may have changed — check the cart and try again."),
-            )
-        amount_paid_val = min(amount_paid_val, final_total)
-        raw_balance = final_total - amount_paid_val
-        new_balance = ceil_amount(raw_balance) if raw_balance > Decimal("0.10") else Decimal("0.00")
-
         new_order.subtotal = float(net_subtotal)
         new_order.total = float(final_total)
-        new_order.balance = float(new_balance)
-        new_order.amountPayed = float(amount_paid_val)
-        # Same rule as the edit path and invoice conversion.
-        new_order.payment_status = (
-            "Paid" if new_balance <= Decimal("0.10")
-            else ("Partial" if amount_paid_val > 0 else "Unpaid")
-        )
-
+        # Money: shared with the sale-window confirm, so the two can never charge differently.
+        settle_new_sale(db, new_order, final_total, order_data.amountPaid, order_data.paymentMethod,
+                        order_data.paymentDetails, current_user)
         db.add(new_order)
 
         # Mark source invoice as converted in the same transaction
@@ -448,46 +508,15 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
             source_inv.converted_at = datetime.now(timezone.utc)
             db.add(source_inv)
 
-        # Auto-create credit record when there is an outstanding balance for a known customer
-        if new_order.balance > 0.01 and new_order.customerid:
-            from entities.credits import Credit
-            credit_status = "Partially Paid" if (order_data.amountPaid or 0) > 0 else "Pending"
-            new_credit = Credit(
-                orderId=new_order.orderId,
-                customerId=new_order.customerid,
-                amount=float(final_total),
-                amount_due=float(new_order.balance),
-                status=credit_status,
-            )
-            db.add(new_credit)
-            logger.info(
-                f"Credit record created for order {new_order.orderId}: "
-                f"amount={float(final_total):.2f}, due={float(new_order.balance):.2f}, status={credit_status}"
-            )
-
-        # Record payment when money was actually collected — the same rounded amount
-        # amountPayed holds, so the payment rows and the order always agree.
-        if amount_paid_val > 0:
-            from entities.payments import Payment
-            pay_method = (order_data.paymentMethod or "cash").lower()
-            if pay_method not in {"cash", "mpesa", "split", "number"}:
-                pay_method = "cash"
-            new_payment_rec = Payment(
-                orderId=new_order.orderId,
-                amount=float(amount_paid_val),
-                payment_method=pay_method,
-                reason="order",
-                payment_details=normalize_payment_details(pay_method, order_data.paymentDetails, float(amount_paid_val)),
-                recorded_by=current_user.userId,
-            )
-            db.add(new_payment_rec)
-
+        # Last, after every stock lock: the counter row serialises confirms (orderNumbers.py).
+        assign_order_no(db, new_order)
         db.commit()
 
-        logger.info(f"Order {new_order.orderId} created (Items: {len(order_data.items)}) by {current_user.userId}.")
+        logger.info(f"Order {new_order.orderId} (no. {new_order.order_no}) created (Items: {len(order_data.items)}) by {current_user.userId}.")
         return model.OrderCreateResponse(
             message="Order created successfully",
-            orderId=new_order.orderId
+            orderId=new_order.orderId,
+            orderNo=new_order.order_no,
         )
     except HTTPException:
         # Some refusals (the amount checks) come after stock was already deducted in
@@ -502,6 +531,15 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         logger.error(f"Error creating transactional order: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Something went wrong while creating the order. Please try again.")
     
+def get_order_by_number(order_no: int, db: Session) -> model.OrderResponse:
+    """An order by the number people know it by (orders.order_no - receipts, the order card),
+    which is not its internal id once sale windows have used ids up."""
+    order = db.exec(select(Order).where(Order.order_no == order_no, visible_orders())).first()
+    if order is None:
+        raise HTTPException(status_code=404, detail=f"No order number {order_no}")
+    return _order_to_response(order)
+
+
 def get_order_by_orderId(order_id: int, db: Session = Depends(get_session)) -> model.OrderResponse:
     """
     Retrieve an order by its ID.
@@ -509,10 +547,7 @@ def get_order_by_orderId(order_id: int, db: Session = Depends(get_session)) -> m
     - Raises 404 error if the order does not exist.
     """
     try:
-        order = db.get(Order, order_id)
-        if not order:
-            logger.warning(f"Order {order_id} not found.")
-            raise HTTPException(status_code=404, detail="Order not found")
+        order = get_visible_order_or_404(db, order_id)
         return _order_to_response(order)
     except HTTPException:
         raise
@@ -536,7 +571,8 @@ def get_orders_for_period_vatExcluded(
             .where(
                 Order.created_at >= start_date,
                 Order.created_at <= end_date,
-                Order.VAT_status == False
+                Order.VAT_status == False,
+                visible_orders(),
             )
             .offset(skip)
             .limit(limit)
@@ -570,7 +606,8 @@ def get_orders_for_period_vatIncluded(
             .where(
                 Order.created_at >= start_date,
                 Order.created_at <= end_date,
-                Order.VAT_status == True
+                Order.VAT_status == True,
+                visible_orders(),
             )
             .offset(skip)
             .limit(limit)
@@ -600,7 +637,7 @@ def get_orders_by_customerId(
     try:
         statement = (
             select(Order)
-            .where(Order.customerid == customer_id)
+            .where(Order.customerid == customer_id, visible_orders())
             .offset(skip)
             .limit(limit)
         )
@@ -629,7 +666,7 @@ def get_orders_by_servedby(
     try:
         statement = (
             select(Order)
-            .where(Order.servedby == user_id)
+            .where(Order.servedby == user_id, visible_orders())
             .offset(skip)
             .limit(limit)
         )
@@ -653,7 +690,8 @@ def get_orders_for_certain_day(date: str, db: Session = Depends(get_session)) ->
     try:
         statement = select(Order).where(
             Order.created_at >= f"{date} 00:00:00",
-            Order.created_at <= f"{date} 23:59:59"
+            Order.created_at <= f"{date} 23:59:59",
+            visible_orders(),
         )
         orders = db.exec(statement).all()
         return [_order_to_shallow_response(order) for order in orders]
@@ -669,7 +707,7 @@ def get_child_orders(parent_order_id: int, db: Session = Depends(get_session)) -
     - Returns a list of child orders for the given parent order.
     """
     try:
-        statement = select(Order).where(Order.parent_orderid == parent_order_id)
+        statement = select(Order).where(Order.parent_orderid == parent_order_id, visible_orders())
         orders = db.exec(statement).all()
         return [_order_to_shallow_response(order) for order in orders]
     except HTTPException:
@@ -687,12 +725,15 @@ def get_all_orders(
     """
     Retrieve all orders in the system with pagination, newest first.
     `search` narrows to orders whose customer name contains it (any age) — Order History
-    only loads the newest page, so a name search must reach older orders here.
+    only loads the newest page, so a name search must reach older orders here. A search that
+    is a number also matches that order NUMBER (orders.order_no, the one on the receipt).
     """
     try:
-        statement = select(Order)
+        statement = select(Order).where(visible_orders())
         if search and search.strip():
-            statement = statement.where(Order.customer_name.ilike(f"%{search.strip()}%"))
+            term = search.strip().lstrip("#")
+            by_name = Order.customer_name.ilike(f"%{search.strip()}%")
+            statement = statement.where(or_(by_name, Order.order_no == int(term)) if term.isdigit() else by_name)
         statement = statement.order_by(Order.created_at.desc()).offset(skip).limit(limit)
         orders = db.exec(statement).all()
 
@@ -711,7 +752,7 @@ def getAll_orders_VatIncluded(db: Session = Depends(get_session)) -> list[model.
     - Returns a list of VAT-included orders.
     """
     try:
-        statement = select(Order).where(Order.VAT_status == True)
+        statement = select(Order).where(Order.VAT_status == True, visible_orders())
         orders = db.exec(statement).all()
 
         return [_order_to_shallow_response(order) for order in orders]
@@ -1036,7 +1077,7 @@ def _assert_cart_is_this_orders(db: Session, order_id: int, item_requests) -> No
         other = sorted({row[1] for row in foreign})
         raise HTTPException(
             status_code=409,
-            detail=(f"This cart holds items from order #{', #'.join(map(str, other))}, not order #{order_id}. "
+            detail=(f"This cart holds items from {', '.join(order_label(db, o) for o in other)}, not {order_label(db, order_id)}. "
                     "Discard the edit and open the order you want to change again."),
         )
 
@@ -1182,7 +1223,7 @@ def apply_order_edit(
     # Locked for the rest of the transaction: two saves of the same order are serialised, so
     # the version check below can't let both through.
     order = db.exec(select(Order).where(Order.orderId == order_id).with_for_update()).first()
-    if not order:
+    if not order or order.status in HIDDEN_STATUSES:
         raise HTTPException(status_code=404, detail="Order not found")
     running = current_op()
     if getattr(order_data, "orderVersion", None) is not None and order_data.orderVersion != order_version(
@@ -1191,7 +1232,7 @@ def apply_order_edit(
         # here (another device's edit, a cancel, an undo). Refused; the cashier reopens it.
         raise HTTPException(
             status_code=409,
-            detail=(f"Order #{order_id} was changed on another device after you opened it here. "
+            detail=(f"{order_label(db, order_id).capitalize()} was changed on another device after you opened it here. "
                     "Nothing was saved - reopen the order from Order History and make your change again."),
         )
     # A finished or cancelled order is off limits. This blocked every CUT order too until
@@ -1213,6 +1254,9 @@ def apply_order_edit(
     # edit actually disturbs.
     _assert_cart_is_this_orders(db, order_id, order_data.items)
     existing_items = db.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all()
+    # Before any item is reversed or inserted: the global lock order (inventoryService.lock_stock_rows).
+    lock_stock_rows(db, [i.product_id for i in existing_items] + [r.productId for r in order_data.items],
+                    [i.variant_id for i in existing_items] + [r.variantId for r in order_data.items])
     reused_items, reversing_items, unmatched_requests = _match_items(existing_items, order_data.items)
     reversing_item_ids = {oi.item_id for oi in reversing_items}
 
@@ -1539,9 +1583,7 @@ def _correction_target(order_id: int, item_id: int, line_idx: int, event_idx: in
 
     require_role(["manager", "ceo", "admin"], current_user)
 
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    order = get_visible_order_or_404(db, order_id)
     if order.status == "cancelled":
         raise HTTPException(
             status_code=400,
@@ -1944,7 +1986,7 @@ def mark_cutting_complete_batch(item_ids: list, db: Session, current_user) -> di
     items = db.exec(
         select(OrderItem).join(Order, Order.orderId == OrderItem.order_id)
         .where(OrderItem.item_id.in_(item_ids), OrderItem.cutting_completed == False,  # noqa: E712
-               Order.status != "cancelled")
+               Order.status != "cancelled", visible_orders())
     ).all()
     now = nairobi_now()
     updated = []
@@ -1982,7 +2024,7 @@ def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current
 
     # A cancelled order is skipped: it may have been cancelled while the queue was open, and
     # flagging its items "cut" would mislead any later reversal.
-    orders = db.exec(select(Order).where(Order.orderId.in_(order_ids), Order.status != "cancelled")).all()
+    orders = db.exec(select(Order).where(Order.orderId.in_(order_ids), Order.status != "cancelled", visible_orders())).all()
     shown = set(item_ids) if item_ids is not None else None
     now = nairobi_now()
     updated_items = []
@@ -2003,9 +2045,7 @@ def mark_cutting_complete_for_orders_batch(order_ids: list, db: Session, current
 def mark_cutting_complete_for_order(order_id: int, db: Session, current_user) -> dict:
     """Single-order convenience wrapper around mark_cutting_complete_for_orders_batch
     (e.g. the cashier reporting "this order's been cut" from the order summary page)."""
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    get_visible_order_or_404(db, order_id)
     result = mark_cutting_complete_for_orders_batch([order_id], db, current_user)
     return {"updated": result["updated_items"]}
 
@@ -2023,7 +2063,8 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
     stmt = (
         select(Order)
         .join(OrderItem, OrderItem.order_id == Order.orderId)
-        .where(OrderItem.cutting_completed == False, Order.status != "cancelled")  # noqa: E712
+        # visible_orders(): an open sale window is not cut before it is paid for.
+        .where(OrderItem.cutting_completed == False, Order.status != "cancelled", visible_orders())  # noqa: E712
         .distinct()
         .order_by(Order.created_at.asc())
         .offset(skip).limit(limit)
@@ -2034,6 +2075,7 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
         pending_items = [oi for oi in order.orderItems if not oi.cutting_completed]
         results.append({
             "orderId": order.orderId,
+            "orderNo": order.order_no,
             "customerName": order.customer_name,
             "items": [
                 {"itemId": oi.item_id, "productName": oi.product.name, "details": oi.details}
@@ -2041,6 +2083,10 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
             ],
         })
     return results
+
+
+ORDER_ENTITY_TYPES = {"order", "order_undo", "offcut_correction", "profile_offcut_correction",
+                      "order_status", "order_cancellation", "cutting_report"}
 
 
 def get_audit_history(
@@ -2079,11 +2125,22 @@ def get_audit_history(
             usernames[uid] = user.username if user else str(uid)
         return usernames[uid]
 
+    # Entity types whose entity_id is an order's internal id: shown to people by its number.
+    order_nos: dict = {}
+    def _order_no(r):
+        if r.entity_type not in ORDER_ENTITY_TYPES:
+            return None
+        if r.entity_id not in order_nos:
+            order = db.get(Order, r.entity_id)
+            order_nos[r.entity_id] = order.order_no if order else None
+        return order_nos[r.entity_id]
+
     return [
         model.EditHistoryResponse(
             id=r.id,
             entity_type=r.entity_type,
             entity_id=r.entity_id,
+            order_no=_order_no(r),
             edited_by=_username(r.edited_by),
             edited_at=r.edited_at.isoformat(),
             action=r.action,
@@ -2100,7 +2157,7 @@ def get_orders_with_balance(db: Session, skip: int = 0, limit: int = 200) -> lis
     try:
         statement = (
             select(Order)
-            .where(Order.balance > 0.01, Order.status != "cancelled")
+            .where(Order.balance > 0.01, Order.status != "cancelled", visible_orders())
             .order_by(Order.created_at.asc())
             .offset(skip)
             .limit(limit)
@@ -2210,9 +2267,7 @@ def get_reversal_plan(order_id: int, db: Session, current_user, incoming_items=N
 
     require_role(["manager", "ceo", "admin"], current_user)
 
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    order = get_visible_order_or_404(db, order_id)
 
     # Given the cart an edit is about to submit, narrow the question to the items that edit
     # will actually disturb — matched exactly the way update_order will match them, so the
@@ -2253,9 +2308,9 @@ def update_order_status(
                 detail="Cancelling an order requires the cancel PIN — use PUT /orders/{id}/cancel instead.",
             )
 
-        order = db.get(Order, order_id)
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+        if new_status in HIDDEN_STATUSES:
+            raise HTTPException(status_code=400, detail=f"An order cannot be set to '{new_status}'.")
+        order = get_visible_order_or_404(db, order_id)
 
         old_status = order.status
         order.status = new_status
@@ -2277,7 +2332,7 @@ def update_order_status(
 
         logger.info(f"Order {order_id} workflow status updated to {new_status} by {current_user.userId}.")
         return model.OrderStatusUpdateResponse(
-            message=f"Order {order_id} status updated to {new_status}."
+            message=f"{order_label(db, order_id).capitalize()} status updated to {new_status}."
         )
     except HTTPException:
         raise
@@ -2334,7 +2389,7 @@ def cancel_order_with_pin(
         raise HTTPException(status_code=500, detail="Internal server error")
 
     logger.info(f"Order {order_id} cancelled (PIN-verified) by {current_user.userId}.")
-    return model.OrderStatusUpdateResponse(message=f"Order {order_id} cancelled.")
+    return model.OrderStatusUpdateResponse(message=f"{order_label(db, order_id).capitalize()} cancelled.")
 
 
 def apply_cancel(
@@ -2364,9 +2419,7 @@ def apply_cancel(
     """
     from core.inventory import reversalPlan
 
-    order = db.get(Order, order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    order = get_visible_order_or_404(db, order_id)
     if enforce_window and order.status != "cancelled" and _order_age(db, order) > CANCEL_WINDOW:
         raise HTTPException(status_code=400, detail="This order is more than a week old and can no longer be cancelled.")
     if (expected_refund is not None and order.status != "cancelled"
@@ -2456,7 +2509,7 @@ def projected_offcuts(order_id: int, item_id: int, answers: Optional[dict], vari
     require_role(["manager", "ceo", "admin"], current_user)
     order = db.get(Order, order_id)
     item = db.get(OrderItem, item_id)
-    if order is None or item is None or item.order_id != order_id:
+    if order is None or order.status in HIDDEN_STATUSES or item is None or item.order_id != order_id:
         raise HTTPException(status_code=404, detail="Order item not found on this order")
 
     variant_id = variant_id or item.variant_id

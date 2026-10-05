@@ -443,9 +443,11 @@ def profile_candidates(db: Session, product: Product, variant: Optional[Variant]
                        original_rows: Optional[list] = None, exclude_row: Optional[int] = None) -> dict:
     """Offcuts long enough for `length` (one piece supplies a corrected cut), and bar stock."""
     originals = {rid: k for k, rid in enumerate(original_rows or []) if rid}
+    from core.inventory import holdScope
     rows = db.exec(select(Offcut).where(
         Offcut.product_id == product.productId, Offcut.pool_key == compute_pool_key(db, variant),
         Offcut.status == "available", Offcut.quantity > 0, Offcut.length >= length - 0.001,
+        holdScope.visible_to_scope(),  # never an open sale window's private remainder
     ).order_by(Offcut.length.asc())).all()
     offcuts = [{"offcutId": r.offcutId, "length": r.length, "quantity": r.quantity, "original": originals.get(r.offcutId)}
                for r in rows if r.offcutId != exclude_row and (r.width is None or r.width == 0)]

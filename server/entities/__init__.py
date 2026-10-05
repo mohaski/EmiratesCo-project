@@ -17,6 +17,7 @@ from .settings import SystemSetting
 from .tools import Tool, ToolLoan, ToolLoanItem
 from .stockInputSession import StockInputSession, StockInputSessionItem
 from .opJournal import StockOperation, JournalEntry, StockBaseline
+from .saleWindows import SaleWindow, OrderNumberCounter
 
 __all__ = [
     "User",
@@ -46,6 +47,8 @@ __all__ = [
     "StockOperation",
     "JournalEntry",
     "StockBaseline",
+    "SaleWindow",
+    "OrderNumberCounter",
 ]
 
 # Registers the after_flush hook that journals every stock-affecting row change. Imported

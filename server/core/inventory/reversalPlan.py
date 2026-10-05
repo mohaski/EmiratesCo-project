@@ -158,6 +158,8 @@ def _piece_summary(piece: OffcutPiece, db: Session) -> dict:
         order = db.get(Order, piece.consumed_by_order_id)
         holder = {
             "order_id": piece.consumed_by_order_id,
+            "order_no": order.order_no if order else None,
+            "in_window": order is not None and order.status == "held",
             "customer_name": order.customer_name if order else None,
         }
     return {
@@ -626,6 +628,7 @@ def build_plan(db: Session, order: Order, reversing_item_ids=None) -> dict:
 
     plan = {
         "order_id": order.orderId,
+        "order_no": order.order_no,   # the number people know the order by
         "order_status": order.status,
         "has_cut_lines": bool(lines),
         # True when every line could be applied from its prefilled default. ADVISORY ONLY:
@@ -747,10 +750,10 @@ def validate_decisions(plan: dict, submitted: Optional[dict], *, lenient: bool =
                     if lenient:
                         lc_state = PHYS_NOT_CUT
                     else:
-                        missing.append(f"order #{lc.get('order_id')}'s {lc.get('cut')} cut from the same material")
+                        missing.append(f"{_lc_label(lc)}'s {lc.get('cut')} cut from the same material")
                         continue
             if lc_state not in (PHYS_NOT_CUT, PHYS_ALREADY_CUT):
-                raise ValueError(f"Unknown cut status '{lc_state}' for order #{lc.get('order_id')}'s cut.")
+                raise ValueError(f"Unknown cut status '{lc_state}' for {_lc_label(lc)}'s cut.")
             later_answers[lc["item_id"]] = lc_state
 
         by_line[(line["item_id"], line["line_idx"])] = {
@@ -800,6 +803,16 @@ def decisions_summary(plan: dict, decisions: ReversalDecisions) -> list:
     return out
 
 
+from core.ordering.visibility import order_label  # noqa: E402
+
+
+def _lc_label(lc: dict) -> str:
+    """A later cut's order as people know it (offcutResolver.later_cut_info)."""
+    if lc.get("in_window"):
+        return "an open sale (sale window)"
+    return f"order #{lc.get('order_no') or lc.get('order_id')}"
+
+
 def apply_later_cut_answers(db: Session, plan: Optional[dict], decisions, order_id: int) -> list:
     """Act on the operator's answers about LATER cuts from the same bar/sheet: a cut confirmed
     made is marked cut on that other order, so its item leaves the cutting queue instead of
@@ -835,7 +848,8 @@ def apply_later_cut_answers(db: Session, plan: Optional[dict], decisions, order_
                 before_snapshot={"item_id": later_item.item_id, "cutting_completed": False},
                 after_snapshot={"item_id": later_item.item_id, "cutting_completed": True,
                                 "confirmed_during_order": order_id,
+                                "confirmed_during_order_no": getattr(db.get(Order, order_id), "order_no", None),
                                 "op_id": op.op_id if op else None},
-                notes=f"Confirmed cut while order #{order_id} was being changed",
+                notes=f"Confirmed cut while {order_label(db, order_id)} was being changed",
             ))
     return marked

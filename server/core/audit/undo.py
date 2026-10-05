@@ -158,6 +158,12 @@ def _describe_piece(p: Optional[OffcutPiece]) -> str:
     return f"the {p.length:.2f} piece"
 
 
+def _order_number(db: Session, order_id: int):
+    """The number people know an order by (orders.order_no); its internal id only if it has none."""
+    order = db.get(Order, order_id)
+    return order.order_no if order is not None and order.order_no is not None else order_id
+
+
 def _op_label(db: Session, op_id: Optional[str]) -> str:
     if not op_id:
         return "a change made outside any recorded operation"
@@ -167,8 +173,10 @@ def _op_label(db: Session, op_id: Optional[str]) -> str:
     what = {"sale": "a sale", OP_EDIT: "an edit", OP_CANCEL: "a cancellation",
             "cut_correction": "a cutting correction", OP_CUTTING_REPORT: "a cutting report",
             "offcut_admin": "Offcut Management", "stock_session": "Stock Control",
-            OP_UNDO: "an undo"}.get(op.kind, op.kind)
-    order = f" on order #{op.order_id}" if op.order_id else ""
+            OP_UNDO: "an undo", "window_cart": "a sale being built in a sale window",
+            "window_release": "a sale window being closed", "window_expire": "a sale window expiring",
+            }.get(op.kind, op.kind)
+    order = f" on order #{_order_number(db, op.order_id)}" if op.order_id and not op.kind.startswith("window_") else ""
     who = f" by {op.actor_name}" if op.actor_name else ""
     return f"{what}{order}{who}"
 
@@ -192,6 +200,10 @@ def analyse(db: Session, op_id: str) -> dict:
         reasons.append("Only order edits and cancellations can be undone here.")
     if op.status != STATUS_APPLIED:
         reasons.append("This change has already been undone.")
+    if op.order_id is not None:
+        from core.ordering.visibility import is_hidden
+        if is_hidden(db.get(Order, op.order_id)):
+            reasons.append("This change belongs to a sale that was never completed (a sale window).")
 
     entries = _entries(db, op_id)
     if not entries and op.kind in UNDOABLE_KINDS:
@@ -213,7 +225,7 @@ def analyse(db: Session, op_id: str) -> dict:
             if _is_neutral_undo(db, later, op):
                 neutral.add(later.op_id)
                 continue
-            reasons.append(f"Order #{op.order_id} was changed again afterwards ({_op_label(db, later.op_id)}) - undo that first.")
+            reasons.append(f"Order #{_order_number(db, op.order_id)} was changed again afterwards ({_op_label(db, later.op_id)}) - undo that first.")
 
     exclude = {op_id} | neutral
     for key, rec in rows.items():
@@ -236,7 +248,7 @@ def analyse(db: Session, op_id: str) -> dict:
             for e in later:
                 cols |= set((e.after or {}).keys()) if e.action == "update" else {"*"}
             if "status" in cols or "*" in cols:
-                reasons.append(f"Order #{key[1]}'s status changed afterwards ({_op_label(db, later[0].op_id)}).")
+                reasons.append(f"Order #{_order_number(db, int(key[1]))}'s status changed afterwards ({_op_label(db, later[0].op_id)}).")
         elif table == "open_containers":
             cols = set()
             for e in later:

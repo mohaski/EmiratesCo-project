@@ -91,7 +91,7 @@ export default function ReceiptPage() {
     const location = useLocation();
     const navigate = useNavigate();
 
-    const { orderId, cartItems, customer, categories, mode } = location.state || {};
+    const { orderId, orderNo, cartItems, customer, categories, mode } = location.state || {};
 
     const [orderDetail, setOrderDetail] = useState(null);
     const [loadError, setLoadError] = useState(null);
@@ -105,10 +105,12 @@ export default function ReceiptPage() {
         return () => { cancelled = true; };
     }, [orderId]);
 
+    // The printed number is the gap-free order number (orders.order_no), not the internal id:
+    // from the confirm response for a new sale, else from the loaded order.
     const receiptMeta = useMemo(() => ({
-        number: orderId,
+        number: orderNo ?? orderDetail?.orderNo ?? orderId,
         date: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
-    }), [orderId]);
+    }), [orderId, orderNo, orderDetail?.orderNo]);
 
     // Merge the pre-submit cart snapshot (names, categories, display breakdown) with the
     // authoritative post-submit order (offcut_sources), matched positionally — one OrderItem

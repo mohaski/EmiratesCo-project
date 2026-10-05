@@ -38,7 +38,13 @@ def _op_or_404(db: Session, op_id: str) -> StockOperation:
 
 def list_order_operations(order_id: int, db: Session, current_user) -> list:
     require_role(UNDO_ROLES, current_user)
-    ops = db.exec(select(StockOperation).where(StockOperation.order_id == order_id)
+    from core.ordering.visibility import get_visible_order_or_404
+    get_visible_order_or_404(db, order_id)  # an open sale window is not an order
+    from entities.opJournal import WINDOW_KINDS
+    # A confirmed sale-window order's history starts at its sale: building the cart in the
+    # window (window_cart) happened before it was an order.
+    ops = db.exec(select(StockOperation).where(StockOperation.order_id == order_id,
+                                               StockOperation.kind.notin_(WINDOW_KINDS))
                   .order_by(StockOperation.created_at.desc())).all()
     out = []
     for op in ops:
@@ -120,6 +126,9 @@ def correction_plan(op_id: str, db: Session, current_user) -> dict:
         undo_engine.undo_operation(db, op_id, actor=current_user, reason="preview")
         db.flush()
         order = db.get(Order, target.order_id)
+        from core.ordering.visibility import is_hidden
+        if order is None or is_hidden(order):
+            raise HTTPException(status_code=404, detail="Order not found")
         reversing = None
         if target.kind == "edit":
             req = model.OrderEditRequest(**(target.request or {}))

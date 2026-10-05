@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ROUTE_ROLES } from './config/routePermissions';
 import { CartProvider } from './context/CartContext';
+import { WindowProvider } from './context/WindowContext';
 import { OrderProvider } from './context/OrderContext';
 import { ProductProvider } from './context/ProductContext';
 import { AttributeProvider } from './context/AttributeContext';
@@ -75,6 +76,7 @@ function App() {
       <ProductProvider>
       <AttributeProvider>
         <OrderProvider>
+          <WindowProvider>
           <CartProvider>
             <Router>
               <Suspense fallback={<PageLoader />}>
@@ -119,6 +121,7 @@ function App() {
               </Suspense>
             </Router>
           </CartProvider>
+          </WindowProvider>
         </OrderProvider>
       </AttributeProvider>
       </ProductProvider>

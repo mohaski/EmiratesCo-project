@@ -244,10 +244,13 @@ async def bulk_delete_offcuts(
 def get_product_offcuts(
     product_id: int,
     variant_id: Optional[int] = Query(None, description="Filter by variant ID"),
+    hold_order_id: Optional[int] = Query(None, description="Your open sale window's order id: include its held remainders"),
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
-    return service.get_offcuts_for_product(product_id, db, variant_id)
+    from core.ordering.windowService import require_own_held_order
+    hold_order_id = require_own_held_order(db, hold_order_id, current_user)
+    return service.get_offcuts_for_product(product_id, db, variant_id, hold_order_id)
 
 @router.post("/{product_id}/offcuts/bulk", response_model=List[model.OffcutResponse])
 async def add_product_offcuts_bulk(
@@ -275,10 +278,13 @@ def preview_glass_cuts(
     same scoring/batching as a real sale, but nothing is persisted. Lets a cashier
     or manager check the optimization before committing to an order.
     """
+    from core.ordering.windowService import require_own_held_order
+    hold_order_id = require_own_held_order(db, payload.hold_order_id, current_user)
     return service.preview_glass_cuts(product_id, payload.cuts, db, payload.variant_id,
                                       edit_order_id=payload.edit_order_id,
                                       edit_item_id=payload.edit_item_id,
-                                      edit_answers=payload.edit_answers)
+                                      edit_answers=payload.edit_answers,
+                                      hold_order_id=hold_order_id)
 
 @router.post("/{product_id}/offcut-replacement-preview")
 def preview_offcut_replacement(

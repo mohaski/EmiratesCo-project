@@ -150,7 +150,7 @@ export default function DebtOrderDetailPage() {
                         marginBottom: '0.5rem', padding: 0,
                     }}>← Back to Debt Management</button>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-                        <h1 style={{ fontSize: 'clamp(1.1rem, 4vw, 1.375rem)', fontWeight: 800, color: '#f1f5f9', margin: 0, letterSpacing: '-0.025em' }}>Order {order.orderId}</h1>
+                        <h1 style={{ fontSize: 'clamp(1.1rem, 4vw, 1.375rem)', fontWeight: 800, color: '#f1f5f9', margin: 0, letterSpacing: '-0.025em' }}>Order {order.orderNo ?? order.orderId}</h1>
                         <span style={{
                             fontSize: '0.65rem', fontWeight: 700, padding: '2px 10px', borderRadius: '100px',
                             background: statusColor.bg, border: `1px solid ${statusColor.border}`, color: statusColor.text,

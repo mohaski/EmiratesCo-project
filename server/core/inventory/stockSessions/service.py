@@ -54,10 +54,11 @@ def _apply_restock_line(db: Session, session_id: int, line: "model.StockInputLin
     quantity_change = line.entered_quantity * line.conversion_factor
 
     if line.variant_id is not None:
-        variant = db.get(Variant, line.variant_id)
+        # Locked and re-read: a sale window may have changed this stock since it was loaded.
+        variant = db.get(Variant, line.variant_id, with_for_update=True, populate_existing=True)
         if not variant or variant.product_id != line.product_id:
             raise HTTPException(status_code=404, detail=f"Variant {line.variant_id} not found for product {line.product_id}")
-        product = db.get(Product, line.product_id)
+        product = db.get(Product, line.product_id, with_for_update=True, populate_existing=True)
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
 
@@ -72,7 +73,7 @@ def _apply_restock_line(db: Session, session_id: int, line: "model.StockInputLin
         variant_name = variant.name or ""
         product_name = product.name
     else:
-        product = db.get(Product, line.product_id)
+        product = db.get(Product, line.product_id, with_for_update=True, populate_existing=True)
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         if product.has_variants:
@@ -190,6 +191,16 @@ def finalize_stock_input_session(
         )
         db.add(session)
         db.flush()
+
+        # Every stock row this batch writes, locked up front in ascending id order (variants,
+        # then products) - the order sale windows lock in - so the two queue instead of
+        # deadlocking, and no line can read a stock figure a window is about to change.
+        v_ids = sorted({l.variant_id for l in payload.stock_lines if l.variant_id is not None})
+        p_ids = sorted({l.product_id for l in payload.stock_lines})
+        if v_ids:
+            db.exec(select(Variant).where(Variant.variantId.in_(v_ids)).order_by(Variant.variantId).with_for_update()).all()
+        if p_ids:
+            db.exec(select(Product).where(Product.productId.in_(p_ids)).order_by(Product.productId).with_for_update()).all()
 
         created_items: List[StockInputSessionItem] = []
         for line in payload.stock_lines:
@@ -324,7 +335,7 @@ def correct_stock_input_session_item(
         diff = new_delta - old_delta
 
         if item.variant_id is not None:
-            variant = db.get(Variant, item.variant_id)
+            variant = db.get(Variant, item.variant_id, with_for_update=True, populate_existing=True)
             if not variant:
                 raise HTTPException(status_code=404, detail="Variant no longer exists")
             new_variant_stock = variant.stock_quantity + diff
@@ -332,12 +343,12 @@ def correct_stock_input_session_item(
                 raise HTTPException(status_code=400, detail="Correction would drive stock negative")
             variant.stock_quantity = new_variant_stock
             db.add(variant)
-            product = db.get(Product, item.product_id)
+            product = db.get(Product, item.product_id, with_for_update=True, populate_existing=True)
             if product:
                 product.stock_quantity = (product.stock_quantity or 0) + diff
                 db.add(product)
         else:
-            product = db.get(Product, item.product_id)
+            product = db.get(Product, item.product_id, with_for_update=True, populate_existing=True)
             if not product:
                 raise HTTPException(status_code=404, detail="Product no longer exists")
             new_product_stock = (product.stock_quantity or 0) + diff

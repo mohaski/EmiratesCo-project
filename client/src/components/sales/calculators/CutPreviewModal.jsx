@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../../../services/api';
 import { extractErrorMessage } from '../../../utils/toast';
+import { useCart } from '../../../context/CartContext';
 
 /**
  * Dry-run preview of how the 2D glass offcut engine would cut the current cart's
@@ -23,13 +24,17 @@ export default function CutPreviewModal({ productId, variantId, cutPieces, edit 
     const [optimization, setOptimization] = useState(null); // multi-strategy search summary
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    // In a sale window the preview may also use the window's own held leftovers.
+    const { holdOrderId } = useCart();
 
     useEffect(() => {
         let cancelled = false;
         setLoading(true);
         setError('');
         const cuts = cutPieces.map(c => ({ l: c.l, w: c.w, qty: c.q, u: c.u, ...(c.sourcePref ? { source_pref: c.sourcePref } : {}) }));
-        api.productService.previewGlassCuts(productId, variantId, cuts, editKey ? JSON.parse(editKey) : null)
+        // An edit of a saved order previews with that item's material given back; a sale
+        // window previews in its own scope, so its private remainders count.
+        api.productService.previewGlassCuts(productId, variantId, cuts, editKey ? JSON.parse(editKey) : null, holdOrderId)
             .then(response => {
                 if (cancelled) return;
                 setGroups(response.groups);
@@ -41,7 +46,7 @@ export default function CutPreviewModal({ productId, variantId, cutPieces, edit 
             })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [productId, variantId, cutPieces, editKey]);
+    }, [productId, variantId, cutPieces, editKey, holdOrderId]);
 
     return (
         <div style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>

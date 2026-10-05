@@ -197,9 +197,15 @@ export const ProductProvider = ({ children }) => {
         }
     }, [user, initializeData]);
 
-    // Re-fetch whenever another client (or tab) mutates products
+    // Re-fetch whenever another client (or tab) mutates products. Batched: with sale windows
+    // every cart change on any till broadcasts this, and a burst of them is one refetch.
     useEffect(() => {
-        return wsEvents.on('products_updated', refreshProducts);
+        let timer = null;
+        const off = wsEvents.on('products_updated', () => {
+            clearTimeout(timer);
+            timer = setTimeout(refreshProducts, 300);
+        });
+        return () => { off(); clearTimeout(timer); };
     }, [refreshProducts]);
 
     // --- Actions ---

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../../../services/api';
+import { useCart } from '../../../context/CartContext';
 
 /**
  * Lets the cashier pick which existing offcuts fulfill a custom cut, before
@@ -30,6 +31,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
     const [offcuts, setOffcuts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const { windowMode, holdOrderId } = useCart();
 
     // Selection state: { [offcutId]: lengthUsed (string) }
     const [selected, setSelected] = useState(() => {
@@ -44,8 +46,12 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
 
     // How many units of each offcut are already spoken for by other cart lines
     // (each offcut_selection entry consumes exactly one unit of that offcut).
+    //
+    // Not in a sale window: there the other lines' picks are already TAKEN on the server, so
+    // the listing no longer contains them — subtracting them again would hide real pieces.
     const claimedElsewhere = useMemo(() => {
         const claims = {};
+        if (windowMode) return claims;
         cart.forEach((item, idx) => {
             if (idx === cartIndex) return;
             (item.details?.lineItems || []).forEach(line => {
@@ -55,12 +61,27 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
             });
         });
         return claims;
-    }, [cart, cartIndex]);
+    }, [cart, cartIndex, windowMode]);
+
+    // Re-editing a line in a sale window: the offcuts this very line cut from are held by the
+    // window, so the listing doesn't show them. They come back to it when the cart is saved
+    // (the server re-resolves the whole window), so offer them again — under the ids the
+    // server will follow them by.
+    const ownSources = useMemo(() => {
+        if (!windowMode || cartIndex === null || !cart[cartIndex]) return [];
+        return (cart[cartIndex].details?.lineItems || [])
+            .flatMap(line => line.offcut_sources || [])
+            .filter(src => src.source === 'offcut' && src.offcut_id)
+            .map(src => ({ offcutId: src.offcut_id, length: src.offcut_length, quantity: 1, status: 'available' }));
+    }, [windowMode, cart, cartIndex]);
 
     useEffect(() => {
         let cancelled = false;
         setLoading(true);
         const proj = projectionKey ? JSON.parse(projectionKey) : null;
+        // Editing a saved order: what the pool will hold once this item's material is given
+        // back. A sale window: the public pool plus the window's own held remainders, and
+        // this line's own sources (held by the window, so not listed) offered again.
         const load = proj
             ? api.orderService.projectedOffcuts(proj.orderId, proj.itemId, proj.answers, variantId).then(res =>
                 (res.offcuts || []).map(r => ({
@@ -69,7 +90,14 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                     offcutId: r.returned?.length ? `ref:${r.returned[0].ref}` : r.offcutId,
                     realOffcutId: r.offcutId,
                 })))
-            : api.productService.getOffcuts(productId, variantId);
+            : api.productService.getOffcuts(productId, variantId, holdOrderId).then(data => {
+                const listed = [...(data || [])];
+                ownSources.forEach(src => {
+                    const same = listed.find(oc => oc.offcutId === src.offcutId);
+                    if (same) same.quantity += 1; else listed.push(src);
+                });
+                return listed;
+            });
         load
             .then(data => {
                 if (cancelled) return;
@@ -83,7 +111,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
             .catch(() => { if (!cancelled) setError('Failed to load offcuts — please try again.'); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [productId, variantId, claimedElsewhere, projectionKey]);
+    }, [productId, variantId, claimedElsewhere, projectionKey, holdOrderId, ownSources]);
 
     const toggle = (oc) => {
         setSelected(prev => {

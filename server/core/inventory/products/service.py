@@ -661,6 +661,7 @@ def get_offcuts_for_product(
     product_id: int,
     db: Session,
     variant_id: Optional[int] = None,
+    hold_order_id: Optional[int] = None,
 ):
     """Return all available (non-scrap) offcut pieces for a product, largest first.
     `variant_id`, when given, scopes to that variant's whole pool (every variant
@@ -673,7 +674,11 @@ def get_offcuts_for_product(
 
     stmt = (
         select(Offcut)
-        .where(Offcut.product_id == product_id, Offcut.quantity > 0, Offcut.status == "available")
+        .where(Offcut.product_id == product_id, Offcut.quantity > 0, Offcut.status == "available",
+               # Public pieces, plus the asking sale window's own held remainders
+               # (core/inventory/holdScope.py). The caller has checked it owns that window.
+               or_(Offcut.held_by_order_id.is_(None), Offcut.held_by_order_id == hold_order_id)
+               if hold_order_id else Offcut.held_by_order_id.is_(None))
         .order_by(Offcut.length.desc(), (Offcut.width * Offcut.height).desc())
     )
     if variant_id is not None:
@@ -801,6 +806,10 @@ def list_all_offcuts(
         .join(Product, col(Offcut.product_id) == col(Product.productId))
         .join(Variant, col(Offcut.variant_id) == col(Variant.variantId), isouter=True)
         .where(Product.track_offcuts == True)  # noqa: E712 - SQLAlchemy needs ==, not `is`
+        # A remainder held by an open sale window is not in the yard yet (its bar hasn't
+        # been cut) and can't be edited out from under that window; it appears here once
+        # the window closes.
+        .where(Offcut.held_by_order_id.is_(None))
         .order_by(col(Product.name), col(Offcut.offcutId).desc())
     )
 
@@ -852,6 +861,8 @@ def update_offcut_admin(
     offcut = db.get(Offcut, offcut_id)
     if not offcut:
         raise HTTPException(status_code=404, detail="Offcut not found")
+    if offcut.held_by_order_id is not None:
+        raise HTTPException(status_code=409, detail="This offcut is being held by an open sale window - try again once it closes")
     product = db.get(Product, offcut.product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -971,6 +982,8 @@ def bulk_delete_offcuts(
         offcut = db.get(Offcut, offcut_id)
         if not offcut:
             raise HTTPException(status_code=404, detail=f"Offcut {offcut_id} no longer exists - refresh and try again")
+        if offcut.held_by_order_id is not None:
+            raise HTTPException(status_code=409, detail=f"Offcut {offcut_id} is being held by an open sale window - try again once it closes")
         offcuts.append(offcut)
 
     try:
@@ -1108,9 +1121,13 @@ def preview_glass_cuts(
     cuts: List["model.GlassCutPreviewCut"],
     db: Session,
     variant_id: Optional[int] = None,
+    *,
+    # Keyword-only: an edit's order and a sale window's order are both "an order id" - passed
+    # by position, one would silently be taken for the other.
     edit_order_id: Optional[int] = None,
     edit_item_id: Optional[int] = None,
     edit_answers: Optional[Dict[str, Any]] = None,
+    hold_order_id: Optional[int] = None,
 ):
     """
     Dry-run the 2D glass offcut decision engine for a hypothetical set of cuts —
@@ -1144,8 +1161,10 @@ def preview_glass_cuts(
          **({"source_pref": c.source_pref} if c.source_pref else {})}
         for c in cuts
     ]
+    from core.inventory.holdScope import holding_for
     try:
-        with operation(db, OP_EDIT, order_id=edit_order_id, persist=False):
+        # In a sale window's scope the preview may also use that window's held remainders.
+        with holding_for(hold_order_id), operation(db, OP_EDIT, order_id=edit_order_id, persist=False):
             # Editing a saved order: give its own material back first, with the cut answers
             # given in the calculator - exactly what the edit does before re-cutting - so the
             # preview can use the offcuts this order is about to return (rolled back below).

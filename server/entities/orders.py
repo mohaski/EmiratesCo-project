@@ -32,7 +32,19 @@ class Order(SQLModel, table=True):
     created_at: datetime = Field(sa_column_kwargs={"server_default": func.now()}, index=True)
     
     # Status Workflow
-    status: str = Field(sa_column=Column(Enum("pending", "confirmed", "ready", "completed", "cancelled", name="order_status_enum"), default="pending", nullable=False))
+    # "held" is an open sale window (core/ordering/windowService.py): its stock is really
+    # deducted so no other window can sell it, but it is not a sale yet. "abandoned" is a
+    # window that was closed or expired without confirming; its stock has been given back.
+    # Neither is a real order — see core/ordering/visibility.py, which every order listing,
+    # report and queue filters through.
+    status: str = Field(sa_column=Column(Enum("pending", "confirmed", "ready", "completed", "cancelled", "held", "abandoned", name="order_status_enum"), default="pending", nullable=False))
+
+    # The number printed on receipts and shown to people. Unlike orderId (a SERIAL, which
+    # skips a value on every rolled-back insert and on every abandoned window), this is
+    # handed out only when an order is actually confirmed, from a counter row updated in
+    # the same transaction — so it is gap-free. NULL while an order is a held window.
+    # See core/ordering/orderNumbers.py.
+    order_no: Optional[int] = Field(default=None, sa_column_kwargs={"unique": True})
     
     # Payment Info
     # payment_method/payment_details are no longer stored here — the

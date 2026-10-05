@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useProducts } from '../context/ProductContext';
 import { useAuth } from '../context/AuthContext';
+import HeldStockBanner from '../components/windows/HeldStockBanner';
 import { useToast } from '../context/ToastContext';
 import api from '../services/api';
 import AddStockModal from '../components/inventory/AddStockModal';
@@ -369,6 +370,7 @@ export default function InventoryPage() {
                     </span>
                 </div>
             </header>
+            {['manager', 'ceo', 'admin'].includes(user?.role) && <HeldStockBanner />}
 
             <div style={{ flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: paneOverflow, minHeight: 0 }}>
                 {/* Main content */}

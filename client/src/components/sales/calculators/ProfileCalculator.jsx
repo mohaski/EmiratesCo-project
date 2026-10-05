@@ -19,7 +19,10 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
     // Set while editing a saved order: the stock check then gives that order's own material
     // back first, as the edit will, instead of calling a cut impossible because this very
     // order used its hand-picked offcut up (see CartContext.editingOrderId).
-    const { editingOrderId } = useCart();
+    // An edit of a saved order checks with that order's material given back first; a sale
+    // window's line is checked by a dry run of the window's whole cart (checkWindowLine) -
+    // its own material counted once, its other lines still held.
+    const { editingOrderId, windowMode, checkWindowLine } = useCart();
     // Offcut selection is a POS/cutting-floor concern — invoices/quotations are
     // generated before any physical cutting happens, so there's nothing to pick from yet.
     const allowOffcutSelection = source !== 'invoice';
@@ -204,9 +207,12 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         setFeasibility({ checking: true, ok: false, message: null });
 
         const timer = setTimeout(() => {
-            api.productService
-                .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId,
-                    editCuts.sourceItemId, apiAnswersKey ? JSON.parse(apiAnswersKey) : null)
+            (windowMode
+                ? checkWindowLine(cartIndex, { productId: product.id, variantId: pricing.variantId ?? null, lineItems })
+                : Promise.resolve(null))
+                .then(windowRes => windowRes ?? api.productService
+                    .checkCutFeasibility(product.id, pricing.variantId ?? null, lineItems, editingOrderId,
+                        editCuts.sourceItemId, apiAnswersKey ? JSON.parse(apiAnswersKey) : null))
                 .then(res => {
                     if (feasibilitySeqRef.current !== mySeq) return; // superseded by a newer check
                     setFeasibility({ checking: false, ok: !!res.ok, message: res.ok ? null : (res.message || 'Insufficient stock for this configuration.') });
@@ -220,7 +226,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         }, 400);
 
         return () => clearTimeout(timer);
-    }, [fullQty, halfQty, feet, pricing.variantId, offcutSelection, product.id, fullLengtherror, cuterror, lineItems, editingOrderId, apiAnswersKey, editCuts.active, editCuts.complete, editCuts.sourceItemId]);
+    }, [fullQty, halfQty, feet, pricing.variantId, offcutSelection, product.id, fullLengtherror, cuterror, lineItems, editingOrderId, apiAnswersKey, editCuts.active, editCuts.complete, editCuts.sourceItemId, windowMode, checkWindowLine, cartIndex]);
 
     const handleExtraChange = (key, val) => setExtraSelections(prev => ({ ...prev, [key]: val }));
     const chipBtn = (active) => ({

@@ -50,7 +50,7 @@ const OrderCard = memo(({ order, onAddTo, onEdit, onCancel, onView, onCollect, h
                     background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)',
                     color: '#93c5fd', padding: '2px 8px', borderRadius: '6px',
                     fontSize: '0.68rem', fontFamily: 'var(--font-mono)', fontWeight: 700,
-                }}>{order.id}</span>
+                }}>{order.orderNo ?? order.id}</span>
                 {isCancelled && (
                     <span style={{
                         background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)',

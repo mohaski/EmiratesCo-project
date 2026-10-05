@@ -146,7 +146,7 @@ function PackRow({ pack, expanded, onToggle }) {
                                                 color: l.item_status === 'returned' ? '#64748b' : '#cbd5e1',
                                                 textDecoration: l.item_status === 'returned' ? 'line-through' : 'none',
                                             }}>
-                                                <td style={{ padding: '0.35rem 0.4rem', fontFamily: 'var(--font-mono)' }}>#{l.order_id}</td>
+                                                <td style={{ padding: '0.35rem 0.4rem', fontFamily: 'var(--font-mono)' }}>#{l.order_no ?? l.order_id}</td>
                                                 <td style={{ padding: '0.35rem 0.4rem' }}>{l.customer_name || '—'}</td>
                                                 <td style={{ padding: '0.35rem 0.4rem' }}>{l.sold_at ? parseServerDate(l.sold_at).toLocaleDateString() : '—'}</td>
                                                 <td style={{ padding: '0.35rem 0.4rem' }}>{l.served_by || '—'}</td>

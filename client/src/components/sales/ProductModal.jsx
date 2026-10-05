@@ -24,6 +24,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
     // Attributes the calculator refuses to default (glass thickness) and the
     // cashier hasn't picked yet.
     const missingAttributes = details?.missingAttributes || [];
+    const [saving, setSaving] = useState(false);
 
     const handleAdd = () => {
         const isStockValid = details?.isValid !== false;
@@ -32,8 +33,16 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
         // blocks invoices too: the wrong thickness on a quote becomes the wrong
         // sheet on the cutting table.
         if (missingAttributes.length > 0) return;
-        if (total <= 0) return;
-        onAddToOrder({ id: product.id, name: product.name, category: product.category, totalPrice: total, details });
+        if (total <= 0 || saving) return;
+        const result = onAddToOrder({ id: product.id, name: product.name, category: product.category, totalPrice: total, details });
+        // In a sale window the add is a save on the server, and can be refused (the stock went
+        // to another till since the check, the window expired). Stay open with everything the
+        // cashier entered; the reason is already on screen.
+        if (result && typeof result.then === 'function') {
+            setSaving(true);
+            result.then(() => { setSaving(false); onClose(); }, () => setSaving(false));
+            return;
+        }
         onClose();
     };
 
@@ -43,7 +52,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
     const isGlass = isGlassCategory(product.category);
     const isAccessory = isAccessoryCategory(product.category);
     const isDynamic = !!product.variants;
-    const canProceed = total > 0 && missingAttributes.length === 0 && (source !== 'sales' || details?.isValid !== false);
+    const canProceed = !saving && total > 0 && missingAttributes.length === 0 && (source !== 'sales' || details?.isValid !== false);
 
     const categoryColor = isProfile ? '#a855f7' : isGlass ? '#06b6d4' : isAccessory ? '#22c55e' : '#3b82f6';
     const matchedColorHex = isProfile ? getProfileColorHex(color) : null;
@@ -104,7 +113,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                 {/* Calculator content */}
                 <div style={{ flex: 1, overflowY: 'auto', padding: '1.25rem 1.5rem' }} className="custom-scrollbar">
                     {isProfile ? <ProfileCalculator key={product.id} product={product} color={color} initialDetails={initialDetails} onUpdate={handleUpdate} cart={cart} cartIndex={cartIndex} source={source} />
-                        : isGlass ? <GlassCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />
+                        : isGlass ? <GlassCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} cartIndex={cartIndex} />
                             : isAccessory ? <AccessoryCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />
                                 : isDynamic ? <DynamicCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />
                                     : <StandardCalculator key={product.id} product={product} initialDetails={initialDetails} onUpdate={handleUpdate} />}
@@ -140,7 +149,7 @@ export default function ProductModal({ product, isOpen, onClose, onAddToOrder, c
                     onMouseEnter={e => { if (canProceed) e.currentTarget.style.transform = 'translateY(-1px)'; }}
                     onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
                     >
-                        {source === 'invoice' ? '+ Add to Invoice' : '+ Add to Order'}
+                        {saving ? 'Saving…' : source === 'invoice' ? '+ Add to Invoice' : '+ Add to Order'}
                     </button>
                     </div>
                 </div>

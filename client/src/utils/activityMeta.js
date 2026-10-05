@@ -91,7 +91,7 @@ export const summarizeActivity = (item) => {
     switch (item.entity_type) {
         case 'cutting_report':
             return after.confirmed_during_order
-                ? `Item #${after.item_id} confirmed cut while order #${after.confirmed_during_order} was changed`
+                ? `Item #${after.item_id} confirmed cut while order #${after.confirmed_during_order_no ?? after.confirmed_during_order} was changed`
                 : `Item #${after.item_id} confirmed cut`;
         case 'order_undo':
             return `Undid a ${String(before.kind || 'change').replace(/_/g, ' ')}${item.notes ? ` — ${item.notes}` : ''}${after.money_note ? `. ${after.money_note}` : ''}`;

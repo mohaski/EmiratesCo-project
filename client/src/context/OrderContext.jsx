@@ -193,7 +193,7 @@ export const OrderProvider = ({ children }) => {
     }, [fetchOrders]);
 
     const updateOrder = useCallback(async (orderId, orderData) => {
-        const { customer, totals, payment, items: rawItems, servedBy, cutConfirmations, planToken, orderVersion } = orderData;
+        const { customer, totals, payment, items: rawItems, servedBy, cutConfirmations, planToken, orderVersion, orderNo } = orderData;
         const items = rawItems.map(mapItemForBackend);
 
         const isPaid = totals.balance <= 0.1;
@@ -214,7 +214,7 @@ export const OrderProvider = ({ children }) => {
             paymentMethod: amountPaidNow !== 0 ? (payment?.method || 'cash') : null,
             paymentDetails: payment?.details || null,
             items,
-            notes: `Edited order #${orderId}`,
+            notes: `Edited order #${orderNo ?? orderId}`,   // the number people know it by
             // Per-cut-line physical confirmation from ResolveCutsModal. Null when the
             // reversal plan said nothing needed confirming, which is the common case.
             cutConfirmations: cutConfirmations || null,

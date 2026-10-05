@@ -49,6 +49,13 @@ OP_RESTOCK = "restock"
 OP_OPEN_CONTAINER = "open_container"
 OP_STATUS = "status_change"
 OP_MAINTENANCE = "maintenance"   # migrations / backfills run by hand
+# Sale windows (core/ordering/windowService.py): building a held cart, and giving its stock
+# back when the window is closed or idles out. Never undoable - a window is not a sale; its
+# confirm is recorded as an OP_SALE like any checkout.
+OP_WINDOW_CART = "window_cart"
+OP_WINDOW_RELEASE = "window_release"
+OP_WINDOW_EXPIRE = "window_expire"
+WINDOW_KINDS = (OP_WINDOW_CART, OP_WINDOW_RELEASE, OP_WINDOW_EXPIRE)
 
 # Operations whose effects the undo tool can reverse.
 UNDOABLE_KINDS = (OP_EDIT, OP_CANCEL)

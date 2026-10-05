@@ -130,6 +130,17 @@ async def mark_orders_cutting_done(
 # Parameterised routes (/{order_id} must come after static paths)
 # ---------------------------------------------------------------------------
 
+@router.get("/by-number/{order_no}", response_model=model.OrderResponse)
+def get_order_by_number(
+    order_no: int,
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
+):
+    """Look an order up by the number on its receipt (orders.order_no)."""
+    require_role(["manager", "cashier", "ceo", "admin"], current_user)
+    return orderService.get_order_by_number(order_no, db)
+
+
 @router.get("/{order_id}", response_model=model.OrderResponse)
 def get_order(
     order_id: int,

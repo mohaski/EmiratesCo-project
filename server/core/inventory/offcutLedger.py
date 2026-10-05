@@ -710,7 +710,9 @@ def _consumption_is_live(db: Session, piece: OffcutPiece) -> bool:
     order = db.get(Order, order_id)
     if order is None:
         return True
-    return order.status != "cancelled"
+    # "abandoned" is a sale window closed without confirming; like a cancel, it gave its
+    # material back. A still-open ("held") window's claim does stand.
+    return order.status not in ("cancelled", "abandoned")
 
 
 def rebuild_piece_state(db: Session, piece_id: int) -> Optional[str]:

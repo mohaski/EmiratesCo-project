@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import logging
 import pathlib
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from entities import *
 
 # Import Controllers
 from core.ordering.controller import router as ordering_router
+from core.ordering.windowController import router as windows_router
 from core.inventory.products.controller import router as products_router
 from core.inventory.attributes.controller import router as attributes_router
 from core.inventory.stockSessions.controller import router as stock_sessions_router
@@ -42,8 +44,45 @@ async def lifespan(app: FastAPI):
     logger.info("🚀  EmiratesCo API starting up …")
     create_db_and_tables()
     logger.info("✅  Database tables verified.")
+    sweeper = asyncio.create_task(_expire_idle_windows_forever())
     yield
+    sweeper.cancel()
     logger.info("👋  EmiratesCo API shutting down.")
+
+
+WINDOW_SWEEP_SECONDS = 30
+
+
+async def _expire_idle_windows_forever():
+    """Release sale windows idle past their 15 minutes (core/ordering/windowService.py),
+    so a closed tab or a crashed till never keeps stock locked away. Runs in a worker
+    thread: releasing a window takes row locks and runs the stock engines.
+
+    Skipped while a failover push/receive is running: a receive rebuilds the database
+    with pg_restore --clean, and giving stock back into a half-restored database would
+    corrupt it. Windows that arrive with the restored data expire on a later sweep."""
+    from ws.manager import manager
+
+    while True:
+        try:
+            await asyncio.sleep(WINDOW_SWEEP_SECONDS)
+            if await asyncio.to_thread(sweep_idle_windows_once):
+                await manager.broadcast("products_updated")
+                await manager.broadcast("windows_updated")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # never let one bad sweep stop the sweeper
+            logger.error(f"Sale window sweeper failed: {e}", exc_info=True)
+
+
+def sweep_idle_windows_once() -> int:
+    """One sweep; 0 without touching anything while a failover push/receive holds its lock."""
+    from core.ordering.windowService import expire_idle_windows
+    from core.failover.service import _operation_lock
+
+    if _operation_lock.locked():
+        return 0
+    return expire_idle_windows()
 
 # ── App Instance ─────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -108,6 +147,7 @@ app.add_middleware(
 
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(ordering_router)
+app.include_router(windows_router)
 app.include_router(invoices_router)
 app.include_router(products_router)
 app.include_router(attributes_router)

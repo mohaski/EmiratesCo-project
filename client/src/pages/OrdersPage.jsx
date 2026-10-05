@@ -1,5 +1,8 @@
 import { useOrders, mapBackendOrder } from '../context/OrderContext';
 import api from '../services/api';
+import { useCart } from '../context/CartContext';
+import { useWindows } from '../context/WindowContext';
+import { mapItemForBackend } from '../utils/orderItemMapping';
 import { useAuth } from '../context/AuthContext';
 import { ROUTE_ROLES } from '../config/routePermissions';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -7,6 +10,7 @@ import { useState, useEffect, useCallback, useMemo, useDeferredValue } from 'rea
 import OrderCard from '../components/orders/OrderCard';
 import InvoiceCard from '../components/orders/InvoiceCard';
 import SetCancelPinModal from '../components/orders/SetCancelPinModal';
+import SaleWindowsToggle from '../components/windows/SaleWindowsToggle';
 import CuttingQueueSection from '../components/orders/CuttingQueueSection';
 import useCancelOrderFlow from '../hooks/useCancelOrderFlow';
 import { showToast } from '../utils/toast';
@@ -63,11 +67,11 @@ export default function OrdersPage() {
     // or cancelled from here.
     const [lookedUp, setLookedUp] = useState(null); // { id, order | null }
     const wantedId = activeTab === 'orders' && /^\d+$/.test(deferredQuery.trim()) ? Number(deferredQuery.trim()) : null;
-    const inList = wantedId != null && orders.some(o => o.id === wantedId);
+    const inList = wantedId != null && orders.some(o => (o.orderNo ?? o.id) === wantedId);
     useEffect(() => {
         if (wantedId == null || inList) return undefined;
         let alive = true;
-        api.orderService.getOrder(wantedId)
+        api.orderService.getOrderByNumber(wantedId)
             .then(o => { if (alive) setLookedUp({ id: wantedId, order: mapBackendOrder(o) }); })
             .catch(() => { if (alive) setLookedUp({ id: wantedId, order: null }); });
         return () => { alive = false; };
@@ -89,7 +93,8 @@ export default function OrdersPage() {
     const groupedOrders = useMemo(() => {
         if (activeTab !== 'orders') return [];
         const lq = deferredQuery.toLowerCase();
-        const matches = orders.filter(o => !lq || String(o.id).toLowerCase().includes(lq) || (o.customer?.name || '').toLowerCase().includes(lq));
+        // People search by the number on the receipt (orderNo), which is not the internal id.
+        const matches = orders.filter(o => !lq || String(o.orderNo ?? o.id).toLowerCase().includes(lq) || (o.customer?.name || '').toLowerCase().includes(lq));
         const extra = lookedUp && lookedUp.order && lookedUp.id === wantedId && !inList ? [lookedUp.order] : [];
         const shown = new Set(matches.map(o => o.id));
         const older = nameHits.q === nameQuery && nameQuery ? nameHits.orders.filter(o => !shown.has(o.id)) : [];
@@ -128,15 +133,39 @@ export default function OrdersPage() {
     }, [navigate]);
 
     const handleViewInvoice = useCallback((invoice) => navigate('/invoice/review', { state: { invoice } }), [navigate]);
-    const handleConvertInvoice = useCallback((invoice) => navigate('/checkout', {
-        state: {
-            cartItems: invoice.items,
-            customer: invoice.customer,
-            enableTax: invoice.vat_enabled ?? false,
+    // Converting a quotation is a new sale: its items go into a sale window, which holds
+    // their stock from this moment, and checkout confirms that window. If the stock isn't
+    // there any more the window is not kept, and the reason is shown.
+    // Windows switched off: checkout of the quotation's items, as before.
+    const { enabled: windowsEnabled, openWindowWith } = useWindows();
+    const { setSessionType, setEditSession, editSession } = useCart();
+    const handleConvertInvoice = useCallback((invoice) => {
+        if (!windowsEnabled) {
+            navigate('/checkout', {
+                state: {
+                    cartItems: invoice.items,
+                    customer: invoice.customer,
+                    enableTax: invoice.vat_enabled ?? false,
+                    sourceInvoiceId: invoice.id,
+                    discount: invoice.discount ?? 0,
+                },
+            });
+            return;
+        }
+        // A window is a new sale: an edit in progress would hide it, so it has to end first.
+        if (editSession && !window.confirm(`Discard your changes to order #${editSession.orderNo ?? editSession.orderId}? Nothing has been saved.`)) return;
+        setSessionType('sales');
+        setEditSession(null);
+        openWindowWith({
+            items: (invoice.items || []).map(mapItemForBackend),
+            customer: invoice.customer?.id || invoice.customer?.name ? invoice.customer : null,
             sourceInvoiceId: invoice.id,
             discount: invoice.discount ?? 0,
-        }
-    }), [navigate]);
+            VAT_status: invoice.vat_enabled ?? false,
+        })
+            .then(() => navigate('/checkout', { state: { window: true } }))
+            .catch(() => {});
+    }, [navigate, openWindowWith, setSessionType, setEditSession, editSession, windowsEnabled]);
 
     // CEO doesn't work quotations or the cutting floor — both tabs are
     // manager/cashier/admin only (mirrors '/invoice' + '/invoice/review'
@@ -189,6 +218,7 @@ export default function OrdersPage() {
                         display: 'flex', alignItems: 'center', gap: '0.375rem', whiteSpace: 'nowrap',
                     }}>🔐 Set Cancel PIN</button>
                 )}
+                {canSetPin && <SaleWindowsToggle />}
 
                 {activeTab !== 'cutting' && (
                     <div style={{ position: 'relative', minWidth: '280px' }}>
