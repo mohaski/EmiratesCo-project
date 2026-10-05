@@ -116,12 +116,17 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
 
     const selectedLengthNum = pricing.fullLength || labelLengthNum;
 
-    // Clear a stale offcut selection if the required length or variant it was picked for changes
+    // Clear a stale offcut selection if the required length or variant it was picked for changes.
+    // A "rest from a new bar" that went with picks goes too - left alone it would silently turn
+    // into "the whole cut from a new bar". A plain new-bar choice (no picks) is kept, as before.
     const prevCutKey = useRef(`${feet}|${pricing.variantId}`);
+    const hadPicksRef = useRef(false);
+    useEffect(() => { hadPicksRef.current = !!(offcutSelection && offcutSelection.length > 0); }, [offcutSelection]);
     useEffect(() => {
         const key = `${feet}|${pricing.variantId}`;
         if (prevCutKey.current !== key) {
             prevCutKey.current = key;
+            if (hadPicksRef.current) setSourcePref(null);
             setOffcutSelection(null);
         }
     }, [feet, pricing.variantId]);
@@ -132,8 +137,10 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
         if (halfQty > 0) items.push({ type: 'profile-half', label: 'Half Length', qty: halfQty, rate: pricing.priceHalf, total: halfQty * pricing.priceHalf, meta: { length: extraSelections['Length'] }, ...(halfSourcePref ? { source_pref: halfSourcePref } : {}) });
         if (feet > 0) {
             const cutLine = { type: 'profile-cut', label: `Custom Cut (${feet}ft)`, qty: 1, rate: pricing.priceFoot, total: feet * pricing.priceFoot, meta: { length: feet, unit: 'ft' } };
+            // Both may be set: the picked offcuts are cut first, and whatever they leave is cut
+            // from a new bar rather than another offcut (inventoryService.apply_manual_cut_selection).
             if (sourcePref === 'new') cutLine.source_pref = 'new';
-            else if (offcutSelection && offcutSelection.length > 0) cutLine.offcut_selection = offcutSelection;
+            if (offcutSelection && offcutSelection.length > 0) cutLine.offcut_selection = offcutSelection;
             items.push(cutLine);
         }
         return items;
@@ -306,7 +313,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
 
                     {allowOffcutSelection && product.trackOffcuts && feet > 0 && (
                         <div style={{ marginTop: '0.625rem', paddingTop: '0.625rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                            {sourcePref === 'new' ? (
+                            {sourcePref === 'new' && !(offcutSelection && offcutSelection.length > 0) ? (
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
                                     <span style={{ fontSize: '0.68rem', color: '#fbbf24', fontWeight: 700 }}>From a new bar (offcuts not used)</span>
                                     <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
@@ -318,11 +325,13 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
                                     <span style={{ fontSize: '0.68rem', color: '#4ade80', fontFamily: 'var(--font-mono)' }}>
                                         {offcutSelection.map(s => `${parseFloat(s.length_used).toFixed(1)}ft${s.returned_ref ? ' (returned)' : ''}`).join(' + ')}
-                                        {offcutSelection.reduce((s, o) => s + (parseFloat(o.length_used) || 0), 0) < feet - 0.01 ? ' + auto-fill rest' : ' ✓'}
+                                        {offcutSelection.reduce((s, o) => s + (parseFloat(o.length_used) || 0), 0) < feet - 0.01
+                                            ? (sourcePref === 'new' ? ' + rest from a new bar' : ' + auto-fill rest')
+                                            : ' ✓'}
                                     </span>
                                     <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
                                         <button onClick={() => setShowOffcutModal(true)} style={{ background: 'none', border: 'none', color: '#60a5fa', fontSize: '0.68rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Edit</button>
-                                        <button onClick={() => setOffcutSelection(null)} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '0.68rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Clear</button>
+                                        <button onClick={() => { setOffcutSelection(null); setSourcePref(null); }} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '0.68rem', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>Clear</button>
                                     </div>
                                 </div>
                             ) : (
@@ -365,7 +374,7 @@ const ProfileCalculator = memo(({ product, color, initialDetails, onUpdate, cart
                     } : null}
                     onConfirm={(selection, { newBar } = {}) => {
                         setSourcePref(newBar ? 'new' : null);
-                        setOffcutSelection(newBar ? null : selection);
+                        setOffcutSelection(selection && selection.length > 0 ? selection : null);
                     }}
                     onClose={() => setShowOffcutModal(false)}
                 />

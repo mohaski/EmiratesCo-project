@@ -104,8 +104,9 @@ function StateButtons({ states, value, onPick, small = false }) {
     );
 }
 
-export function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates = [] }) {
-    const state = answer?.physicalState ?? (line.requires_explicit_answer ? null : line.default_physical_state);
+export function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates = [], showDefault = true }) {
+    // showDefault=false (cancel): nothing looks chosen until the operator chooses it.
+    const state = answer?.physicalState ?? (!showDefault || line.requires_explicit_answer ? null : line.default_physical_state);
     const meta = stateMeta(state);
     const answered = lineAnswered(line, answer);
     const laterCuts = line.later_cuts || [];
@@ -192,7 +193,7 @@ export function LineRow({ line, answer, onAnswer, expanded, onToggle, sheetMates
 }
 
 /** The question list on its own. `answers` is { [line_ref]: answer }; onChange(next). */
-export function CutQuestions({ lines, answers, onChange, initiallyExpanded = 'first-unanswered' }) {
+export function CutQuestions({ lines, answers, onChange, initiallyExpanded = 'first-unanswered', showDefaults = true }) {
     const [expanded, setExpanded] = useState(() => {
         if (initiallyExpanded !== 'first-unanswered') return initiallyExpanded;
         const first = (lines || []).find(l => !lineAnswered(l, answers?.[l.line_ref])) || (lines || [])[0];
@@ -239,13 +240,16 @@ export function CutQuestions({ lines, answers, onChange, initiallyExpanded = 'fi
                     onAnswer={v => setAnswer(line.line_ref, v)}
                     expanded={expanded === line.line_ref}
                     onToggle={() => setExpanded(expanded === line.line_ref ? null : line.line_ref)}
+                    showDefault={showDefaults}
                 />
             ))}
         </div>
     );
 }
 
-export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel = 'Continue', notice = null, initialAnswers = null }) {
+// requireAnswers: every line must be answered by the operator - nothing is taken on trust from
+// its default (cancelling an order, like an edit's cut questions).
+export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel = 'Continue', notice = null, initialAnswers = null, requireAnswers = false }) {
     // Lines an edit leaves untouched come back flagged will_reverse:false - their material
     // never moves, so asking about them would be noise.
     const lines = (plan?.lines || []).filter(l => l.will_reverse !== false);
@@ -257,7 +261,7 @@ export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel
         lines.forEach(l => {
             if (initialAnswers?.[l.line_ref]) {
                 seed[l.line_ref] = initialAnswers[l.line_ref];
-            } else if (!l.requires_explicit_answer) {
+            } else if (!requireAnswers && !l.requires_explicit_answer) {
                 seed[l.line_ref] = { physicalState: l.default_physical_state, resolution: null, laterCuts: {} };
             }
         });
@@ -322,13 +326,18 @@ export default function ResolveCutsModal({ plan, onClose, onConfirm, actionLabel
                             color: '#c4b5fd', fontSize: '0.7rem', fontWeight: 600,
                         }}>No offcut history on some lines — check the material.</div>
                     )}
-                    <CutQuestions lines={lines} answers={answers} onChange={setAnswers} />
+                    <CutQuestions lines={lines} answers={answers} onChange={setAnswers} showDefaults={!requireAnswers} />
                 </div>
 
                 <div style={{
                     padding: '1rem 1.75rem 1.25rem', borderTop: '1px solid rgba(255,255,255,0.07)',
                     flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.75rem',
                 }}>
+                    {requireAnswers && !canSubmit && (
+                        <p data-testid="answers-required" style={{ margin: 0, fontSize: '0.72rem', color: '#f59e0b', fontWeight: 700 }}>
+                            Choose "Not cut" or "Already cut" for every line to continue.
+                        </p>
+                    )}
                     <div style={{ display: 'flex', gap: '0.625rem' }}>
                         <button type="button" onClick={onClose} style={{
                             flex: 1, padding: '0.875rem', borderRadius: '0.875rem', border: '1px solid rgba(255,255,255,0.1)',

@@ -87,6 +87,9 @@ export default function useCancelOrderFlow({ cancelOrder, onCancelled }) {
                     onClose={() => setCutsToResolve(null)}
                     onConfirm={handleCutsResolved}
                     actionLabel="Continue to Cancel"
+                    // Cancelling gives material back on the strength of these answers: every
+                    // line must be answered "not cut" or "already cut" - none taken on trust.
+                    requireAnswers
                 />
             )}
             {pending && (

@@ -132,7 +132,10 @@ export default function PullToRefresh({ children, onRefresh, style, className })
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
-          transform: `translateY(${settled}px)`,
+          // Only transform while pulling: any transform (even translateY(0)) makes this
+          // the containing block for position:fixed modals inside the page, so on mobile
+          // they'd be laid over the middle of the scrolled page instead of the viewport.
+          transform: settled ? `translateY(${settled}px)` : 'none',
           transition: dragging ? 'none' : 'transform 0.25s ease',
         }}
       >

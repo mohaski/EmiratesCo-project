@@ -6,7 +6,7 @@
 source "$(dirname "$0")/_testdb.sh"
 OUT="$TESTS/.logs/browser"; mkdir -p "$OUT"
 SUITES=("$@")
-[[ ${#SUITES[@]} -eq 0 ]] && SUITES=(suite suite_g2 edit_session_suite suite_g3 suite_g4 suite_g5 suite_g6 suite_g7 security_api suite_windows)
+[[ ${#SUITES[@]} -eq 0 ]] && SUITES=(suite suite_g2 edit_session_suite suite_g3 suite_g4 suite_g5 suite_g6 suite_g7 security_api suite_windows suite_offcuts)
 for s in "${SUITES[@]}"; do
   seed
   if [[ $s == suite_g3 ]]; then  # its PIN check assumes a cancel PIN exists

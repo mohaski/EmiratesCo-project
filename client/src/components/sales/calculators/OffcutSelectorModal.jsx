@@ -22,8 +22,10 @@ import { useCart } from '../../../context/CartContext';
  *                           A pick of one of those carries `returned_ref`, which the edit
  *                           resolves to the piece it actually produces.
  *   initialNewBar         – the cut was set to come from a new bar
- *   onConfirm(selection, { newBar }) – called with the chosen [{offcut_id, length_used, returned_ref?}],
- *                           or with newBar true: cut from a new bar, offcuts ignored (line source_pref)
+ *   onConfirm(selection, { newBar }) – called with the chosen [{offcut_id, length_used, returned_ref?}].
+ *                           newBar true: whatever the picked offcuts don't cover comes from a new
+ *                           bar, not another offcut (line source_pref); with nothing picked, the
+ *                           whole cut comes from a new bar.
  *   onClose               – close callback
  */
 export default function OffcutSelectorModal({ productId, variantId, requiredLength, initialSelection, initialNewBar = false, cart = [], cartIndex = null, projection = null, onConfirm, onClose }) {
@@ -33,15 +35,21 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
     const [error, setError] = useState('');
     const { windowMode, holdOrderId } = useCart();
 
-    // Selection state: { [offcutId]: lengthUsed (string) }
+    // Selection state: { [offcutId]: [lengthUsed (string), ...] } - one entry per PIECE taken
+    // from that row. Same-size offcuts share one pooled row (quantity > 1), so a cut can use
+    // several of them; each becomes its own offcut_selection entry, which the server consumes
+    // one unit at a time (_consume_offcut_sources).
     const [selected, setSelected] = useState(() => {
         const init = {};
         (initialSelection || []).forEach(s => {
-            if (s.returned_ref) init[`ref:${s.returned_ref}`] = String(s.length_used);
-            else init[s.offcut_id] = String(s.length_used);
+            const key = s.returned_ref ? `ref:${s.returned_ref}` : s.offcut_id;
+            (init[key] = init[key] || []).push(String(s.length_used));
         });
         return init;
     });
+    // A piece this edit hands back is one specific piece; any other row offers every unit it has.
+    const maxUnits = (oc) => (oc.returned?.length ? 1 : oc.quantity);
+    const [trimmedNote, setTrimmedNote] = useState('');
     const projectionKey = projection ? JSON.stringify(projection) : null;
 
     // How many units of each offcut are already spoken for by other cart lines
@@ -107,28 +115,64 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                     // Pieces this edit hands back first - the ones the cashier is thinking of.
                     .sort((a, b) => (b.returned?.length ? 1 : 0) - (a.returned?.length ? 1 : 0));
                 setOffcuts(adjusted);
+                // A reopened pick may name more pieces of a row than it still has (other lines
+                // or tills took some since): keep only what is there, and say so.
+                setSelected(prev => {
+                    let trimmed = false;
+                    const next = { ...prev };
+                    adjusted.forEach(oc => {
+                        const units = next[oc.offcutId];
+                        const cap = oc.returned?.length ? 1 : oc.quantity;
+                        if (units && units.length > cap) { next[oc.offcutId] = units.slice(0, cap); trimmed = true; }
+                    });
+                    if (trimmed) setTrimmedNote('Some pieces you had picked are no longer available - fewer are selected now.');
+                    return trimmed ? next : prev;
+                });
             })
             .catch(() => { if (!cancelled) setError('Failed to load offcuts — please try again.'); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
     }, [productId, variantId, claimedElsewhere, projectionKey, holdOrderId, ownSources]);
 
+    // Each new piece starts at what is still needed (capped at the piece's length).
+    const nextUse = (oc, sel) => {
+        const remaining = Math.max(0, requiredLength - selectedTotalOf(sel));
+        return String(Math.min(oc.length, remaining || oc.length));
+    };
+
     const toggle = (oc) => {
         setSelected(prev => {
-            if (prev[oc.offcutId] !== undefined) {
+            if (prev[oc.offcutId]?.length) {
                 const next = { ...prev };
                 delete next[oc.offcutId];
                 return next;
             }
-            const remaining = Math.max(0, requiredLength - selectedTotalOf(prev));
-            const use = Math.min(oc.length, remaining || oc.length);
-            return { ...prev, [oc.offcutId]: String(use) };
+            return { ...prev, [oc.offcutId]: [nextUse(oc, prev)] };
         });
     };
 
-    const setLen = (id, val) => setSelected(prev => ({ ...prev, [id]: val }));
+    const addPiece = (oc) => setSelected(prev => {
+        const units = prev[oc.offcutId] || [];
+        if (units.length >= maxUnits(oc)) return prev;
+        return { ...prev, [oc.offcutId]: [...units, nextUse(oc, prev)] };
+    });
 
-    const selectedTotalOf = (sel) => Object.values(sel).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+    const removePiece = (oc) => setSelected(prev => {
+        const units = prev[oc.offcutId] || [];
+        if (units.length <= 1) {
+            const next = { ...prev };
+            delete next[oc.offcutId];
+            return next;
+        }
+        return { ...prev, [oc.offcutId]: units.slice(0, -1) };
+    });
+
+    const setLen = (id, idx, val) => setSelected(prev => ({
+        ...prev, [id]: (prev[id] || []).map((v, i) => (i === idx ? val : v)),
+    }));
+
+    const selectedTotalOf = (sel) => Object.values(sel).flat().reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+    const piecesSelected = Object.values(selected).reduce((n, units) => n + units.length, 0);
 
     const selectedTotal = useMemo(() => selectedTotalOf(selected), [selected]);
 
@@ -140,7 +184,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
     const shortfallBestFit = useMemo(() => {
         if (shortfall <= 0.01) return null;
         const candidates = offcuts
-            .map(oc => ({ ...oc, availableQty: oc.quantity - (selected[oc.offcutId] !== undefined ? 1 : 0) }))
+            .map(oc => ({ ...oc, availableQty: oc.quantity - (selected[oc.offcutId] || []).length }))
             .filter(oc => oc.availableQty > 0 && oc.length >= shortfall - 0.01)
             .sort((a, b) => a.length - b.length);
         return candidates[0] || null;
@@ -148,17 +192,14 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
 
     const overSelected = selectedTotal > requiredLength + 0.02;
     const fullyCovered = shortfall <= 0.01;
-    const canSubmit = newBar || (!overSelected && Object.keys(selected).length > 0);
+    // New bar on its own is a complete choice; picked offcuts must never exceed the cut.
+    const canSubmit = !overSelected && (newBar || piecesSelected > 0);
 
     const handleConfirm = () => {
         if (!canSubmit) return;
-        if (newBar) {
-            onConfirm([], { newBar: true });
-            onClose();
-            return;
-        }
+        // One entry per piece, in the order they were picked.
         const selection = Object.entries(selected)
-            .map(([id, len]) => {
+            .flatMap(([id, units]) => units.map(len => {
                 const row = offcuts.find(o => String(o.offcutId) === String(id));
                 const back = row?.returned?.[0];
                 if (back) {
@@ -166,15 +207,20 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                              returned_ref: back.ref, returned_label: back.label };
                 }
                 return { offcut_id: parseInt(id), length_used: parseFloat(len) };
-            })
+            }))
             .filter(s => s.length_used > 0);
-        onConfirm(selection, { newBar: false });
+        onConfirm(selection, { newBar });
         onClose();
     };
 
     const handleClearAll = () => setSelected({});
 
     const fmtLen = (n) => `${parseFloat(n).toFixed(2)} ft`;
+    const stepBtn = {
+        width: '24px', height: '24px', borderRadius: '6px', border: '1px solid rgba(59,130,246,0.35)',
+        background: 'rgba(59,130,246,0.12)', color: '#93c5fd', fontWeight: 800, fontSize: '0.85rem',
+        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    };
 
     return (
         <div style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
@@ -224,12 +270,15 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                         <input type="checkbox" checked={newBar} onChange={e => setNewBar(e.target.checked)}
                             style={{ width: '16px', height: '16px', flexShrink: 0, accentColor: '#f59e0b' }} />
                         <span>
-                            <span style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0' }}>Cut from a new bar</span>
-                            <span style={{ display: 'block', fontSize: '0.7rem', color: '#64748b' }}>Don't use any offcut for this cut, even one that fits</span>
+                            <span style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, color: '#e2e8f0' }}>Remaining length from a new bar</span>
+                            <span style={{ display: 'block', fontSize: '0.7rem', color: '#64748b' }}>
+                                The offcuts you pick below are used first; whatever they don't cover is cut from a new bar,
+                                never from another offcut. Pick none to cut the whole length from a new bar.
+                            </span>
                         </span>
                     </label>
 
-                    <div style={{ opacity: newBar ? 0.35 : 1, pointerEvents: newBar ? 'none' : 'auto' }}>
+                    <div>
 
                     {/* Available offcuts */}
                     <div style={{ marginBottom: '1.25rem' }}>
@@ -237,7 +286,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                             <span style={{ fontSize: '0.7rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                                 Available Offcuts
                             </span>
-                            {Object.keys(selected).length > 0 && (
+                            {piecesSelected > 0 && (
                                 <button onClick={handleClearAll} style={{
                                     background: 'none', border: 'none', color: '#64748b', fontSize: '0.7rem',
                                     cursor: 'pointer', textDecoration: 'underline',
@@ -247,6 +296,9 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                             )}
                         </div>
 
+                        {trimmedNote && (
+                            <p style={{ fontSize: '0.72rem', color: '#fbbf24', margin: '0 0 0.5rem' }}>{trimmedNote}</p>
+                        )}
                         {loading ? (
                             <p style={{ fontSize: '0.8rem', color: '#475569' }}>Loading offcuts…</p>
                         ) : offcuts.length === 0 ? (
@@ -256,7 +308,9 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                                 {offcuts.map(oc => {
-                                    const isSelected = selected[oc.offcutId] !== undefined;
+                                    const picked = selected[oc.offcutId] || [];
+                                    const isSelected = picked.length > 0;
+                                    const cap = maxUnits(oc);
                                     return (
                                         <div key={oc.offcutId} style={{
                                             display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem 0.75rem',
@@ -282,9 +336,17 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                                                 <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0', fontFamily: 'var(--font-mono)' }}>
                                                     {fmtLen(oc.length)}
                                                 </span>
-                                                <span style={{ fontSize: '0.72rem', color: '#475569', marginLeft: '0.5rem' }}>
-                                                    qty: {oc.quantity}
-                                                </span>
+                                                {oc.quantity > 1 ? (
+                                                    <span data-testid="same-size-count" style={{
+                                                        fontSize: '0.68rem', fontWeight: 800, color: '#fbbf24', marginLeft: '0.5rem',
+                                                        padding: '1px 7px', borderRadius: '999px',
+                                                        background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.35)',
+                                                    }}>
+                                                        {oc.quantity} pieces this size
+                                                    </span>
+                                                ) : (
+                                                    <span style={{ fontSize: '0.72rem', color: '#475569', marginLeft: '0.5rem' }}>1 piece</span>
+                                                )}
                                                 {oc.returned?.length > 0 && (
                                                     <div data-testid="returned-offcut" style={{ fontSize: '0.66rem', color: '#22c55e', fontWeight: 700, marginTop: '2px' }}>
                                                         ↩ returned by this edit: {oc.returned[0].label}
@@ -292,25 +354,43 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                                                 )}
                                             </div>
 
-                                            {/* Length input when selected */}
+                                            {/* When selected: how many of these pieces (rows with several), and
+                                                what length each one gives */}
                                             {isSelected && (
-                                                <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-                                                    <span style={{ fontSize: '0.7rem', color: '#64748b' }}>use:</span>
-                                                    <input
-                                                        type="number"
-                                                        step="0.01"
-                                                        min="0.01"
-                                                        max={oc.length}
-                                                        value={selected[oc.offcutId]}
-                                                        onChange={e => setLen(oc.offcutId, e.target.value)}
-                                                        style={{
-                                                            width: '70px', background: 'rgba(59,130,246,0.1)',
-                                                            border: '1px solid rgba(59,130,246,0.3)', borderRadius: '6px',
-                                                            color: '#e2e8f0', fontSize: '0.8rem', padding: '3px 6px',
-                                                            outline: 'none', textAlign: 'right',
-                                                        }}
-                                                    />
-                                                    <span style={{ fontSize: '0.7rem', color: '#64748b' }}>ft</span>
+                                                <div onClick={e => e.stopPropagation()} style={{ flex: '1 1 100%', display: 'flex', flexDirection: 'column', gap: '0.375rem', cursor: 'default' }}>
+                                                    {cap > 1 && (
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                            <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Pieces to use:</span>
+                                                            <button type="button" aria-label="One piece fewer" onClick={() => removePiece(oc)} style={stepBtn}>−</button>
+                                                            <span data-testid="pieces-used" style={{ fontSize: '0.82rem', fontWeight: 800, color: '#e2e8f0', minWidth: '1.25rem', textAlign: 'center' }}>{picked.length}</span>
+                                                            <button type="button" aria-label="One piece more" onClick={() => addPiece(oc)} disabled={picked.length >= cap}
+                                                                style={{ ...stepBtn, opacity: picked.length >= cap ? 0.35 : 1, cursor: picked.length >= cap ? 'not-allowed' : 'pointer' }}>+</button>
+                                                            <span style={{ fontSize: '0.7rem', color: '#64748b' }}>of {cap}</span>
+                                                        </div>
+                                                    )}
+                                                    {picked.map((len, idx) => (
+                                                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                                                            <span style={{ fontSize: '0.7rem', color: '#64748b', minWidth: cap > 1 ? '4.5rem' : undefined }}>
+                                                                {cap > 1 ? `Piece ${idx + 1} use:` : 'use:'}
+                                                            </span>
+                                                            <input
+                                                                type="number"
+                                                                step="0.01"
+                                                                min="0.01"
+                                                                max={oc.length}
+                                                                value={len}
+                                                                aria-label={cap > 1 ? `Piece ${idx + 1} length used` : 'Length used'}
+                                                                onChange={e => setLen(oc.offcutId, idx, e.target.value)}
+                                                                style={{
+                                                                    width: '70px', background: 'rgba(59,130,246,0.1)',
+                                                                    border: '1px solid rgba(59,130,246,0.3)', borderRadius: '6px',
+                                                                    color: '#e2e8f0', fontSize: '0.8rem', padding: '3px 6px',
+                                                                    outline: 'none', textAlign: 'right',
+                                                                }}
+                                                            />
+                                                            <span style={{ fontSize: '0.7rem', color: '#64748b' }}>ft</span>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             )}
                                         </div>
@@ -343,15 +423,19 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                             </div>
                         ) : (
                             <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                                {Object.keys(selected).length > 0 ? (
+                                {piecesSelected > 0 ? (
                                     <>
-                                        {fmtLen(selectedTotal)} from offcuts <strong style={{ color: '#60a5fa' }}>+ {fmtLen(shortfall)} auto-filled</strong> = {fmtLen(requiredLength)}{' '}
+                                        {fmtLen(selectedTotal)} from {piecesSelected} offcut piece{piecesSelected === 1 ? '' : 's'} <strong style={{ color: '#60a5fa' }}>+ {fmtLen(shortfall)} auto-filled</strong> = {fmtLen(requiredLength)}{' '}
                                         <span style={{ color: '#475569' }}>
-                                            {shortfallBestFit
-                                                ? `(from the ${fmtLen(shortfallBestFit.length)} offcut)`
-                                                : '(no offcut fits — from a new bar)'}
+                                            {newBar
+                                                ? '(from a new bar)'
+                                                : shortfallBestFit
+                                                    ? `(from the ${fmtLen(shortfallBestFit.length)} offcut)`
+                                                    : '(no offcut fits — from a new bar)'}
                                         </span>
                                     </>
+                                ) : newBar ? (
+                                    <>No offcuts selected — all {fmtLen(requiredLength)} will come <strong style={{ color: '#fbbf24' }}>from a new bar</strong></>
                                 ) : (
                                     <>
                                         No offcuts selected — {fmtLen(requiredLength)} will be auto-filled{' '}
@@ -405,7 +489,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                             transition: 'all 0.2s',
                         }}
                     >
-                        {newBar ? 'Use a New Bar' : 'Use These Offcuts'}
+                        {!newBar ? 'Use These Offcuts' : piecesSelected > 0 ? 'Use Offcuts + New Bar' : 'Use a New Bar'}
                     </button>
                 </div>
             </div>
