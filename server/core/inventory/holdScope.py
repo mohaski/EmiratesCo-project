@@ -278,3 +278,41 @@ def clear_marks(db, order_id: int) -> int:
         db.add(row)
     db.flush()
     return len(rows)
+
+
+# ── Choosing and un-creating 1D material (switch on) ─────────────────────────
+
+def ordinary_first_1d(db) -> list:
+    """ORDER BY terms putting ordinary offcuts before provisional ones (decision D1): best fit
+    among ordinary pieces, then among provisional ones, and only then a new bar. A bar is
+    shared with an open window only when that actually saves one. Empty with the switch off
+    (and so no array SQL on SQLite)."""
+    from sqlalchemy import func
+
+    if not provisional_enabled(db):
+        return []
+    return [func.cardinality(Offcut.provisional_for) > 0]
+
+
+def not_foreign_marks(db):
+    """WHERE clause for un-creating a remainder found only by its LENGTH (a pre-ledger
+    reversal, or a piece whose row pointer was lost): never another open window's provisional
+    piece - only an ordinary row, or one marked for nothing but the current window. A
+    same-length twin of another window's is the wrong bar's material. Off: no restriction."""
+    from sqlalchemy import true
+
+    if not provisional_enabled(db):
+        return true()
+    hold = current_hold()
+    return Offcut.provisional_for.contained_by([hold] if hold is not None else [])
+
+
+def own_marks_first(db) -> list:
+    """ORDER BY terms for that same length lookup: the current window's own provisional row
+    before an ordinary twin (as own_rows_first does for held rows). Off: none."""
+    from sqlalchemy import func
+
+    hold = current_hold()
+    if hold is None or not provisional_enabled(db):
+        return []
+    return [func.cardinality(Offcut.provisional_for) == 0]

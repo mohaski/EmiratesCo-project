@@ -146,11 +146,19 @@ with Session(engine) as db:
     it = OrderItem(order_id=o.orderId, product_id=IDS["product"], variant_id=IDS["variant"], total_price=0, cutting_completed=False,
                    details={"lineItems": [{"type": "profile-cut", "offcut_sources": [event]}]}); db.add(it); db.commit()
     OID, IID = o.orderId, it.item_id
-target = lambda exp: orderService._correction_target(OID, IID, 0, 0, S(), U(IDS["user"], "manager"), expected_event=exp)
-check("matching event accepted", target(dict(event))[0].item_id, IID)
-check("same event after a browser round trip (3.0 -> 3) accepted", target({**event, "cuts": [3, 2.5], "offcut_length": 6})[0].item_id, IID)
+def target(exp):
+    """One correction request's lookup, then its transaction ends - as in the app. The lookup
+    locks the item's stock rows (the global lock order), so a session left open would hold
+    them and the next lookup would wait on it forever."""
+    with Session(engine) as s:
+        try:
+            return orderService._correction_target(OID, IID, 0, 0, s, U(IDS["user"], "manager"), expected_event=exp)[0].item_id
+        finally:
+            s.rollback()
+check("matching event accepted", target(dict(event)), IID)
+check("same event after a browser round trip (3.0 -> 3) accepted", target({**event, "cuts": [3, 2.5], "offcut_length": 6}), IID)
 raises("a different event at that position refused", lambda: target({**event, "source_id": 8}), 409, "changed since you opened it")
-check("no fingerprint (older client) still accepted", target(None)[0].item_id, IID)
+check("no fingerprint (older client) still accepted", target(None), IID)
 
 print()
 print("ALL PASS" if not failures else f"{len(failures)} FAILED: {failures}")

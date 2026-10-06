@@ -3,15 +3,15 @@
 Make a sale window's bar remainders visible to every till, marked **provisional**, instead of
 hiding them, so two sales never open two bars when one is enough.
 
-Status: **Phases 0, 1 and 2 done**, each on its own branch (`provisional-offcuts-phase0`,
-`-phase1`, `-phase2`, stacked). Suite: `server/test_provisional_offcuts.py`. Phases 3 to 6 not
-started. Decisions D1 to D4 accepted as recommended (2026-10-06).
+Status: **Phases 0 to 3 done**, each on its own branch (`provisional-offcuts-phase0`, `-phase1`,
+`-phase2`, `-phase3`, stacked; `test-suite-hardening` sits between 2 and 3). Suite:
+`server/test_provisional_offcuts.py`. Phases 4 to 6 not started. Decisions D1 to D4 accepted as
+recommended (2026-10-06).
 
-**Do not switch the feature on in the shop before Phases 3 and 4 are done.** With the switch on,
+**Do not switch the feature on in the shop before Phase 4 is done.** With the switch on,
 provisional rows are visible but:
 - Offcut Management can still edit or delete them (R8);
-- the till's picker doesn't badge them or filter the window's not-yet-made remainders;
-- source choice doesn't yet prefer ordinary offcuts (D1).
+- the till's picker doesn't badge them or filter the window's not-yet-made remainders.
 
 Written 2026-10-06 from the production dump of the same day and the code at `9416d04`.
 
@@ -171,22 +171,37 @@ Each was checked against the code at `9416d04`. **R1 and R2 were reproduced on t
 - Still open from this phase's list: integrity invariants (Phase 6), and the picker's
   `_without_remainders_not_yet_made` in `products/service.py` (Phase 4).
 
-### Phase 3: visibility and source choice
-- New `holdScope.visible_1d()`: `held_by_order_id IS NULL OR held_by_order_id = current window`.
-  Marks never hide anything.
-- Switch only the 1D **consumption** sites (R15):
-  - `inventoryService` best fit (~920);
-  - own-or-new bar (~944);
-  - same-size tie rows (~967);
-  - manual pick `assert_usable` (~1672);
-  - `cutCorrection.profile_candidates` (~450): the incident came from a correction.
-- Keep strict: `_remove_offcut`, the `_drop_pooled_unit_for_piece` fallback (R4), and every
-  `glassOffcutService` site.
-- Ranking (D1): best fit order becomes `(cardinality(provisional_for) > 0, length)`, i.e. ordinary
-  offcuts first, then provisional, then a new bar.
-- Rejoin: drop the `held_elsewhere` refusal for 1D (R6).
-- Locks: offcut rows `FOR UPDATE` in ascending id; deadlock retry on checkout, edit and correction
-  (R13).
+### Phase 3: source choice and locking (done)
+- **D1 ranking:** `_fulfill_one_cut_via_best_fit` orders by `holdScope.ordinary_first_1d` and
+  then length: best fit among ordinary offcuts, then provisional, then a new bar. Every
+  automatic 1D cut goes through it: checkout, windows, edits, the manual-pick top-up and
+  corrections' automatic replacement. Test T11.
+- **R4:** the two lookups that remove a remainder by length never take another open window's
+  provisional twin:
+  - `_remove_offcut` (pre-ledger reversals): `holdScope.not_foreign_marks` / `own_marks_first`;
+  - `_drop_pooled_unit_for_piece` fallback: matches the piece's own marks exactly.
+
+  Test R4: both reproduced the wrong pick before the fix.
+- **R13, one lock order:** `lock_stock_rows` now
+  - also locks the variants that share an offcut pool with the ones touched;
+  - **refreshes** the rows it locks (`populate_existing`), as do `_lock_variant` /
+    `_lock_product`.
+
+  Cancel and both cut corrections now call it first, before the reversal locks any pieces.
+- **Two bugs this phase uncovered (both live today, switch on or off):**
+  - **Deadlock, cancel vs. sale on the same bar.** Cancel locked offcut pieces, then the
+    variant; a sale locks the variant, then offcuts, then pieces. Reproduced: every racing
+    sale failed with a 500 "deadlock detected". Fixed by the lock order. Test T14.
+  - **Lost update, correction vs. sale.** The locking helpers re-selected rows FOR UPDATE
+    without refreshing an object already loaded in the session. A correction that had read the
+    variant unlocked wrote back `stale stock - 1`, wiping out a sale committed in between.
+    Cancel had no stock lock at all, so the same could happen there. Reproduced: stock 9
+    instead of 8 (the sale's bar lost). Fixed by the lock-and-refresh. Test T15.
+- **Not needed:**
+  - `visible_1d()` (R15): with the switch on, 1D rows are never held, so the existing
+    `visible_to_scope()` already shows provisional pieces and the 2D sites stay untouched.
+  - Deadlock-retry wrappers on checkout, edit and correction: the single lock order removes
+    the deadlock instead of retrying it.
 
 ### Phase 4: listings and screens
 - Offcut picker (`products/service.py` ~685): include provisional rows with `provisional: [{order,

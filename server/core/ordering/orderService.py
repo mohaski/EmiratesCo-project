@@ -1607,6 +1607,9 @@ def _correction_target(order_id: int, item_id: int, line_idx: int, event_idx: in
     item = db.get(OrderItem, item_id)
     if not item or item.order_id != order_id:
         raise HTTPException(status_code=404, detail="Order item not found on this order")
+    # Stock rows locked (and refreshed) before the correction reads or moves anything - the
+    # one lock order every stock-moving path takes (inventoryService.lock_stock_rows).
+    lock_stock_rows(db, [item.product_id], [item.variant_id])
 
     details = copy.deepcopy(item.details or {})
     line_items = details.get("lineItems") or []
@@ -2464,7 +2467,12 @@ def apply_cancel(
             raise HTTPException(status_code=409, detail={"message": str(e), "plan": e.fresh_plan})
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-        # Lock the pieces before any stock moves - see apply_order_edit.
+        # The global lock order (inventoryService.lock_stock_rows): stock rows first, then the
+        # pieces. Pieces first, while a sale holds the stock row and wants a piece, deadlocks;
+        # and without the stock lock the restore writes back a stock figure read before a sale
+        # committed, losing that sale's deduction.
+        items = db.exec(select(OrderItem).where(OrderItem.order_id == order_id)).all()
+        lock_stock_rows(db, [i.product_id for i in items], [i.variant_id for i in items])
         reversalPlan.lock_decision_pieces(db, reversal_plan)
 
     old_status = order.status

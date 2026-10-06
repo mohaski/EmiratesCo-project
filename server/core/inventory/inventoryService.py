@@ -374,22 +374,42 @@ def lock_stock_rows(db: Session, product_ids, variant_ids) -> None:
     product and variant; two sales doing that and then asking for the row lock to change
     stock each wait on the other's share lock - a deadlock (two of four simultaneous checkouts
     of one product failed this way). Taken up front, in one global order, the second sale
-    simply queues. Every stock-moving sale path calls this: checkout, order edit, sale windows."""
-    v_ids = sorted({v for v in variant_ids if v})
+    simply queues. Every stock-moving path calls this: checkout, order edit, sale windows,
+    cancel and cut corrections.
+
+    Variants sharing an offcut pool with one being touched are locked too: a cut on one can
+    consume, or a reversal hand back, offcuts of a bar drawn from the other, so two operations
+    on sibling variants meet on the same offcut rows and pieces - and must meet in this order.
+
+    populate_existing: a row already loaded in this session is REFRESHED from the locked row.
+    Without it SQLAlchemy keeps the object it already has, so the lock is taken but the code
+    then writes `stale stock - qty` and overwrites a sale committed in between (a lost update).
+    Safe for pending changes: autoflush writes them before the SELECT runs."""
+    from core.inventory.poolKey import pool_sibling_variants
+
+    v_ids = {v for v in variant_ids if v}
+    for vid in list(v_ids):
+        variant = db.get(Variant, vid)
+        if variant is not None:
+            v_ids.update(s.variantId for s in pool_sibling_variants(db, variant))
+    v_ids = sorted(v_ids)
     p_ids = sorted({p for p in product_ids if p})
     if v_ids:
-        db.exec(select(Variant).where(Variant.variantId.in_(v_ids))
-                .order_by(Variant.variantId).with_for_update()).all()
+        db.exec(select(Variant).where(Variant.variantId.in_(v_ids)).order_by(Variant.variantId)
+                .with_for_update().execution_options(populate_existing=True)).all()
     if p_ids:
-        db.exec(select(Product).where(Product.productId.in_(p_ids))
-                .order_by(Product.productId).with_for_update()).all()
+        db.exec(select(Product).where(Product.productId.in_(p_ids)).order_by(Product.productId)
+                .with_for_update().execution_options(populate_existing=True)).all()
 
 
 def _lock_variant(db: Session, variant: Variant) -> Variant:
     """Re-fetch a variant with SELECT ... FOR UPDATE so concurrent deductions
-    against the same row block instead of racing (lost-update prevention)."""
+    against the same row block instead of racing (lost-update prevention). populate_existing:
+    the object this session already holds is refreshed from the locked row - otherwise the
+    lock is taken but the stale value it holds is what gets decremented (lock_stock_rows)."""
     return db.exec(
         select(Variant).where(Variant.variantId == variant.variantId).with_for_update()
+        .execution_options(populate_existing=True)
     ).first()
 
 
@@ -397,6 +417,7 @@ def _lock_product(db: Session, product: Product) -> Product:
     """Re-fetch a product with SELECT ... FOR UPDATE — see _lock_variant."""
     return db.exec(
         select(Product).where(Product.productId == product.productId).with_for_update()
+        .execution_options(populate_existing=True)
     ).first()
 
 
@@ -919,7 +940,9 @@ def _fulfill_one_cut_via_best_fit(
             Offcut.pool_key == pool_key,
             hold.visible_to_scope(),  # never another open window's private remainder
         )
-        .order_by(Offcut.length.asc())  # smallest fit first → least waste
+        # Smallest fit first -> least waste; with provisional offcuts on, ordinary pieces
+        # before provisional ones (holdScope.ordinary_first_1d, decision D1).
+        .order_by(*hold.ordinary_first_1d(db), Offcut.length.asc())
         .with_for_update()  # prevent two concurrent cuts from claiming the same offcut
     )
 
@@ -1317,7 +1340,8 @@ def _remove_offcut(db, product, variant, length: float, pool_key: Optional[str] 
         Offcut.length <= length + 0.01,
         Offcut.pool_key == pool_key,
         hold.visible_to_scope(),
-    ).order_by(hold.own_rows_first()).with_for_update()
+        hold.not_foreign_marks(db),  # never another open window's provisional twin (R4)
+    ).order_by(hold.own_rows_first(), *hold.own_marks_first(db)).with_for_update()
 
     existing = db.exec(stmt).first()
     if not existing:
@@ -1363,13 +1387,17 @@ def _drop_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) -> N
             row = _find_glass_offcut(db, product, variant, piece.width, piece.height,
                                     "scrap" if piece.is_scrap else "available", pool_key)
         else:
+            # The row this piece sits in carries exactly the piece's own marks
+            # (holdScope.marks_for_piece) - never another window's provisional twin (R4).
+            placement = (hold.same_placement_1d(db, None, hold.marks_for_piece(db, piece))
+                         if hold.provisional_enabled(db) else hold.visible_to_scope())
             row = db.exec(
                 select(Offcut).where(
                     Offcut.product_id == product.productId,
                     Offcut.pool_key == pool_key,
                     Offcut.length >= piece.length - 0.01,
                     Offcut.length <= piece.length + 0.01,
-                    hold.visible_to_scope(),
+                    placement,
                 ).order_by(hold.own_rows_first()).with_for_update()
             ).first()
 

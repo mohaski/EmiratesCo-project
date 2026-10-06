@@ -26,6 +26,12 @@ Phase 2 - marks, switch ON (plan section 4):
   T9  the window drops its cut after a borrow: the rest of the bar is not provisional any more
   T13 a new pick of the window's own remainder survives a cart rebuild
 
+Phase 3 - choosing and locking, switch ON:
+  T11 an ordinary offcut beats a tighter provisional one; a provisional one beats a new bar
+  R4  un-creating a remainder by its length never takes another open window's provisional twin
+  T14 a cancel racing a checkout on the same bar never deadlocks
+  T15 a correction racing a sale on the same variant never loses the sale's stock change
+
 Runs on emiratesco_edit_test (DATABASE_URL). Run from server/.
 """
 import logging
@@ -485,6 +491,171 @@ def t13(db, cat, alice, bob):
     clean(db, "T13", since)
 
 
+# ── Phase 3 ──────────────────────────────────────────────────────────────────
+
+def t11(db, cat, alice, bob):
+    print("T11 Ordinary offcuts first, then provisional, then a new bar (decision D1)")
+    bar, bv, since = bar_for(db, cat, "T11 Bar")
+    T.public_offcut(db, bar, bv, 8.0)                  # an ordinary 8ft
+    since = rebaseline(db)
+    w = window_cut(db, alice, 15.0, new_bar=True)      # the window leaves a provisional 6ft
+    check("setup: ordinary 8ft, provisional 6ft", rows(db, bar) == [(8.0, None, (), 1), (6.0, None, (w.orderId,), 1)],
+          rows(db, bar))
+    y1 = checkout(db, bob, [cut(bar, bv, 5.0)])
+    src = item_of(db, y1.orderId).details["lineItems"][0]["offcut_sources"][0]
+    check("5ft: the ordinary 8ft, not the tighter provisional 6ft", (src["source"], src["offcut_length"]) == ("offcut", 8.0),
+          (src["source"], src["offcut_length"]))
+    y2 = checkout(db, bob, [cut(bar, bv, 5.0)])
+    src = item_of(db, y2.orderId).details["lineItems"][0]["offcut_sources"][0]
+    check("5ft again, no ordinary piece fits (3ft left): the provisional 6ft, not a new bar",
+          (src["source"], src["offcut_length"], stock(db, bv)) == ("offcut", 6.0, 2), (src["source"], src["offcut_length"], stock(db, bv)))
+    release(db, alice, w)
+    clean(db, "T11", since)
+
+
+def r4(db, cat, alice, bob):
+    print("R4  Un-creating by length leaves another window's provisional twin alone")
+    from core.inventory import inventoryService as inv
+    from core.inventory import offcutLedger as ledger
+    bar, bv, since = bar_for(db, cat, "R4 Bar")
+    w = window_cut(db, alice, 16.0, new_bar=True)       # provisional 5ft, created FIRST (lower id)
+    T.public_offcut(db, bar, bv, 5.0)                   # an ordinary 5ft (pre-ledger, no pieces)
+    since = rebaseline(db)
+    check("setup: two 5ft rows, the window's first", rows(db, bar) == [(5.0, None, (w.orderId,), 1), (5.0, None, (), 1)],
+          rows(db, bar))
+    # A pre-ledger reversal un-creates "a 5ft remainder" by its length alone.
+    with operation(db, "maintenance", actor=FakeUser(bob)):
+        found = inv._remove_offcut(db, bar, db.get(type(bv), bv.variantId), 5.0, "")
+    db.commit()
+    check("legacy un-create: took the ordinary 5ft, the window's is untouched",
+          (found, rows(db, bar)) == (True, [(5.0, None, (w.orderId,), 1)]), (found, rows(db, bar)))
+    # A ledger piece that lost its row pointer goes back out of the pool by length too.
+    T.public_offcut(db, bar, bv, 5.0)
+    with operation(db, "maintenance", actor=FakeUser(bob)):
+        stray = ledger.mint_piece(db, product_id=bar.productId, variant_id=bv.variantId, pool_key="",
+                                  geom=ledger.geom_1d(5.0), origin=ledger.ORIGIN_MANUAL_ENTRY, notes="test: no row")
+        inv._drop_pooled_unit_for_piece(db, bar, db.get(type(bv), bv.variantId), stray, "")
+        ledger.retire_piece(db, stray, reason="test")
+    db.commit()
+    check("piece without a row: the ordinary 5ft unit dropped, the window's untouched",
+          rows(db, bar) == [(5.0, None, (w.orderId,), 1)], rows(db, bar))
+    release(db, alice, w)
+
+
+def t14(db, cat, alice, bob):
+    print("T14 Racing a cancel against a checkout on the same bar")
+    import threading
+    import time
+    from sqlalchemy.exc import DBAPIError
+    from core.inventory import reversalPlan as plan_mod
+    bar, bv, since = bar_for(db, cat, "T14 Bar", stock_qty=40)
+    errors = []
+    # Widen the race window deterministically: the cancel holds its piece locks for a moment
+    # (as a slow request would), and the sale starts just after it. A sale that locks the stock
+    # row, then the offcut row, then the piece - while the cancel holds the piece and wants
+    # the row - is a deadlock unless both take their locks in one order.
+    real_lock = plan_mod.lock_decision_pieces
+
+    def slow_lock(db_, plan):
+        real_lock(db_, plan)
+        time.sleep(0.6)
+    plan_mod.lock_decision_pieces = slow_lock
+    try:
+        for i in range(3):
+            x = checkout(db, bob, [cut(bar, bv, 3.0)])     # X opens a bar: an 18ft, not cut yet
+            barrier = threading.Barrier(2)
+
+            def do_cancel():
+                with Session(engine) as s:
+                    try:
+                        barrier.wait()
+                        cancel_not_cut(s, bob, x.orderId)
+                    except (DBAPIError, HTTPException) as e:
+                        s.rollback()
+                        if not isinstance(e, HTTPException) or e.status_code >= 500:
+                            errors.append(f"cancel: {str(e).splitlines()[0][:120]}")
+
+            def do_sale():
+                with Session(engine) as s:
+                    try:
+                        barrier.wait()
+                        time.sleep(0.2)
+                        checkout(s, alice, [cut(bar, bv, 4.0)])
+                    except (DBAPIError, HTTPException) as e:
+                        s.rollback()
+                        if not isinstance(e, HTTPException) or e.status_code >= 500:
+                            errors.append(f"sale: {str(e).splitlines()[0][:120]}")
+
+            threads = [threading.Thread(target=do_cancel), threading.Thread(target=do_sale)]
+            [t.start() for t in threads]
+            [t.join() for t in threads]
+    finally:
+        plan_mod.lock_decision_pieces = real_lock
+    check("3 races: no deadlock or server error", errors == [], errors[:3])
+    clean(db, "T14", since)
+
+
+def t15(db, cat, alice, bob):
+    print("T15 A correction racing a sale on the same variant (fresh sessions, as two requests)")
+    import threading
+    import time
+    bar, bv, since = bar_for(db, cat, "T15 Bar", stock_qty=10)
+    T.public_offcut(db, bar, bv, 5.0)
+    since = rebaseline(db)
+    x = checkout(db, bob, [cut(bar, bv, 3.0)])            # cut from the 5ft offcut: stock stays 10
+    xi = item_of(db, x.orderId)
+    check("setup: X cut from the offcut, stock 10", stock(db, bv) == 10, stock(db, bv))
+    errors = []
+    # The correction reads its order item, product and variant, then pauses (a slow request);
+    # a sale of a whole bar commits meanwhile; then the correction draws its new bar. Read
+    # without a lock, the correction writes back 10 - 1 and the sale's bar is lost.
+    real_target = orderService._correction_target
+
+    def slow_target(*a, **kw):
+        out = real_target(*a, **kw)
+        time.sleep(0.6)
+        return out
+    orderService._correction_target = slow_target
+    try:
+        def do_correct():
+            with Session(engine) as s:
+                try:
+                    orderService.correct_profile_offcut_for_order_item(
+                        x.orderId, xi.item_id, 0, 0, 18.0, True, None, "test", s, M.manager(alice),
+                        source_unused=True, force_new_source=True)
+                except Exception as e:  # noqa: BLE001
+                    s.rollback()
+                    errors.append(f"correction: {type(e).__name__}: {str(e).splitlines()[0][:120]}")
+
+        def do_sale():
+            with Session(engine) as s:
+                try:
+                    time.sleep(0.2)
+                    checkout(s, bob, [T.full(bar, bv, 1)])
+                except Exception as e:  # noqa: BLE001
+                    s.rollback()
+                    errors.append(f"sale: {type(e).__name__}: {str(e).splitlines()[0][:120]}")
+
+        threads = [threading.Thread(target=do_correct), threading.Thread(target=do_sale)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+    finally:
+        orderService._correction_target = real_target
+    check("both went through", errors == [], errors)
+    check("stock 10 - the correction's new bar - the sale's bar = 8", stock(db, bv) == 8, stock(db, bv))
+    clean(db, "T15", since)
+
+
+def phase3(db, cat, alice, bob):
+    set_flag_raw(db, "true")
+    try:
+        for fn in (t11, r4, t14, t15):
+            fn(db, cat, alice, bob)
+    finally:
+        T.close_all(db)
+        set_flag_raw(db, "false")
+
+
 def phase2(db, cat, alice):
     bob = T.seed_user(db, "prov-bob")
     db.commit()
@@ -495,6 +666,7 @@ def phase2(db, cat, alice):
     finally:
         T.close_all(db)
         set_flag_raw(db, "false")
+    phase3(db, cat, alice, bob)
 
 
 def main():
