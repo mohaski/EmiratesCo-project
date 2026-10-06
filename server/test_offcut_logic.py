@@ -1,12 +1,39 @@
+"""1D cut engine basics: best-fit offcut reuse, fresh-bar fallback, manual selections.
+
+  1  3ft cut from an empty pool: a fresh 10ft bar, 7ft left
+  2  6ft cut: taken from the 7ft offcut (best fit), stock unchanged, 1ft left
+  3  5ft cut: nothing fits, a fresh bar, 5ft left beside the 1ft
+  4  manual pick of 4ft from a 5ft offcut for a 9ft cut: the 5ft shortfall is topped up
+     from a fresh bar; the two 1ft leftovers pool together
+  5  a pick longer than the cut is refused
+  6  a shortfall longer than a whole bar is refused
+  7  the shortfall uses an unpicked offcut that fits before opening a bar
+
+Runs against emiratesco_edit_test (it writes orders). Exits 1 on any failure.
+"""
+import os
+import sys
+
 from sqlmodel import Session, create_engine, select
+
 from db.database import DATABASE_URL
-from entities.products import Product
-from entities.variants import Variant
 from entities.offcuts import Offcut
-from entities.orders import Order
 from entities.orderItems import OrderItem
+from entities.orders import Order
+from entities.products import Category, Product
 from entities.users import User
-from core.inventory.inventoryService import deduct_stock_for_order_item, apply_manual_cut_selection
+from entities.variants import Variant
+from core.inventory.inventoryService import apply_manual_cut_selection, deduct_stock_for_order_item
+
+failures = []
+
+
+def check(label, got, want):
+    ok = got == want
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + ("" if ok else f" — got {got!r}, want {want!r}"))
+    if not ok:
+        failures.append(label)
+
 
 def _clear(db, offs):
     # Through safe_delete_offcut with the ledger's pieces retired first, not a bare
@@ -20,16 +47,9 @@ def _clear(db, offs):
 
 
 def _refuse_live_database():
-    """These tests create REAL orders (pending, zero-value, many with cut lines) wherever
-    DATABASE_URL points. Against the live database they land in the floor's cutting queue
-    next to real work — on 2026-09-27 they accounted for 19 of the 50 orders there. Point
-    DATABASE_URL at the throwaway copy instead:
-
-        DATABASE_URL=postgresql+psycopg2://postgres:<pw>@localhost/emiratesco_edit_test
-
-    Set ALLOW_LIVE_TESTS=1 to run against the live database deliberately.
-    """
-    import os
+    """These tests create REAL orders wherever DATABASE_URL points. Against the live
+    database they land in the floor's cutting queue next to real work. Point DATABASE_URL
+    at emiratesco_edit_test, or set ALLOW_LIVE_TESTS=1 to run against live deliberately."""
     from sqlalchemy import text
     from db.database import engine as _engine
     with _engine.connect() as c:
@@ -41,204 +61,140 @@ def _refuse_live_database():
         )
 
 
+def pool(db, product):
+    """(length, quantity, status) of every row with stock, sorted."""
+    db.expire_all()
+    return sorted((round(o.length, 3), o.quantity, o.status)
+                  for o in db.exec(select(Offcut).where(Offcut.product_id == product.productId,
+                                                        Offcut.quantity > 0)).all())
+
+
+def cut_item(db, order, p, v, length):
+    item = OrderItem(order_id=order.orderId, product_id=p.productId, variant_id=v.variantId,
+                     total_price=0, status="purchased",
+                     details={"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": length}}]})
+    db.add(item)
+    deduct_stock_for_order_item(db, item)
+    db.commit()
+    return item
+
+
+def stock(db, v):
+    db.expire_all()
+    return db.get(Variant, v.variantId).stock_quantity
+
+
+def seed_pool(db, p, v, stock_qty, lengths):
+    _clear(db, db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all())
+    v.stock_quantity = stock_qty
+    db.add(v)
+    for length in lengths:
+        db.add(Offcut(product_id=p.productId, variant_id=v.variantId, length=length, quantity=1))
+    db.commit()
+
+
+def row_of(db, p, length):
+    return db.exec(select(Offcut).where(Offcut.product_id == p.productId, Offcut.quantity > 0,
+                                        Offcut.length >= length - 0.01, Offcut.length <= length + 0.01)).first()
+
+
 def test_logic():
     engine = create_engine(DATABASE_URL)
     with Session(engine) as db:
-        # Select just the userId column (not full User rows) — some existing user
-        # rows carry a stale `role` value predating migrate_rename_roles.py that
-        # doesn't match the current enum, which would blow up a full-row fetch.
+        # Just the id column: some old user rows carry a role value the enum no longer has.
         servedby = db.exec(select(User.userId)).first()
         if not servedby:
-            raise RuntimeError("No users found in DB — need at least one user to seed a test order (Tests 1-3)")
+            raise RuntimeError("No users in the test DB - seed it first (tests/seed_ui_test_db.py)")
+        cat = db.exec(select(Category)).first()
+        if cat is None:
+            cat = Category(name="Test Category", type="ke-profile", sub_categories=[])
+            db.add(cat)
+            db.commit()
 
         order = Order(servedby=servedby, subtotal=0, total=0)
         db.add(order)
         db.commit()
-        db.refresh(order)
-        # 1. Setup Test Product + Variant (length/price now live on the variant)
+
         p = db.exec(select(Product).where(Product.name == "Test Offcut Bar")).first()
         if not p:
-            p = Product(name="Test Offcut Bar", category_id=1, stock_quantity=10, track_offcuts=True, has_variants=True)
+            p = Product(name="Test Offcut Bar", category_id=cat.categoryId, stock_quantity=10,
+                        track_offcuts=True, has_variants=True)
             db.add(p)
             db.commit()
-            db.refresh(p)
-            print(f"Created Test Product: {p.productId} (Stock: {p.stock_quantity})")
-
         v = db.exec(select(Variant).where(Variant.product_id == p.productId)).first()
         if not v:
-            v = Variant(product_id=p.productId, name='', attributes={}, stock_quantity=10, price=100.0, length=10.0)
-            db.add(v)
-            db.commit()
-            db.refresh(v)
-        else:
-            v.stock_quantity = 10
-            v.length = 10.0
-            db.add(v)
-
-        # Reset stock + clear offcuts
+            v = Variant(product_id=p.productId, name="", attributes={}, stock_quantity=10, price=100.0)
+        # min_usable must be set: the entity default is 150 (the 2D/mm default), which files
+        # every bar remainder under 150ft as scrap. The app sets bars to 2ft; 1ft here keeps
+        # the 1ft leftovers of tests 2 and 4 usable.
+        v.stock_quantity, v.length, v.min_usable = 10, 10.0, 1.0
         p.stock_quantity = 10
-        db.add(p)
-        offs = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        _clear(db, offs)
-        db.commit()
-        print(f"Reset Test Product: {p.productId} / Variant {v.variantId} (Stock: {v.stock_quantity})")
-
-        # 2. Simulate Order for 3ft Cut
-        # Should take from Full (10ft) -> Remaining 7ft Offcut
-        print("\n--- Test 1: Order 3ft Cut ---")
-        item1 = OrderItem(
-            order_id=order.orderId, product_id=p.productId, variant_id=v.variantId,
-            total_price=0, status="purchased",
-            details={"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 3.0}}]},
-        )
-        db.add(item1)
-        deduct_stock_for_order_item(db, item1)
+        db.add_all([p, v])
+        _clear(db, db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all())
         db.commit()
 
-        # Check
-        db.refresh(v)
-        print(f"Stock after 3ft cut: {v.stock_quantity} (Expected 9)")
-        offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        print(f"Offcuts: {[o.length for o in offcuts]} (Expected [7.0])")
+        print("1  3ft cut from an empty pool")
+        cut_item(db, order, p, v, 3.0)
+        check("a fresh bar: stock 10 -> 9", stock(db, v), 9)
+        check("7ft left", pool(db, p), [(7.0, 1, "available")])
 
-        # 3. Simulate Order for 6ft Cut
-        # Should NOT fit in 7ft (if we assume best fit? Wait, 6ft DOES fit in 7ft. 7 >= 6)
-        # So it should take the 7ft offcut -> Remaining 1ft Offcut
-        print("\n--- Test 2: Order 6ft Cut ---")
-        item2 = OrderItem(
-            order_id=order.orderId, product_id=p.productId, variant_id=v.variantId,
-            total_price=0, status="purchased",
-            details={"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 6.0}}]},
-        )
-        db.add(item2)
-        deduct_stock_for_order_item(db, item2)
-        db.commit()
+        print("2  6ft cut")
+        cut_item(db, order, p, v, 6.0)
+        check("cut from the 7ft offcut: stock unchanged", stock(db, v), 9)
+        check("1ft left", pool(db, p), [(1.0, 1, "available")])
 
-        db.refresh(v)
-        print(f"Stock after 6ft cut: {v.stock_quantity} (Expected 9 - no change, used offcut)")
-        offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        print(f"Offcuts: {[o.length for o in offcuts]} (Expected [1.0])")
+        print("3  5ft cut")
+        cut_item(db, order, p, v, 5.0)
+        check("nothing fits: a fresh bar, stock 9 -> 8", stock(db, v), 8)
+        check("1ft and 5ft left", pool(db, p), [(1.0, 1, "available"), (5.0, 1, "available")])
 
-        # 4. Simulate Order for 5ft Cut
-        # Should NOT fit in 1ft. Should take Full (10ft) -> Reamining 5ft Offcut.
-        print("\n--- Test 3: Order 5ft Cut ---")
-        item3 = OrderItem(
-            order_id=order.orderId, product_id=p.productId, variant_id=v.variantId,
-            total_price=0, status="purchased",
-            details={"lineItems": [{"type": "accessory-cut", "qty": 1, "meta": {"length": 5.0}}]},
-        )
-        db.add(item3)
-        deduct_stock_for_order_item(db, item3)
-        db.commit()
-
-        db.refresh(v)
-        print(f"Stock after 5ft cut: {v.stock_quantity} (Expected 8)")
-        offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        # Should have 1.0 (from before) and 5.0 (new)
-        print(f"Offcuts: sorted {[o.length for o in offcuts]} (Expected [1.0, 5.0])")
-
-        # 5. Manual cashier selection — partial offcut + auto top-up from a fresh bar
-        # Seed a known offcut state directly (independent of the exact offcuts left
-        # over by Tests 1-3 above).
-        print("\n--- Test 4: Manual selection (partial offcut + top-up) — need 9ft ---")
-        offs = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        _clear(db, offs)
-        v.stock_quantity = 8
-        db.add(v)
-        db.add(Offcut(product_id=p.productId, variant_id=v.variantId, length=1.0, quantity=1))
-        db.add(Offcut(product_id=p.productId, variant_id=v.variantId, length=5.0, quantity=1))
-        db.commit()
-
-        # Cashier needs 9ft, picks 4ft from the 5.0ft offcut (-> new 1.0 remainder),
-        # remaining 5ft shortfall must be topped up from a fresh bar (-> stock -1, new 5.0 offcut)
-        five_ft = db.exec(
-            select(Offcut).where(Offcut.product_id == p.productId, Offcut.length >= 4.99, Offcut.length <= 5.01)
-        ).first()
-        db.refresh(v)
-        stock_before = v.stock_quantity
+        print("4  Manual pick of 4ft from a 5ft offcut for a 9ft cut")
+        seed_pool(db, p, v, 8, [1.0, 5.0])
         sources = apply_manual_cut_selection(
-            db, p, v,
-            selected_sources=[{"offcut_id": five_ft.offcutId, "length_used": 4.0}],
-            required_total_length=9.0,
-            full_length=10.0,
-        )
+            db, p, v, selected_sources=[{"offcut_id": row_of(db, p, 5.0).offcutId, "length_used": 4.0}],
+            required_total_length=9.0, full_length=10.0)
         db.commit()
-        db.refresh(v)
-        print(f"Sources: {sources}")
-        print(f"Stock after manual 9ft cut: {v.stock_quantity} (Expected {stock_before - 1})")
-        offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        # The 1.0ft remainder from the offcut merges with the pre-existing 1.0ft offcut (qty 2);
-        # the 5.0ft remainder from the top-up bar is a fresh row (qty 1)
-        print(f"Offcuts: sorted {sorted((o.length, o.quantity) for o in offcuts)} (Expected [(1.0, 2), (5.0, 1)])")
+        check("sources: the 5ft offcut, then a fresh bar",
+              [(s["source"], s["length_used"]) for s in sources], [("offcut", 4.0), ("full_bar", 5.0)])
+        check("the top-up drew one bar: stock 8 -> 7", stock(db, v), 7)
+        check("the two 1ft leftovers pool together; the bar leaves 5ft",
+              pool(db, p), [(1.0, 2, "available"), (5.0, 1, "available")])
 
-        # 6. Reject over-selection (selected lengths exceed the required cut)
-        print("\n--- Test 5: Manual selection over-selection rejection ---")
-        one_ft = db.exec(
-            select(Offcut).where(Offcut.product_id == p.productId, Offcut.length >= 0.99, Offcut.length <= 1.01)
-        ).first()
+        print("5  A pick longer than the cut")
+        before = (stock(db, v), pool(db, p))
         try:
             apply_manual_cut_selection(
-                db, p, v,
-                selected_sources=[{"offcut_id": one_ft.offcutId, "length_used": 1.0}],
-                required_total_length=0.5,
-                full_length=10.0,
-            )
-            print("TEST FAILED: over-selection was not rejected")
-        except ValueError as e:
+                db, p, v, selected_sources=[{"offcut_id": row_of(db, p, 1.0).offcutId, "length_used": 1.0}],
+                required_total_length=0.5, full_length=10.0)
+            check("refused", "accepted", "refused")
+        except ValueError:
             db.rollback()
-            print(f"Correctly rejected over-selection: {e}")
+            check("refused", "refused", "refused")
+        check("nothing moved", (stock(db, v), pool(db, p)), before)
 
-        # 7. Reject shortfall that exceeds a single full bar
-        print("\n--- Test 6: Manual selection shortfall-exceeds-full-bar rejection ---")
+        print("6  A shortfall longer than a whole bar")
         try:
-            apply_manual_cut_selection(
-                db, p, v,
-                selected_sources=[],
-                required_total_length=15.0,
-                full_length=10.0,
-            )
-            print("TEST FAILED: oversized shortfall was not rejected")
-        except ValueError as e:
+            apply_manual_cut_selection(db, p, v, selected_sources=[], required_total_length=15.0, full_length=10.0)
+            check("refused", "accepted", "refused")
+        except ValueError:
             db.rollback()
-            print(f"Correctly rejected oversized shortfall: {e}")
+            check("refused", "refused", "refused")
+        check("nothing moved", (stock(db, v), pool(db, p)), before)
 
-        # 8. Shortfall should be filled from an existing unselected offcut
-        # (exact-fit or larger) rather than a fresh bar, when one is available.
-        print("\n--- Test 7: Manual selection shortfall prefers an existing offcut over a new bar ---")
-        offs = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        _clear(db, offs)
-        v.stock_quantity = 8
-        db.add(v)
-        db.add(Offcut(product_id=p.productId, variant_id=v.variantId, length=3.0, quantity=1))
-        db.add(Offcut(product_id=p.productId, variant_id=v.variantId, length=6.0, quantity=1))
-        db.commit()
-
-        three_ft = db.exec(
-            select(Offcut).where(Offcut.product_id == p.productId, Offcut.length >= 2.99, Offcut.length <= 3.01)
-        ).first()
-        db.refresh(v)
-        stock_before = v.stock_quantity
-        # Cashier only explicitly picks the 3ft offcut; needs 9ft total -> 6ft shortfall.
-        # A 6ft offcut exists unselected — it should be used instead of a fresh bar.
+        print("7  The shortfall uses an unpicked offcut that fits")
+        seed_pool(db, p, v, 8, [3.0, 6.0])
         sources = apply_manual_cut_selection(
-            db, p, v,
-            selected_sources=[{"offcut_id": three_ft.offcutId, "length_used": 3.0}],
-            required_total_length=9.0,
-            full_length=10.0,
-        )
+            db, p, v, selected_sources=[{"offcut_id": row_of(db, p, 3.0).offcutId, "length_used": 3.0}],
+            required_total_length=9.0, full_length=10.0)
         db.commit()
-        db.refresh(v)
-        print(f"Sources: {sources}")
-        used_full_bar = any(s["source"] == "full_bar" for s in sources)
-        print(f"Used a fresh bar: {used_full_bar} (Expected False)")
-        print(f"Stock unchanged: {v.stock_quantity == stock_before} (Expected True, stock={v.stock_quantity})")
-        offcuts = db.exec(select(Offcut).where(Offcut.product_id == p.productId)).all()
-        print(f"Offcuts remaining: {[(o.length, o.quantity) for o in offcuts]} (Expected [] — both consumed exactly)")
+        check("sources: the picked 3ft, then the unpicked 6ft (no bar)",
+              [(s["source"], s["length_used"]) for s in sources], [("offcut", 3.0), ("offcut", 6.0)])
+        check("stock unchanged", stock(db, v), 8)
+        check("both offcuts used up exactly", pool(db, p), [])
+
 
 if __name__ == "__main__":
     _refuse_live_database()
-    try:
-        test_logic()
-        print("\nTest Complete.")
-    except Exception as e:
-        print(f"\nTEST FAILED: {e}")
+    test_logic()
+    print("\n" + ("All offcut-logic checks passed." if not failures else f"{len(failures)} FAILED: {failures}"))
+    sys.exit(1 if failures else 0)

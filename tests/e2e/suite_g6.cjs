@@ -8,6 +8,9 @@ const api = async (t, p, o = {}) => { const r = await fetch(API + p, { ...o, hea
 const uniq = () => Math.random().toString(36).slice(2, 7);
 let CEO, M, ME, WIDGET, CUST;
 const body = p => p.locator('body').innerText();
+// The receipt number as a whole number on the page (orders are numbered 1000 above their
+// internal id, so a substring of the id - 37 inside #1037 - proves nothing).
+const showsNo = (txt, no) => no != null && new RegExp(`(^|[^0-9])${no}([^0-9]|$)`).test(txt);
 const cartLen = p => p.evaluate(() => JSON.parse(localStorage.getItem('emirates_pos_cart') || '[]').length);
 
 // Tracks every WebSocket the page opens, so tests can count/close them.
@@ -113,7 +116,8 @@ const sale = async () => (await api(M, '/orders/', { method: 'POST', body: JSON.
     await p.evaluate(() => window.__sockets.forEach(s => { if (s.url.includes(':8010/ws') && s.readyState === 1) s.close(); }));
     const missed = await sale(); // broadcast while this screen is disconnected
     await p.waitForTimeout(7000);
-    check('order made while disconnected appears after the reconnect', (await body(p)).includes(String(missed)), `order ${missed}`);
+    const missedNo = (await api(M, `/orders/${missed}`)).data.orderNo;
+    check('order made while disconnected appears after the reconnect', showsNo(await body(p), missedNo), `order no. ${missedNo}`);
     check('still exactly one open socket', (await open()) === 1, await open());
     check('no page errors', p.errs.length === 0, p.errs.join(' | '));
     await p.context().close();
@@ -166,9 +170,11 @@ const sale = async () => (await api(M, '/orders/', { method: 'POST', body: JSON.
     for (let i = 0; i < 102; i++) await sale();
     const p = await newPage(browser);
     await login(p, 'qa_manager'); await p.goto(BASE + '/orders'); await p.waitForTimeout(1500);
-    await p.getByPlaceholder('Search by order ID or customer...').fill(String(oldest)); await p.waitForTimeout(1500);
+    // Searched the way a person does: by the receipt number, not the internal id.
+    const oldestNo = (await api(M, `/orders/${oldest}`)).data.orderNo;
+    await p.getByPlaceholder('Search by order ID or customer...').fill(String(oldestNo)); await p.waitForTimeout(1500);
     const t = await body(p);
-    check('order beyond the first 100 found by its number', !/No orders found/.test(t) && t.includes(String(oldest)));
+    check('order beyond the first 100 found by its number', !/No orders found/.test(t) && showsNo(t, oldestNo), `order no. ${oldestNo}`);
     check('it can be opened for editing', (await p.getByRole('button', { name: /Edit/ }).count()) > 0);
     check('no page errors', p.errs.length === 0, p.errs.join(' | '));
     await p.context().close();

@@ -56,12 +56,11 @@ async function sellCut(feet) {
     check('clearing the price box keeps the price (was saved as 0)', (await variantOf('QA Tracked Bar')).price === 2100, (await variantOf('QA Tracked Bar')).price);
     const stockBefore = (await variantOf('QA Tracked Bar')).stock_quantity;
     await p.locator('button[title="Edit pricing"]').click(); await p.waitForTimeout(300);
-    const labels = await p.locator('input[type=number]').evaluateAll(es => es.map(e => e.value));
-    const stockIdx = labels.length >= 3 ? labels.length - (await p.locator('input[type=number]').count() > 4 ? 3 : 2) : 1;
-    await p.locator('input[type=number]').nth(stockIdx).fill('-999');
+    // The stock box is the one under its "Adjust Stock" label - not a guess by position.
+    await p.locator('text=Adjust Stock').locator('xpath=..').locator('input[type=number]').fill('-999');
     await p.getByRole('button', { name: 'Save Changes' }).click(); await p.waitForTimeout(1200);
     const after = (await variantOf('QA Tracked Bar')).stock_quantity;
-    check('removing more stock than exists is refused with the reason', p.dialogs.some(d => /Can't remove 999/.test(d)) || after === stockBefore, p.dialogs.join(' | '));
+    check('removing more stock than exists is refused with the reason', p.dialogs.some(d => /Can't remove 999/.test(d)), p.dialogs.join(' | '));
     check('stock unchanged', after === stockBefore, `${stockBefore} -> ${after}`);
     check('no page errors', p.errs.length === 0, p.errs.join(' | '));
     await p.context().close();

@@ -24,6 +24,7 @@ import uuid
 sys.path.insert(0, os.getcwd())
 logging.disable(logging.CRITICAL)
 
+from fastapi import HTTPException
 from sqlmodel import Session, select, text
 
 import entities  # noqa: F401
@@ -215,14 +216,19 @@ def run():
             return T.item(rw, rwv, [{"type": "accessory-full", "qty": rng.randint(1, 4), "meta": {}, "rate": 100.0}])
 
         steps = 70
+        done = {}       # action -> steps that really did it (a refusal or a no-op doesn't count)
+        refused = 0
+        crashed = False
         for step in range(steps):
             name = rng.choice(list(users))
             user = users[name]
             mine = open_by[name]
             action = rng.choice(["open", "add", "add", "add", "remove", "release", "confirm", "checkout", "cancel"])
+            did = None
             try:
                 if action == "open" and len(mine) < 3:
                     mine.append(open_w(db, user))
+                    did = action
                 elif action == "add" and mine:
                     w = rng.choice(mine)
                     cur = windowService.get_window(db, w.windowId, FakeUser(user))
@@ -230,6 +236,7 @@ def run():
                                                    unitPrice=i.unitPrice, unitType=i.unitType, details=i.details)
                             for i in cur.items]
                     mine[mine.index(w)] = set_cart(db, user, cur, reqs + [random_line()], customerName="Rand")
+                    did = action
                 elif action == "remove" and mine:
                     w = rng.choice(mine)
                     cur = windowService.get_window(db, w.windowId, FakeUser(user))
@@ -239,23 +246,40 @@ def run():
                                 for i in cur.items]
                         reqs.pop(rng.randrange(len(reqs)))
                         mine[mine.index(w)] = set_cart(db, user, cur, reqs, customerName="Rand")
+                        did = action
                 elif action == "release" and mine:
                     w = mine.pop(rng.randrange(len(mine)))
                     release(db, user, w)
+                    did = action
                 elif action == "confirm" and mine:
                     w = rng.choice(mine)
                     cur = windowService.get_window(db, w.windowId, FakeUser(user))
                     if cur.items:
                         mine.remove(w)
                         confirmed.append(confirm(db, user, cur).orderId)
+                        did = action
                 elif action == "checkout":
                     confirmed.append(checkout(db, user, [random_line()]).orderId)
+                    did = action
                 elif action == "cancel" and confirmed:
                     M.cancel_not_cut(db, confirmed.pop(rng.randrange(len(confirmed))), user)
-            except Exception as e:  # refusals (not enough stock, ...) are legitimate outcomes
+                    did = action
+            except HTTPException as e:  # a refusal (not enough stock, ...) is a legitimate outcome...
                 db.rollback()
-                if "500" in str(getattr(e, "status_code", "")):
+                if e.status_code >= 500:
                     check(f"step {step} {action}: no server error", False, repr(e))
+                    crashed = True
+                    break
+                refused += 1
+            except Exception as e:  # ...anything else is a crash, never a refusal
+                db.rollback()
+                import traceback
+                traceback.print_exc()
+                check(f"step {step} ({action} by {name}): no crash", False, f"{type(e).__name__}: {e}")
+                crashed = True
+                break
+            if did:
+                done[did] = done.get(did, 0) + 1
             res = integrity.check(db, since_journal_id=since)
             if res["errors"]:
                 check(f"step {step} ({action} by {name}): integrity clean", False, res["errors"][:3])
@@ -269,6 +293,13 @@ def run():
                 break
         else:
             check(f"{steps} random steps: integrity clean, bar length and widget count conserved after every one", True)
+        print(f"    random run: {sum(done.values())} steps did something {done}, {refused} refused")
+        if not crashed:
+            # Conservation proves nothing if nothing happened: every kind of step must really
+            # have run, and most steps must have done something.
+            missing = [a for a in ("open", "add", "remove", "release", "confirm", "checkout", "cancel") if not done.get(a)]
+            check("every kind of step really ran at least once", missing == [], missing)
+            check("at least half the steps did something", sum(done.values()) >= steps // 2, (sum(done.values()), steps))
         window_invariants(db, "C (open windows)")
         T.close_all(db)
         check("all windows closed: bar material = start minus live cuts",
@@ -390,12 +421,9 @@ def run():
         release(db, bob, w)
         reasons = undo_engine.analyse(db, edit_op.op_id)["reasons"]
         db.rollback()
-        if reasons:
-            check("after the window closes: still refused (safe)", True)
-        else:
-            undo_engine.undo_operation(db, edit_op.op_id, actor=M.manager(alice), reason="test")
-            db.commit()
-            check("after the window closes: the undo applies", True)
+        # Decided (SALE_WINDOWS_INTEGRATION_PLAN.md D6): refused, with a reason, even after the
+        # window is released - the undo can't tell what that window's cut did to the piece.
+        check("after the window closes: the undo is still refused, with a reason", bool(reasons), reasons)
         clean(db, "G", since)
 
         # ── H. a window-confirmed order's later life ─────────────────────────

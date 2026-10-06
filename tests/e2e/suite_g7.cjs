@@ -8,6 +8,9 @@ const api = async (t, p, o = {}) => { const r = await fetch(API + p, { ...o, hea
 let CEO, M, ME, PRODS, CUST, BIZ;
 const prod = n => PRODS.find(p => p.name === n);
 const body = p => p.locator('body').innerText();
+// The receipt number as a whole number on the page (orders are numbered 1000 above their
+// internal id, so a substring of the id - 37 inside #1037 - proves nothing).
+const showsNo = (txt, no) => no != null && new RegExp(`(^|[^0-9])${no}([^0-9]|$)`).test(txt);
 const PRINT_COUNTER = () => { window.__prints = 0; window.print = () => { window.__prints += 1; }; };
 
 async function newPage(browser, user, ctxIn) {
@@ -192,7 +195,7 @@ const mkOrder = async (cust = CUST) => (await api(M, '/orders/', { method: 'POST
     const p = await newPage(browser, 'qa_ceo');
     await p.goto(BASE + '/activity'); await p.waitForTimeout(1200);
     const opts = await p.locator('select option').allInnerTexts();
-    check('filter offers Cut confirmed / Change undone / Stock mode changed', ['Cut confirmed', 'Change undone', 'Stock mode changed'].every(l => opts.some(o => o.includes(l))) || ['cutting_report', 'order_undo', 'product_update'].every(l => opts.some(o => o.includes(l))), opts.slice(-4).join(' / '));
+    check('filter offers Cut confirmed / Change undone / Stock mode changed (labels, not raw keys)', ['Cut confirmed', 'Change undone', 'Stock mode changed'].every(l => opts.some(o => o.includes(l))) && !['cutting_report', 'order_undo', 'product_update'].some(k => opts.some(o => o.includes(k))), opts.slice(-4).join(' / '));
     check('no page errors', p.errs.length === 0, p.errs.join(' | '));
     await p.context().close();
   }
@@ -232,7 +235,8 @@ const mkOrder = async (cust = CUST) => (await api(M, '/orders/', { method: 'POST
     const p = await newPage(browser, 'qa_manager');
     await p.goto(BASE + '/orders'); await p.waitForTimeout(1500);
     await p.getByPlaceholder('Search by order ID or customer...').fill('QA Busi'); await p.waitForTimeout(1800);
-    check(`order #${old} for QA Business (beyond the newest 100) found by name`, (await body(p)).includes(String(old)));
+    const oldNo = (await api(M, `/orders/${old}`)).data.orderNo;
+    check(`order no. ${oldNo} for QA Business (beyond the newest 100) found by name`, showsNo(await body(p), oldNo));
     check('no page errors', p.errs.length === 0, p.errs.join(' | '));
     await p.context().close();
   }

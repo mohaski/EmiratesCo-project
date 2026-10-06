@@ -267,7 +267,9 @@ def test_line_types(db, cat, alice, bob):
         {"type": "glass-cut", "qty": 2, "meta": {"l": 600, "w": 900, "u": "mm", "area": 5.8}, "rate": 12.0},
         {"type": "glass-cut", "qty": 1, "meta": {"l": 1000, "w": 800, "u": "mm", "area": 8.6}, "rate": 12.0}]),
         lines_item(g_p, g_v, [{"type": "sheet-half", "qty": 1, "meta": {"halfSide": "width"}, "rate": 60.0}])])
-    check("glass: 3 cuts + a half sheet held", stock(db, g_v) < 4, True)
+    # 1 sheet would do (the cuts fit in the half left over); the engine packs the cuts item
+    # first and opens a second sheet for the half. Bounded here, reported separately.
+    check("glass: 3 cuts + a half sheet held: one or two sheets out", stock(db, g_v) in (2, 3), True)
     check("  ...every glass remainder private", pool(db, g_p), [])
     release(db, alice, wa)
     check("  ...release: all 4 sheets back, nothing left over", (stock(db, g_v), pool(db, g_p)), (4, []))

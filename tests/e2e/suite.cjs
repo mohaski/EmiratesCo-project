@@ -46,6 +46,9 @@ async function addWidgetAndCheckout(page) {
   await page.waitForURL('**/checkout');
 }
 const bodyText = (page) => page.locator('body').innerText();
+// The receipt number as a whole number on the page (orders are numbered 1000 above their
+// internal id, so a substring of the id - 37 inside #1037 - proves nothing).
+const showsNo = (txt, no) => no != null && new RegExp(`(^|[^0-9])${no}([^0-9]|$)`).test(txt);
 
 (async () => {
   const browser = await chromium.launch();
@@ -71,7 +74,7 @@ const bodyText = (page) => page.locator('body').innerText();
     console.log('2. Order History reflects the new sale');
     await page.goto(BASE + '/orders'); await page.waitForTimeout(1500);
     const txt = await bodyText(page);
-    check('new order listed', txt.includes(`#${o.orderId}`) || txt.includes(String(o.orderId)), `order ${o.orderId}`);
+    check('new order listed', showsNo(txt, o.orderNo), `order no. ${o.orderNo}`);
     await page.context().close();
   }
 
@@ -99,7 +102,7 @@ const bodyText = (page) => page.locator('body').innerText();
     const page = await newPage(browser);
     await login(page, 'qa_manager');
     await page.goto(BASE + '/orders'); await page.waitForTimeout(1500);
-    const before = (await api(mgr, '/orders/')).data.map(o => o.orderId);
+    const before = (await api(mgr, '/orders/')).data.map(o => o.orderNo);
     const shownBefore = before.filter(async () => true).length;
     let failNext = true; let blocked = 0;
     await page.route(/:8010\/orders\/(\?.*)?$/, route => {
@@ -117,17 +120,17 @@ const bodyText = (page) => page.locator('body').innerText();
     await page.waitForTimeout(2500);
     let txt = await bodyText(page);
     check('a background refresh actually ran (and was failed)', blocked > 0, `blocked=${blocked}`);
-    const stillListed = before.every(id => txt.includes(String(id)));
-    check('existing orders still shown after failed refresh', stillListed);
+    const missing = before.filter(no => !showsNo(txt, no));
+    check('existing orders still shown after failed refresh', missing.length === 0, `missing ${missing.join(',')}`);
     check('error banner shown', /failed to load/i.test(txt));
     check('not blanked to "No orders"', !/no orders found/i.test(txt));
     // Recovery: next event succeeds and brings in the new order.
     failNext = false;
     await api(cashierTok, '/orders/', { method: 'POST', body: JSON.stringify({ servedBy: me.userId, amountPaid: 100, paymentMethod: 'cash', items: [{ productId: prod.productId, variantId: ids.variant, quantity: 1, unitPrice: 100, unitType: 'pcs', details: {}, totalPrice: 100 }] }) });
     await page.waitForTimeout(2500);
-    const latest = (await api(mgr, '/orders/')).data.slice(0, 2).map(o => o.orderId);
+    const latest = (await api(mgr, '/orders/')).data.slice(0, 2).map(o => o.orderNo);
     txt = await bodyText(page);
-    check('recovers and shows both new orders', latest.every(id => txt.includes(String(id))), latest.join(','));
+    check('recovers and shows both new orders', latest.every(no => showsNo(txt, no)), latest.join(','));
     check('error banner cleared', !/failed to load/i.test(txt));
     check('no page errors', page.errors.length === 0, page.errors.join(' | '));
     void shownBefore;
@@ -285,8 +288,8 @@ const bodyText = (page) => page.locator('body').innerText();
     await login(page, 'qa_ceo');
     await page.goto(BASE + '/orders'); await page.waitForTimeout(1500);
     const txt = await bodyText(page);
-    const latest = (await api(mgr, '/orders/')).data[0].orderId;
-    check('orders loaded for new session', txt.includes(String(latest)));
+    const latest = (await api(mgr, '/orders/')).data[0].orderNo;
+    check('orders loaded for new session', showsNo(txt, latest), `order no. ${latest}`);
     check('no page errors', page.errors.length === 0, page.errors.join(' | '));
     await page.context().close();
   }

@@ -229,14 +229,22 @@ asyncio.run(mgr.broadcast("orders_updated"))
 took = time.perf_counter() - t0
 check("a stalled socket doesn't hold up the others (< 3s)", took < 3 and live.got, round(took, 2))
 check("the stalled socket is dropped", stalled not in mgr._connections)
-mgr.disconnect(stalled)
-check("closing an already-dropped socket is harmless", True)
+before = list(mgr._connections)
+try:
+    mgr.disconnect(stalled)   # already pruned by the broadcast: must not raise...
+    raised = None
+except Exception as e:  # noqa: BLE001
+    raised = repr(e)
+check("closing an already-dropped socket is harmless (no error, nobody else dropped)",
+      raised is None and mgr._connections == before, raised or len(mgr._connections))
 
 print("B6. List sizes are capped")
 r = client.get("/orders/", params={"limit": 5000})
 check("limit 5000 -> 422", r.status_code == 422, r.status_code)
 r = client.get("/orders/with-balance", params={"limit": 1000})
-check("limit 1000 still allowed", r.status_code in (200, 403), r.status_code)
+check("limit 1000 still allowed (a cashier may list balances)", r.status_code == 200, r.status_code)
+r = client.get("/orders/with-balance", params={"limit": 1001})
+check("limit 1001 -> 422", r.status_code == 422, r.status_code)
 
 print("C1. An open pack's age is in Nairobi time")
 from core.inventory.openContainers.service import _utilization  # noqa: E402

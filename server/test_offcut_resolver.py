@@ -55,6 +55,13 @@ START_STOCK = 10
 failures = []
 
 
+def note(label, got):
+    """What the legacy (OFFCUT_LEDGER_ENABLED=0) path does, printed for the record. Not a
+    check: it must never REQUIRE that path to stay broken. It shows why the ledger must stay
+    on - switching it off brings these phantom bars and conjured offcuts back."""
+    print(f"    [NOTE] {label}: {got!r}")
+
+
 def check(label, got, want):
     ok = got == want
     print(f"    [{'PASS' if ok else 'FAIL'}] {label}: got {got!r}, want {want!r}")
@@ -235,10 +242,10 @@ def main():
     print(f"\n  LEGACY (size matching)  stock={legacy['stock']} pool={legacy['pool']}")
     print(f"  LEDGER (chain resolver) stock={modern['stock']} pool={modern['pool']}")
 
-    print("\n  Legacy behaviour - the bug as it exists today:")
-    check("legacy invents a whole bar in stock", legacy["stock"], 9)
-    check("legacy deletes order C's untouched 1.5 remainder",
-          [l for l, _ in legacy["pool"] if abs(l - 1.5) < 0.01], [])
+    print("\n  Legacy behaviour (ledger off) - known wrong, recorded only:")
+    note("legacy stock after the cancel (8 is right; 9 invents a bar)", legacy["stock"])
+    note("legacy 1.5 remainders left (order C's should survive)",
+         [l for l, _ in legacy["pool"] if abs(l - 1.5) < 0.01])
 
     print("\n  Ledger behaviour - the fix:")
     check("stock is not credited a bar that does not exist", modern["stock"], 8)
@@ -259,11 +266,9 @@ def main():
     print(f"  LEGACY  pool={legacy2['pool']} -> {legacy2['conservation']}")
     print(f"  LEDGER  pool={modern2['pool']} -> {modern2['conservation']}")
 
-    print("\n  Legacy behaviour:")
+    print("\n  Legacy behaviour (ledger off) - known wrong, recorded only:")
     lc = legacy2["conservation"]
-    check("legacy breaks material conservation", lc["actual"] > lc["expected"], True)
-    check("legacy conjures 2.7 of extra material",
-          round(lc["actual"] - lc["expected"], 4), 2.7)
+    note("legacy material conjured beyond what exists (0 is right)", round(lc["actual"] - lc["expected"], 4))
 
     print("\n  Ledger behaviour:")
     mc = modern2["conservation"]

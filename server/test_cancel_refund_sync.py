@@ -7,6 +7,9 @@ the Dues page for an order that no longer exists. See _restore_and_cancel.
 Run: python test_cancel_refund_sync.py  (requires a running dev DB)
 """
 from sqlmodel import Session, create_engine, select
+import sys
+
+from _testdb_guard import require_test_db
 from db.database import DATABASE_URL
 from core.ordering import orderService, model as order_model
 from entities.users import User
@@ -26,14 +29,16 @@ def _check(label, cond):
 
 
 def run():
+    """Returns True when every check passed. A missing user or a skipped section is a failure."""
     engine = create_engine(DATABASE_URL)
+    require_test_db(engine)
     all_ok = True
 
     with Session(engine) as db:
         user = db.exec(select(User).where(User.role.in_(["admin", "ceo", "manager", "cashier"]))).first()
         if not user:
-            print("No user found in DB — cannot run test.")
-            return
+            print("FAIL: no user found in DB — cannot run test.")
+            return False
 
         customer = db.exec(select(Customer).where(Customer.type.in_(["individual", "cooperate"]))).first()
         if not customer:
@@ -109,7 +114,8 @@ def run():
         all_ok &= _check("credit.status closed to Paid so it drops off the Dues page", credit.status == "Paid")
 
     print("\nALL PASS" if all_ok else "\nSOME CHECKS FAILED")
+    return all_ok
 
 
 if __name__ == "__main__":
-    run()
+    sys.exit(0 if run() else 1)

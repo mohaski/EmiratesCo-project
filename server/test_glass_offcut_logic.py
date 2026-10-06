@@ -189,6 +189,25 @@ def test_4_sales_history_no_longer_protects_offcuts(db, p, v, servedby):
     # removed, this history must NOT influence which offcut gets cut — CEO
     # popular_size_ranges (see test_30/31) are the only thing that can protect
     # an offcut now, and none are configured on this product for this test.
+    formerly_popular = Offcut(product_id=p.productId, variant_id=v.variantId, width=400.0, height=300.0, length=0.0, quantity=1, status="available")
+    other = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=300.0, length=0.0, quantity=1, status="available")
+    db.add(formerly_popular)
+    db.add(other)
+    db.commit()
+    db.refresh(formerly_popular)
+    db.refresh(other)
+
+    def chosen():
+        line = _mk_line(200, 200)
+        gos.resolve_glass_cut_lines(db, p, v, [line])
+        return line["offcut_sources"][0]["offcut_id"]
+
+    # What the engine picks with NO sales history (tried in a savepoint, rolled back)...
+    savepoint = db.begin_nested()
+    without_history = chosen()
+    savepoint.rollback()
+
+    # ...must be what it picks once 400x300 cuts have "sold" 5 times.
     order = Order(servedby=servedby, subtotal=0, total=0)
     db.add(order)
     db.commit()
@@ -200,26 +219,13 @@ def test_4_sales_history_no_longer_protects_offcuts(db, p, v, servedby):
     )
     db.add(seed_item)
     db.commit()
-
-    formerly_popular = Offcut(product_id=p.productId, variant_id=v.variantId, width=400.0, height=300.0, length=0.0, quantity=1, status="available")
-    other = Offcut(product_id=p.productId, variant_id=v.variantId, width=450.0, height=300.0, length=0.0, quantity=1, status="available")
-    db.add(formerly_popular)
-    db.add(other)
-    db.commit()
-    db.refresh(formerly_popular)
-    db.refresh(other)
-
-    line = _mk_line(200, 200)
-    lines = [line]
-    gos.resolve_glass_cut_lines(db, p, v, lines)
+    with_history = chosen()
     db.commit()
 
-    src = line["offcut_sources"][0]
-    print(f"Source: {src}")
-    # No longer asserting avoidance of the historically-popular offcut — just
-    # confirming the resolution succeeds and picks SOME valid offcut, proving
-    # nothing crashes now that _score_protect_popular is gone.
-    assert src["offcut_id"] in (formerly_popular.offcutId, other.offcutId)
+    print(f"Chosen without history: {without_history}, with history: {with_history}")
+    assert without_history in (formerly_popular.offcutId, other.offcutId), without_history
+    assert with_history == without_history, (
+        f"sales history changed the choice: {without_history} -> {with_history}")
     print("PASS")
 
 
@@ -1465,7 +1471,7 @@ def run():
             except Exception as e:
                 db.rollback()
                 failures.append((name, e))
-                print(f"{name} FAILED: {e}")
+                print(f"[FAIL] {name}: {type(e).__name__}: {e}")
 
         print("\n" + "=" * 60)
         if failures:
@@ -1474,8 +1480,10 @@ def run():
                 print(f"  - {name}: {e}")
         else:
             print("All tests PASSED.")
+        return failures
 
 
 if __name__ == "__main__":
+    import sys
     _refuse_live_database()
-    run()
+    sys.exit(1 if run() else 0)

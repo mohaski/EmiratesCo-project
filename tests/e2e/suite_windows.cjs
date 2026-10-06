@@ -126,7 +126,8 @@ const widgetItem = (qty) => ({ productId: prod('QA Widget').productId, variantId
     await p.waitForTimeout(2500);
     check('stock back to 10', await variantStock('QA Widget') === 10, await variantStock('QA Widget'));
     const t = await body(p);
-    check('the till shows the cart empty and asks for a customer again', /Select Customer/.test(t) || !/QA Widget/.test(t));
+    // The cart itself, not the whole page (the product grid behind the prompt lists QA Widget).
+    check('the till shows the cart empty, asks for a customer again and says why', /No items added/.test(t) && /Select Customer/.test(t) && /idle for more than 15 minutes/.test(t), t.slice(-400).replace(/\n/g, ' | '));
     check('no page errors', p.errs.length === 0, p.errs.join(' | '));
     await p.context().close();
     await closeAll(CASH);
@@ -205,7 +206,7 @@ const widgetItem = (qty) => ({ productId: prod('QA Widget').productId, variantId
     check('...and its 4 are back', await variantStock('QA Widget') === start, `${start} -> ${await variantStock('QA Widget')}`);
     const q = await newPage(browser, 'qa_manager', ctx);
     await q.goto(BASE + '/sales'); await q.waitForTimeout(1200);
-    check('the next person on this till has no windows', !/Window 1/.test(await body(q)) || (await myWindows(M)).length === 0);
+    check('the next person on this till has no windows', !/Window 1/.test(await body(q)) && (await myWindows(M)).length === 0);
     check('no page errors', p.errs.length + q.errs.length === 0, [...p.errs, ...q.errs].join(' | '));
     await ctx.close();
   }
@@ -297,4 +298,5 @@ const widgetItem = (qty) => ({ productId: prod('QA Widget').productId, variantId
   await browser.close();
   const passed = results.filter(Boolean).length;
   console.log(`\n${passed}/${results.length} passed`);
+  process.exit(passed === results.length ? 0 : 1);
 })().catch(e => { console.error('Error:', e); process.exit(1); });

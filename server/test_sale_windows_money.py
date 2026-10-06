@@ -151,6 +151,30 @@ for vat, discount in itertools.product((False, True), (0, 30, 250, -5)):
         check(f"vat={vat} discount={discount} paid={paid_kind} method={method_kind}", same, diff)
 check("ran the whole matrix", combos == 2 * 4 * 6 * 4, combos)
 
+print("1b. Absolute figures, worked out by hand (parity alone passes a bug both paths share)")
+# QA Widget sells at 100 (seed). Discount comes off first, then 16% VAT rounded UP to a whole
+# shilling: 100-30 = 70, VAT 11.2 -> 12, total 82.
+for vat, discount, want_sub, want_total in ((False, 0, 100.0, 100.0), (True, 0, 100.0, 116.0),
+                                            (False, 30, 70.0, 70.0), (True, 30, 70.0, 82.0),
+                                            (True, 250, 0.0, 0.0)):
+    for path, sell in (("checkout", via_checkout), ("window", via_window)):
+        kind, rows = sell(vat, discount, 0, "cash", None)
+        check(f"{path} vat={vat} discount={discount}: subtotal {want_sub:g}, total {want_total:g}",
+              kind == "sold" and (rows["subtotal"], rows["total"]) == (want_sub, want_total),
+              (kind, rows if kind != "sold" else (rows["subtotal"], rows["total"])))
+for path, sell in (("checkout", via_checkout), ("window", via_window)):
+    kind, rows = sell(True, 0, 40, "cash", None)
+    check(f"{path}: 40 paid on 116 leaves 76 owing, Partial, one 40 cash payment, a 76 credit",
+          kind == "sold" and (rows["amountPayed"], rows["balance"], rows["payment_status"], rows["payments"],
+                              [c[1] for c in rows["credits"]])
+          == (40.0, 76.0, "Partial", [(40.0, "cash", "None", "order")], [76.0]),
+          rows)
+    kind, rows = sell(False, 0, 100, "mpesa", None)
+    check(f"{path}: exact payment of 100 is Paid with nothing owing",
+          kind == "sold" and (rows["amountPayed"], rows["balance"], rows["payment_status"]) == (100.0, 0.0, "Paid"),
+          rows)
+    check(f"{path}: a negative discount is refused (4xx)", sell(False, -5, 0, "cash", None) == ("refused", 4))
+
 print("2. A quotation converted through a window keeps its discount and VAT")
 with Session(engine) as db:
     inv = Invoice(customer_id=CUST, customer_name="QA Business", customer_type="registered",

@@ -272,6 +272,7 @@ def test_confirm(db, cat, alice, bob):
     expect_http("a held window can't be fetched as an order", 404, orderService.get_order_by_orderId, wa.orderId, db)
 
     counter = db.exec(text("SELECT last_no FROM order_number_counter")).first()[0]
+    day_before = PaymentService.get_financial_summary("day", None, db).order_count
     key = uuid.uuid4().hex
     res = confirm(db, alice, wa, key=key, paid=float(wa.total))
     check("confirmed order gets the next number", res.orderNo, counter + 1)
@@ -289,7 +290,8 @@ def test_confirm(db, cat, alice, bob):
     check("confirmed order IS in the cutting queue", res.orderId in queue_ids, True)
     check("its 16ft remainder is now public", pool(db, product), [(16.0, 0, 0, 1)])
     summary = PaymentService.get_financial_summary("day", None, db)
-    check("the day's report counts it", summary.order_count >= 1, True)
+    check("the day's report counts it exactly once (held: not counted; retried confirm: not twice)",
+          summary.order_count, day_before + 1)
 
     # Gap-free: an abandoned window in between, then a failed confirm, then a good one.
     wx = open_w(db, bob)

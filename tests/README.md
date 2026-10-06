@@ -37,5 +37,16 @@ tests/run_all.sh                         # backend, then browser
 ```
 
 The runners work out the test DB URL from `server/.env` themselves. Logs go to `tests/.logs/`.
+
+**Pass/fail is the exit code.** A suite fails when it exits non-zero; the `pass=`/`fail=` counts
+in the summary are information only. Each runner prints a final `BACKEND:` / `BROWSER:` line and
+exits 1 if any suite failed (`run_all.sh` too). A suite that only prints results without
+exiting non-zero on a failure is a bug in the suite.
+
+**One run at a time.** The suites truncate shared tables, so a runner takes a lock on the test
+database and a second run refuses (exit 2) rather than wiping the first one's data mid-run.
+
+Every Python script refuses to run anywhere but the test database (`server/_testdb_guard.py`, or
+its own `current_database()` check).
 Each browser suite starts from a fresh seed. `suite_windows` switches sale windows on itself;
 every other suite runs with them off, which is the default.

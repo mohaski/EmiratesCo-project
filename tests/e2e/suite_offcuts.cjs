@@ -167,4 +167,5 @@ const openPicker = p => p.getByRole('button', { name: /Choose offcuts or a new b
   await browser.close();
   const passed = results.filter(Boolean).length;
   console.log(`\n${passed}/${results.length} passed`);
+  process.exit(passed === results.length ? 0 : 1);
 })().catch(e => { console.error('Error:', e); process.exit(1); });

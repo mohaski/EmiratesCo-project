@@ -225,11 +225,15 @@ def r6():
     rows = w.db.exec(select(Offcut).where(Offcut.product_id == glass.productId, Offcut.quantity > 0)
                      .order_by(Offcut.offcutId.asc())).all()
     target = max(rows, key=lambda r: r.width * r.height)
-    correct(w, target, width=target.width - 10, height=target.height)
+    # The new size, worked out BEFORE the edit: re-reading target.width afterwards would
+    # compare the result with itself, and a correction that did nothing would still pass.
+    want_w, want_h = target.width - 10, target.height
+    correct(w, target, width=want_w, height=want_h)
     w.db.expire_all()
+    check("the row itself has the new size", (target.width, target.height), (want_w, want_h))
     pieces = pieces_on(w.db, target.offcutId)
     check("2D piece re-measured, still available",
-          [(p.state, p.width) for p in pieces], [("available", target.width)])
+          [(p.state, p.width, p.height) for p in pieces], [("available", want_w, want_h)])
     w.ok("R6")
     check("rebuild changes nothing", rebuild_changes(w.db, pieces), [])
     w.db.rollback()

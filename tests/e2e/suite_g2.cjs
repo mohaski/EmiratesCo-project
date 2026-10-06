@@ -174,8 +174,11 @@ const latestOrderId = async () => (await api(M, '/orders/')).data[0].orderId;
     await api(cashierTok, '/financials/payments', { method: 'POST', body: JSON.stringify({ orderId: id, amount: 30, paymentMethod: 'cash' }) });
     // the list row on screen may still say 40 — the modal must show 70
     await page.getByRole('button', { name: /Cancel/ }).first().click(); await page.waitForTimeout(1200);
+    // In the cancel modal itself, as an amount: 70 (40 + the 30 paid meanwhile), not the stale 40.
+    const modal = await page.locator('form').last().innerText();
+    check('modal shows the current paid amount (70)', /(^|[^0-9.,])70(\.00)?([^0-9]|$)/.test(modal) && !/(^|[^0-9.,])40(\.00)?([^0-9]|$)/.test(modal),
+          (modal.match(/[^\n]*(refund|paid)[^\n]*/gi) || []).join(' | '));
     let t = await body(page);
-    check('modal shows the current paid amount (70)', /70/.test(t), (t.match(/[^\n]*refund[^\n]*/i) || [''])[0]);
     const form = page.locator('form').last();
     await form.getByRole('button', { name: /split/i }).click();
     await form.locator('input[type=number]').first().fill('-5'); await page.waitForTimeout(200);

@@ -9,6 +9,7 @@ given a request body below (so nobody can add one without deciding how it treats
 Runs on emiratesco_edit_test (DATABASE_URL), after the seed. Run from server/.
 """
 import logging
+import re
 import os
 import sys
 import uuid
@@ -172,7 +173,17 @@ for route in main.app.routes:
             if isinstance(body, dict) and "item_id" in body:
                 body = {**body, "item_id": item}
             resp = call(method, path, json=body, params=QUERY.get(route.path))
-            check(f"{method} {route.path} [{label}] -> 404", resp.status_code == 404, (resp.status_code, resp.text[:120]))
+            # A 404 for the RIGHT reason: the window's order doesn't exist as an order. Any other
+            # 404 ("event not found", "item not found") passes even if the route never asked
+            # whether the order is a window. ("Order item not found on this order" is
+            # projected_offcuts' message for a hidden order OR an item not on it - checked.)
+            try:
+                detail = str(resp.json().get("detail", ""))
+            except ValueError:
+                detail = resp.text
+            check(f"{method} {route.path} [{label}] -> 404 order not found",
+                  resp.status_code == 404 and re.search(r"order( item)?( #?\d+)? not found", detail, re.I) is not None,
+                  (resp.status_code, resp.text[:120]))
             swept += 1
 check("swept at least 30 route calls", swept >= 30, swept)
 
