@@ -295,6 +295,43 @@ const widgetItem = (qty) => ({ productId: prod('QA Widget').productId, variantId
     await p.context().close(); await m.context().close(); await c.context().close();
   }
 
+  console.log('12. Reopening a window line never offers its own leftover (9ft from a new 21ft bar)');
+  {
+    await api(CEO, '/windows/settings', { method: 'PUT', body: JSON.stringify({ enabled: true }) });
+    const p = await newPage(browser, 'qa_cashier');
+    await p.goto(BASE + '/sales'); await p.waitForTimeout(900); await pickCustomer(p);
+    const startCut = async (feet) => {
+      await p.getByRole('button', { name: /QA Profile/ }).click(); await p.waitForTimeout(300);
+      await p.locator('.product-card', { hasText: 'QA Tracked Bar' }).first().click(); await p.waitForTimeout(600);
+      await p.locator('text=Total feet needed').locator('xpath=ancestor::div[1]').locator('input').first().fill(String(feet)); await p.waitForTimeout(700);
+    };
+    const openPicker = () => p.getByRole('button', { name: /Choose offcuts or a new bar/ }).click().then(() => p.waitForTimeout(1200));
+    await startCut(9); await openPicker();
+    await p.getByTestId('new-bar-option').click(); await p.waitForTimeout(300);
+    await p.getByRole('button', { name: 'Use a New Bar' }).click(); await p.waitForTimeout(500);
+    await addBtn(p).click(); await p.waitForTimeout(1800);
+    const [w] = await myWindows(CASH);
+    const held = (await api(CASH, `/products/${prod('QA Tracked Bar').productId}/offcuts?variant_id=${prod('QA Tracked Bar').variants[0].variantId}&hold_order_id=${w.orderId}`)).data;
+    check('the window holds the 12ft leftover', held.some(o => o.length === 12), JSON.stringify(held.map(o => o.length)));
+    await p.getByRole('button', { name: 'Edit', exact: true }).first().click(); await p.waitForTimeout(900);   // reopen the 9ft line
+    check('reopened: the line still says "From a new bar"', /From a new bar \(offcuts not used\)/.test(await body(p)));
+    await p.locator('text=From a new bar (offcuts not used)').locator('xpath=..').getByRole('button', { name: 'Edit' }).click(); await p.waitForTimeout(1200);
+    let t = await body(p);
+    check('reopened line: the 12ft is not offered', !/12\.00 ft/.test(t), (t.match(/\d+\.\d\d ft[^\n]*/g) || []).join(' | '));
+    check('it says the cut comes from a full bar', /No offcuts available/.test(t));
+    await p.getByRole('button', { name: 'Cancel' }).click(); await p.waitForTimeout(300);
+    await addBtn(p).click(); await p.waitForTimeout(1800);      // the line saved back unchanged
+    // A second line in the same window really can cut from that 12ft (both cuts come off one bar).
+    await startCut(5); await openPicker();
+    t = await body(p);
+    check('a new line in the same window is offered the 12ft', /12\.00 ft/.test(t), (t.match(/\d+\.\d\d ft[^\n]*/g) || []).join(' | '));
+    await p.getByRole('button', { name: 'Cancel' }).click(); await p.waitForTimeout(300);
+    await p.keyboard.press('Escape'); await p.locator('button:has-text("✕")').first().click().catch(() => {}); await p.waitForTimeout(300);
+    check('no page errors', p.errs.length === 0, p.errs.join(' | '));
+    await p.context().close();
+    await closeAll(CASH);
+  }
+
   await browser.close();
   const passed = results.filter(Boolean).length;
   console.log(`\n${passed}/${results.length} passed`);

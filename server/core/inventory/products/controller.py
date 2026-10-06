@@ -245,12 +245,13 @@ def get_product_offcuts(
     product_id: int,
     variant_id: Optional[int] = Query(None, description="Filter by variant ID"),
     hold_order_id: Optional[int] = Query(None, description="Your open sale window's order id: include its held remainders"),
+    for_item_id: Optional[int] = Query(None, description="The window line being reopened: leave out remainders it, or a later line, produced"),
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
     from core.ordering.windowService import require_own_held_order
     hold_order_id = require_own_held_order(db, hold_order_id, current_user)
-    return service.get_offcuts_for_product(product_id, db, variant_id, hold_order_id)
+    return service.get_offcuts_for_product(product_id, db, variant_id, hold_order_id, for_item_id)
 
 @router.post("/{product_id}/offcuts/bulk", response_model=List[model.OffcutResponse])
 async def add_product_offcuts_bulk(

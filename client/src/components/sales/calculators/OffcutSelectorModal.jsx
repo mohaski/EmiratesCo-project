@@ -74,14 +74,19 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
     // Re-editing a line in a sale window: the offcuts this very line cut from are held by the
     // window, so the listing doesn't show them. They come back to it when the cart is saved
     // (the server re-resolves the whole window), so offer them again — under the ids the
-    // server will follow them by.
+    // server will follow them by. Not a piece the line cut out of its OWN leftover (two 9ft
+    // cuts: the second from the first bar's 12ft): that leftover is undone with the line.
     const ownSources = useMemo(() => {
         if (!windowMode || cartIndex === null || !cart[cartIndex]) return [];
-        return (cart[cartIndex].details?.lineItems || [])
-            .flatMap(line => line.offcut_sources || [])
-            .filter(src => src.source === 'offcut' && src.offcut_id)
+        const sources = (cart[cartIndex].details?.lineItems || []).flatMap(line => line.offcut_sources || []);
+        const ownLeftovers = new Set(sources.map(src => src.remainder_piece_id).filter(Boolean));
+        return sources
+            .filter(src => src.source === 'offcut' && src.offcut_id && !ownLeftovers.has(src.source_piece_id))
             .map(src => ({ offcutId: src.offcut_id, length: src.offcut_length, quantity: 1, status: 'available' }));
     }, [windowMode, cart, cartIndex]);
+    // The window line being reopened: the listing leaves out the window's leftovers this line
+    // (or a later one) made - 9ft from a new 21ft bar must not offer its own 12ft back.
+    const heldItemId = windowMode && cartIndex !== null ? (cart[cartIndex]?.details?._heldItemId ?? null) : null;
 
     useEffect(() => {
         let cancelled = false;
@@ -98,7 +103,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                     offcutId: r.returned?.length ? `ref:${r.returned[0].ref}` : r.offcutId,
                     realOffcutId: r.offcutId,
                 })))
-            : api.productService.getOffcuts(productId, variantId, holdOrderId).then(data => {
+            : api.productService.getOffcuts(productId, variantId, holdOrderId, heldItemId).then(data => {
                 const listed = [...(data || [])];
                 ownSources.forEach(src => {
                     const same = listed.find(oc => oc.offcutId === src.offcutId);
@@ -132,7 +137,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
             .catch(() => { if (!cancelled) setError('Failed to load offcuts — please try again.'); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [productId, variantId, claimedElsewhere, projectionKey, holdOrderId, ownSources]);
+    }, [productId, variantId, claimedElsewhere, projectionKey, holdOrderId, heldItemId, ownSources]);
 
     // Each new piece starts at what is still needed (capped at the piece's length).
     const nextUse = (oc, sel) => {

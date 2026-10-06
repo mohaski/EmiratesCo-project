@@ -310,11 +310,14 @@ export const ProductService = {
         return response.data;
     },
     /** Get available offcut pieces for a product. Pass variantId to filter. holdOrderId: the
-     * cashier's own open sale window (its order id) — its private leftovers are then listed too. */
-    getOffcuts: async (productId, variantId = null, holdOrderId = null) => {
+     * cashier's own open sale window (its order id) — its private leftovers are then listed too.
+     * forItemId: the window line being reopened — leftovers it (or a later line) made are left
+     * out, since they don't exist yet when the window is rebuilt up to this line. */
+    getOffcuts: async (productId, variantId = null, holdOrderId = null, forItemId = null) => {
         const params = new URLSearchParams();
         if (variantId) params.append('variant_id', variantId);
         if (holdOrderId) params.append('hold_order_id', holdOrderId);
+        if (holdOrderId && forItemId) params.append('for_item_id', forItemId);
         const qs = params.toString();
         const response = await api.get(`/products/${productId}/offcuts${qs ? `?${qs}` : ''}`);
         return response.data;

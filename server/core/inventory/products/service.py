@@ -673,12 +673,19 @@ def get_offcuts_for_product(
     db: Session,
     variant_id: Optional[int] = None,
     hold_order_id: Optional[int] = None,
+    for_item_id: Optional[int] = None,
 ):
     """Return all available (non-scrap) offcut pieces for a product, largest first.
     `variant_id`, when given, scopes to that variant's whole pool (every variant
     sharing its non-size attributes — see core/inventory/poolKey.py), not just
     that exact variant, so e.g. picking a manual offcut for a 5.8m White bar
-    also surfaces offcuts left over from a 6m White bar."""
+    also surfaces offcuts left over from a 6m White bar.
+
+    `for_item_id` (with `hold_order_id`): the window line being reopened. Its window's held
+    remainders that this line - or a line after it in the cart - produced are left out: a
+    cart change rebuilds the window line by line in cart order, so when it reaches this line
+    those remainders don't exist yet (9ft cut from a new 21ft bar: the 12ft left over is
+    that very bar). Offered, a pick of one was silently dropped on save."""
     from entities.offcuts import Offcut
     from entities.variants import Variant
     from core.inventory.poolKey import compute_pool_key
@@ -696,7 +703,41 @@ def get_offcuts_for_product(
         variant = db.get(Variant, variant_id)
         pool_key = compute_pool_key(db, variant) if variant else ""
         stmt = stmt.where(Offcut.pool_key == pool_key)
-    return db.exec(stmt).all()
+    rows = db.exec(stmt).all()
+    if hold_order_id and for_item_id:
+        rows = _without_remainders_not_yet_made(db, rows, hold_order_id, for_item_id)
+    return rows
+
+
+def _without_remainders_not_yet_made(db: Session, rows, hold_order_id: int, for_item_id: int):
+    """Drop, unit by unit, the window's held remainders produced by `for_item_id` or a later
+    line of the same window (by cart position). The ledger says exactly which pieces of a
+    pooled row came from which item, so a same-size remainder from an EARLIER line - one
+    this line really can cut from - stays listed. Returns detached copies; rows untouched."""
+    from entities.offcutLedger import OffcutPiece, STATE_AVAILABLE
+    from entities.orderItems import OrderItem
+
+    items = db.exec(select(OrderItem.item_id, OrderItem.position)
+                    .where(OrderItem.order_id == hold_order_id)).all()
+    position = {item_id: pos for item_id, pos in items}
+    if for_item_id not in position:
+        return rows
+    not_yet = [i for i, pos in position.items() if (pos, i) >= (position[for_item_id], for_item_id)]
+    held_ids = [r.offcutId for r in rows if r.held_by_order_id == hold_order_id]
+    if not held_ids or not not_yet:
+        return rows
+    counts: dict = {}
+    for row_id in db.exec(select(OffcutPiece.offcut_row_id).where(
+            OffcutPiece.offcut_row_id.in_(held_ids),
+            OffcutPiece.state == STATE_AVAILABLE,
+            OffcutPiece.produced_by_item_id.in_(not_yet))).all():
+        counts[row_id] = counts.get(row_id, 0) + 1
+    out = []
+    for r in rows:
+        left = r.quantity - counts.get(r.offcutId, 0)
+        if left > 0:
+            out.append(model.OffcutResponse.model_validate(r).model_copy(update={"quantity": left}))
+    return out
 
 
 @stock_operation(OP_OFFCUT_ENTRY, order_arg=None)
