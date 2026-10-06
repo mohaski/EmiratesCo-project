@@ -3,11 +3,17 @@
 Make a sale window's bar remainders visible to every till, marked **provisional**, instead of
 hiding them, so two sales never open two bars when one is enough.
 
-Status: **Phases 0 and 1 done**: Phase 0 on branch `provisional-offcuts-phase0` (R1, R2),
-Phase 1 on `provisional-offcuts-phase1` (column, migration, switch). Suite:
-`server/test_provisional_offcuts.py`. Phases 2 to 6 not started. Decisions D1 to D4 accepted as
-recommended (2026-10-06). Written 2026-10-06 from the production dump of the same day and the code
-at `9416d04`.
+Status: **Phases 0, 1 and 2 done**, each on its own branch (`provisional-offcuts-phase0`,
+`-phase1`, `-phase2`, stacked). Suite: `server/test_provisional_offcuts.py`. Phases 3 to 6 not
+started. Decisions D1 to D4 accepted as recommended (2026-10-06).
+
+**Do not switch the feature on in the shop before Phases 3 and 4 are done.** With the switch on,
+provisional rows are visible but:
+- Offcut Management can still edit or delete them (R8);
+- the till's picker doesn't badge them or filter the window's not-yet-made remainders;
+- source choice doesn't yet prefer ordinary offcuts (D1).
+
+Written 2026-10-06 from the production dump of the same day and the code at `9416d04`.
 
 ---
 
@@ -138,23 +144,32 @@ Each was checked against the code at `9416d04`. **R1 and R2 were reproduced on t
   on paths those suites reach.** Filter marks in Python, or use the array operators only in the
   window confirm and release lookups, which those suites never run.
 
-### Phase 2: marks lifecycle (`core/inventory/holdScope.py`, renamed in docs to "provisional")
-- `marks_for_piece(db, piece) -> set[int]`: walk `parent_piece_id` up to the root and collect
-  `consumed_by_order_id` where that order is an open window (`status == 'held'`). Depth is small (a
-  bar is rarely cut more than about 5 times).
-- `refresh_marks(db, row)`: set `provisional_for` from the row's available pieces. Call it wherever
-  a 1D row is created, merged or re-created:
-  - `_upsert_offcut`
-  - `_return_pooled_unit_for_piece` (R3)
-  - rejoin
-  - restore credit
-- Merge rule: same `provisional_for` (R5).
-- **Confirm** (`windowService._confirm`, replacing `publish_held_offcuts` for 1D): remove the
-  window's id from each marked row **through the ORM, row by row** (as `publish_held_offcuts`
-  does). Not a bulk `UPDATE ... array_remove`: the stock journal can't see bulk statements, so
-  undo and the integrity trace would miss the change.
-- **Release** (`_close`): Phase 0's not-cut restore, then the same row-by-row mark removal. Add the
-  `bar_handed_over` summary when a rejoin happened (R10).
+### Phase 2: marks lifecycle (done)
+- `holdScope`:
+  - `marks_for_new_piece` / `marks_for_piece`: the open windows that consumed any ancestor of
+    the piece, derived from the ledger;
+  - `placement_1d` / `same_placement_1d`: with the switch on, a 1D row is never held and only
+    merges with the same marks (R5);
+  - `clear_marks`: row by row through the ORM.
+- `provisional_enabled` reads as off on non-Postgres databases (the SQLite suites have no
+  `system_settings`).
+- `inventoryService`:
+  - `_upsert_offcut` sets the marks;
+  - `_return_pooled_unit_for_piece` derives them from the piece, not the caller (R3);
+  - restore credits and rejoins leave out the claim being reversed
+    (`marks_ignore_piece_id`), so a window giving material back doesn't stay marked on it.
+- `windowService`:
+  - confirm and release call `clear_marks`;
+  - `_restore_all` records `bar_handed_over` in the operation summary (release, expiry and cart
+    change) (R10);
+  - `_own_remainder_rows` keeps a cashier's pick of the window's own remainder valid across a
+    cart rebuild in both modes.
+- **R6 needed no code:** with the switch on, 1D rows are never held, so `held_elsewhere` never
+  refuses a 1D rejoin.
+- Tests T3, T4, T5, T6, T7, T9, T9b, T10, T12, T13. Each rule was mutation-checked: removing it
+  makes a test fail.
+- Still open from this phase's list: integrity invariants (Phase 6), and the picker's
+  `_without_remainders_not_yet_made` in `products/service.py` (Phase 4).
 
 ### Phase 3: visibility and source choice
 - New `holdScope.visible_1d()`: `held_by_order_id IS NULL OR held_by_order_id = current window`.

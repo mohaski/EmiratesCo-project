@@ -140,8 +140,13 @@ _SWITCH_LOCK = 7_310_021  # pg advisory lock id: the switch vs. opening a window
 
 
 def provisional_enabled(db) -> bool:
+    """Read on every 1D remainder write (one identity-map lookup after the first). Always off
+    off Postgres: the marks are a Postgres array and sale windows are Postgres-only - the
+    in-memory SQLite suites don't even create system_settings."""
     from entities.settings import SystemSetting
 
+    if db.get_bind().dialect.name != "postgresql":
+        return False
     row = db.get(SystemSetting, PROVISIONAL_FLAG_KEY)
     return row is not None and row.value == "true"
 
@@ -185,3 +190,91 @@ def set_provisional_enabled(db, enabled: bool, user) -> dict:
     db.add(row)
     db.commit()
     return {"enabled": enabled}
+
+
+# ── Provisional marks (switch on) ────────────────────────────────────────────
+#
+# With the switch on, a 1D remainder an open window produces is NOT held: every till sees it
+# and may cut from it. It carries Offcut.provisional_for instead - the open windows whose
+# uncut cut this material depends on - so it can be shown as provisional, and so the window's
+# confirm/release knows what to unmark. Glass (2D) keeps the private hold above.
+#
+# Marks are DERIVED, never copied from the caller: a piece depends on every open window that
+# consumed one of its ancestors (the bar it came from, the offcut that bar's leftover was cut
+# from, ...), because until those windows are paid none of that cutting has happened. Deriving
+# them from the piece ledger keeps them right whoever writes the row - a window, a checkout
+# cutting from a provisional piece, an edit or cancel handing a piece back, a rejoin.
+
+def _held_consumers(db, pieces) -> list:
+    """Sorted ids of the open windows that consumed any of `pieces`."""
+    from core.ordering.visibility import HELD
+    from entities.offcutLedger import STATE_CONSUMED
+    from entities.orders import Order
+
+    ids = {p.consumed_by_order_id for p in pieces
+           if p is not None and p.state == STATE_CONSUMED and p.consumed_by_order_id}
+    if not ids:
+        return []
+    return sorted(db.exec(select(Order.orderId).where(Order.orderId.in_(ids),
+                                                      Order.status == HELD)).all())
+
+
+def marks_for_new_piece(db, parent, ignore_piece_id=None) -> list:
+    """Marks for a piece about to be cut out of `parent` (None: a fresh root, no marks).
+
+    `ignore_piece_id`: a consumption being reversed right now (a restore credit or a rejoin
+    hangs the returned material off the very piece the reversing item had consumed). That
+    claim is being given up, so it must not mark what comes back."""
+    from core.inventory import offcutLedger as ledger
+
+    if parent is None or not provisional_enabled(db):
+        return []
+    chain = [parent] + ledger.ancestors(db, parent)
+    return _held_consumers(db, [p for p in chain if p.piece_id != ignore_piece_id])
+
+
+def marks_for_piece(db, piece) -> list:
+    """Marks for an existing piece (one going back into the pool): its ancestors' consumers."""
+    from core.inventory import offcutLedger as ledger
+
+    if piece is None or not provisional_enabled(db):
+        return []
+    return _held_consumers(db, ledger.ancestors(db, piece))
+
+
+def placement_1d(db, marks: list) -> tuple:
+    """(held_by_order_id, provisional_for) for a 1D row being created now with `marks`.
+    Switch off: today's rule (held by the current window, if any). On: never held."""
+    if not provisional_enabled(db):
+        return current_hold(), []
+    return None, list(marks)
+
+
+def same_placement_1d(db, held_by, marks: list):
+    """WHERE clause for merging a new 1D remainder into an existing row: the same hold and,
+    with the switch on, exactly the same marks - a provisional piece must never disappear
+    into an ordinary row (or one marked by other windows), or it could not be unmarked
+    correctly. Off, marks are always empty and not compared (no array SQL on SQLite)."""
+    from sqlalchemy import and_
+
+    hold_clause = Offcut.held_by_order_id.is_(None) if held_by is None else Offcut.held_by_order_id == held_by
+    if not provisional_enabled(db):
+        return hold_clause
+    return and_(hold_clause, Offcut.provisional_for == list(marks))
+
+
+def clear_marks(db, order_id: int) -> int:
+    """Window `order_id` closed (confirmed, or released after its stock went back): it no
+    longer holds anything up. Row by row through the ORM - a bulk UPDATE would bypass the
+    stock journal, and with it undo and the integrity trace. Returns how many rows changed."""
+    if not provisional_enabled(db):
+        return 0  # the switch can't change while a window is open, so nothing is marked
+    rows = db.exec(
+        select(Offcut).where(Offcut.provisional_for.contains([order_id]))
+        .order_by(Offcut.offcutId).with_for_update()
+    ).all()
+    for row in rows:
+        row.provisional_for = [m for m in row.provisional_for if m != order_id]
+        db.add(row)
+    db.flush()
+    return len(rows)

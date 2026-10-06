@@ -14,6 +14,18 @@ Phase 1 - the data model and the switch:
   P2  The switch: off by default, CEO/admin only, refused while a sale window is open, and a
       window can't open while the switch is being changed.
 
+Phase 2 - marks, switch ON (plan section 4):
+  T3  the 2026-10-06 incident: a window opens a bar, another order cuts from its provisional
+      leftover, the window confirms -> one bar, marks gone
+  T4  same, window released -> the bar is handed over (recorded), then back to stock whole
+  T5  window -> window, confirmed in either order: one bar, marks shrink as each confirms
+  T6  both released, in either order: the bar back in stock, nothing left
+  T7  the borrower cancelled while the window is open: the piece goes back STILL provisional
+  T10 a provisional remainder never merges with an ordinary offcut of the same length
+  T12 idle expiry behaves like a release
+  T9  the window drops its cut after a borrow: the rest of the bar is not provisional any more
+  T13 a new pick of the window's own remainder survives a cart rebuild
+
 Runs on emiratesco_edit_test (DATABASE_URL). Run from server/.
 """
 import logging
@@ -38,7 +50,9 @@ with Session(engine) as _db:
 
 import test_sale_windows as T  # noqa: E402
 import test_sale_windows_matrix as M  # noqa: E402
-from test_sale_windows import open_w, set_cart, release, stock, cut, FakeUser, FULL_BAR  # noqa: E402
+from test_sale_windows import open_w, set_cart, confirm, release, stock, cut, FakeUser, FULL_BAR  # noqa: E402
+from entities.opJournal import StockOperation  # noqa: E402
+from core.ordering import windowService  # noqa: E402
 from core.audit import integrity  # noqa: E402
 from core.audit.opContext import operation  # noqa: E402
 from core.inventory import holdScope  # noqa: E402
@@ -264,6 +278,225 @@ def p2(db, cat, user):
     set_flag_raw(db, "false")
 
 
+# ── Phase 2: switch on ───────────────────────────────────────────────────────
+
+def rows(db, product):
+    """Every pooled row: (length, held_by, marks, quantity), longest first."""
+    db.expire_all()
+    rs = db.exec(select(Offcut).where(Offcut.product_id == product.productId, Offcut.quantity > 0,
+                                      Offcut.status == "available")).all()
+    return sorted(((round(r.length, 3), r.held_by_order_id, tuple(r.provisional_for or ()), r.quantity)
+                   for r in rs), reverse=True)
+
+
+def window_cut(db, user, length, new_bar=False, win=None, extra=()):
+    """Open a window (or reuse `win`) with one cut, plus `extra` items."""
+    it = cut(*CURRENT, length)
+    if new_bar:
+        it.details["lineItems"][0]["source_pref"] = "new"
+    return set_cart(db, user, win or open_w(db, user), [it, *extra])
+
+
+CURRENT = [None, None]  # (product, variant) the phase-2 helpers cut from
+
+
+def bar_for(db, cat, name, stock_qty=3):
+    bar, bv = T.seed_product(db, cat, name, kind="bar", stock=stock_qty)
+    CURRENT[0], CURRENT[1] = bar, bv
+    return bar, bv, rebaseline(db)
+
+
+def op_summary(db, kind, order_id):
+    db.expire_all()
+    op = db.exec(select(StockOperation).where(StockOperation.kind == kind, StockOperation.order_id == order_id)
+                 .order_by(StockOperation.created_at.desc())).first()
+    return (op.summary or {}) if op else None
+
+
+def t3(db, cat, alice, bob):
+    print("T3  The incident: a window's bar shared with another order, window confirms")
+    bar, bv, since = bar_for(db, cat, "T3 Bar")
+    w = window_cut(db, alice, 3.0)
+    check("window opened a bar", stock(db, bv) == 2, stock(db, bv))
+    check("its 18ft leftover is public, marked for the window", rows(db, bar) == [(18.0, None, (w.orderId,), 1)], rows(db, bar))
+    y = checkout(db, bob, [cut(bar, bv, 3.0)])
+    src = item_of(db, y.orderId).details["lineItems"][0]["offcut_sources"][0]
+    check("the other order cut from the provisional 18ft - no second bar",
+          (src["source"], src["offcut_length"], stock(db, bv)) == ("offcut", 18.0, 2), (src["source"], src["offcut_length"], stock(db, bv)))
+    check("its 15ft leftover still depends on the window", rows(db, bar) == [(15.0, None, (w.orderId,), 1)], rows(db, bar))
+    confirm(db, alice, w)
+    check("window confirmed: an ordinary 15ft, one bar used", (rows(db, bar), stock(db, bv)) == ([(15.0, None, (), 1)], 2),
+          (rows(db, bar), stock(db, bv)))
+    clean(db, "T3", since)
+
+
+def t4(db, cat, alice, bob):
+    print("T4  Same, but the window is released: the bar is handed over")
+    bar, bv, since = bar_for(db, cat, "T4 Bar")
+    w = window_cut(db, alice, 3.0)
+    y = checkout(db, bob, [cut(bar, bv, 3.0)])
+    release(db, alice, w)
+    check("released: the bar stays out, carried by the other order", stock(db, bv) == 2, stock(db, bv))
+    check("released: 3ft never cut + 15ft = one ordinary 18ft", rows(db, bar) == [(18.0, None, (), 1)], rows(db, bar))
+    summary = op_summary(db, "window_release", w.orderId) or {}
+    handed = summary.get("bar_handed_over") or []
+    check("the release records the handover to the other order",
+          len(handed) == 1 and handed[0]["to_orders"] == [y.orderId] and handed[0]["length"] == 18.0, summary)
+    cancel_not_cut(db, bob, y.orderId)
+    check("then the other order cancelled: the whole bar back in stock", (stock(db, bv), rows(db, bar)) == (3, []),
+          (stock(db, bv), rows(db, bar)))
+    clean(db, "T4", since)
+
+
+def t5(db, cat, alice, bob):
+    print("T5  Window -> window, confirmed in either order")
+    for first in ("opener", "borrower"):
+        bar, bv, since = bar_for(db, cat, f"T5 {first} first")
+        w1 = window_cut(db, alice, 3.0)
+        w2 = window_cut(db, bob, 3.0)
+        check(f"{first}: second window cut from the first's 18ft",
+              (stock(db, bv), rows(db, bar)) == (2, [(15.0, None, tuple(sorted((w1.orderId, w2.orderId))), 1)]),
+              (stock(db, bv), rows(db, bar)))
+        a, b = (w1, w2) if first == "opener" else (w2, w1)
+        confirm(db, alice if a is w1 else bob, a)
+        check(f"{first}: after the first confirm only the other window's mark is left",
+              rows(db, bar) == [(15.0, None, (b.orderId,), 1)], rows(db, bar))
+        confirm(db, alice if b is w1 else bob, b)
+        check(f"{first}: both confirmed: an ordinary 15ft, one bar",
+              (stock(db, bv), rows(db, bar)) == (2, [(15.0, None, (), 1)]), (stock(db, bv), rows(db, bar)))
+        clean(db, f"T5 {first}", since)
+
+
+def t6(db, cat, alice, bob):
+    print("T6  Both windows released, in either order")
+    for first in ("opener", "borrower"):
+        bar, bv, since = bar_for(db, cat, f"T6 {first} first")
+        w1 = window_cut(db, alice, 3.0)
+        w2 = window_cut(db, bob, 3.0)
+        a, b = (w1, w2) if first == "opener" else (w2, w1)
+        release(db, alice if a is w1 else bob, a)
+        check(f"{first}: after the first release one bar is still out", stock(db, bv) == 2, stock(db, bv))
+        check(f"{first}: and an 18ft marked only for the window still open",
+              rows(db, bar) == [(18.0, None, (b.orderId,), 1)], rows(db, bar))
+        release(db, alice if b is w1 else bob, b)
+        check(f"{first}: both released: the bar back in stock, nothing left",
+              (stock(db, bv), rows(db, bar)) == (3, []), (stock(db, bv), rows(db, bar)))
+        clean(db, f"T6 {first}", since)
+
+
+def t7(db, cat, alice, bob):
+    print("T7  The borrower cancelled while the window is open")
+    bar, bv, since = bar_for(db, cat, "T7 Bar")
+    w = window_cut(db, alice, 3.0)
+    y = checkout(db, bob, [cut(bar, bv, 5.0)])
+    check("borrower left 13ft, still provisional", rows(db, bar) == [(13.0, None, (w.orderId,), 1)], rows(db, bar))
+    cancel_not_cut(db, bob, y.orderId)
+    check("cancelled by a manager: the 18ft goes back STILL marked for the window",
+          rows(db, bar) == [(18.0, None, (w.orderId,), 1)], rows(db, bar))
+    confirm(db, alice, w)
+    check("window confirmed: an ordinary 18ft", (stock(db, bv), rows(db, bar)) == (2, [(18.0, None, (), 1)]),
+          (stock(db, bv), rows(db, bar)))
+    clean(db, "T7", since)
+
+
+def t10(db, cat, alice, bob):
+    print("T10 A provisional remainder never merges with an ordinary one")
+    bar, bv, since = bar_for(db, cat, "T10 Bar")
+    T.public_offcut(db, bar, bv, 18.0)
+    since = rebaseline(db)
+    w = window_cut(db, alice, 3.0, new_bar=True)
+    check("two 18ft rows: one ordinary, one provisional",
+          rows(db, bar) == [(18.0, None, (w.orderId,), 1), (18.0, None, (), 1)], rows(db, bar))
+    confirm(db, alice, w)
+    check("after the confirm both are ordinary (left as two rows)",
+          rows(db, bar) == [(18.0, None, (), 1), (18.0, None, (), 1)], rows(db, bar))
+    clean(db, "T10", since)
+
+
+def t12(db, cat, alice, bob):
+    print("T12 Idle expiry is a release")
+    bar, bv, since = bar_for(db, cat, "T12 Bar")
+    w = window_cut(db, alice, 3.0)
+    y = checkout(db, bob, [cut(bar, bv, 3.0)])
+    db.exec(text("UPDATE sale_windows SET last_activity_at = last_activity_at - interval '2 hours' "
+                 "WHERE order_id = :o").bindparams(o=w.orderId))
+    db.commit()
+    check("the sweeper expired it", windowService.expire_idle_windows() >= 1)
+    check("expired: bar handed over, ordinary 18ft", (stock(db, bv), rows(db, bar)) == (2, [(18.0, None, (), 1)]),
+          (stock(db, bv), rows(db, bar)))
+    handed = (op_summary(db, "window_expire", w.orderId) or {}).get("bar_handed_over") or []
+    check("the expiry records the handover", len(handed) == 1 and handed[0]["to_orders"] == [y.orderId], handed)
+    clean(db, "T12", since)
+
+
+def t9(db, cat, alice, bob):
+    print("T9  The window drops its cut after another order borrowed from its bar")
+    bar, bv, since = bar_for(db, cat, "T9 Bar")
+    other, ov = T.seed_product(db, cat, "T9 Other", kind="bar", stock=3)
+    since = rebaseline(db)
+    w = window_cut(db, alice, 3.0)
+    y = checkout(db, bob, [cut(bar, bv, 5.0)])
+    check("the other order left 13ft, provisional", rows(db, bar) == [(13.0, None, (w.orderId,), 1)], rows(db, bar))
+    w = set_cart(db, alice, w, [cut(other, ov, 2.0)])   # the bar cut is gone from the cart
+    check("the window's 3ft rejoins the 13 -> 16, now carried by the other order: NOT provisional",
+          rows(db, bar) == [(16.0, None, (), 1)], rows(db, bar))
+    check("the bar stays out of stock (the other order has it)", stock(db, bv) == 2, stock(db, bv))
+    handed = (op_summary(db, "window_cart", w.orderId) or {}).get("bar_handed_over") or []
+    check("the cart change records the handover", len(handed) == 1 and handed[0]["to_orders"] == [y.orderId], handed)
+    release(db, alice, w)
+    clean(db, "T9", since)
+
+    # The other order used ALL of the leftover: nothing to rejoin onto, so the window's 3ft
+    # comes back as a piece of its own - and must not stay marked for the window either.
+    bar, bv, since = bar_for(db, cat, "T9b Bar")
+    other, ov = T.seed_product(db, cat, "T9b Other", kind="bar", stock=3)
+    since = rebaseline(db)
+    w = window_cut(db, alice, 3.0)
+    y = checkout(db, bob, [cut(bar, bv, 18.0)])
+    check("T9b: the other order took the whole 18ft", rows(db, bar) == [], rows(db, bar))
+    w = set_cart(db, alice, w, [cut(other, ov, 2.0)])
+    check("T9b: the window's 3ft comes back as an ordinary piece", rows(db, bar) == [(3.0, None, (), 1)], rows(db, bar))
+    release(db, alice, w)
+    clean(db, "T9b", since)
+
+
+def t13(db, cat, alice, bob):
+    print("T13 A new pick of the window's own remainder, saved with a change that rebuilds the cart")
+    bar, bv, since = bar_for(db, cat, "T13 Bar")
+    other, ov = T.seed_product(db, cat, "T13 Other", kind="bar", stock=3)
+    T.public_offcut(db, bar, bv, 6.0)      # what an automatic 5ft cut would take instead
+    since = rebaseline(db)
+    w = window_cut(db, alice, 3.0, new_bar=True, extra=[cut(other, ov, 2.0)])
+    own = db.exec(select(Offcut.offcutId).where(Offcut.product_id == bar.productId, Offcut.quantity > 0,
+                                                Offcut.length == 18.0)).first()
+    try:
+        # The other line changes (so the whole cart is rebuilt and the 18ft re-created under a
+        # new id) in the same save as the cashier's new pick of that 18ft.
+        first = cut(bar, bv, 3.0)
+        first.details["lineItems"][0]["source_pref"] = "new"
+        w = set_cart(db, alice, w, [first, cut(other, ov, 3.0),
+                                    cut(bar, bv, 5.0, selection=[{"offcut_id": own, "length_used": 5.0}])])
+        check("the pick follows the window's re-created 18ft (not the public 6ft)",
+              rows(db, bar) == [(13.0, None, (w.orderId,), 1), (6.0, None, (), 1)], rows(db, bar))
+    except Exception as e:  # noqa: BLE001 - a refused save is the failure being tested for
+        db.rollback()
+        check("the pick follows the window's re-created 18ft (not the public 6ft)", False, str(e)[:120])
+    release(db, alice, w)
+    clean(db, "T13", since)
+
+
+def phase2(db, cat, alice):
+    bob = T.seed_user(db, "prov-bob")
+    db.commit()
+    set_flag_raw(db, "true")
+    try:
+        for fn in (t3, t4, t5, t6, t7, t9, t10, t12, t13):
+            fn(db, cat, alice, bob)
+    finally:
+        T.close_all(db)
+        set_flag_raw(db, "false")
+
+
 def main():
     with Session(engine) as db:
         T.reset(db)
@@ -275,6 +508,7 @@ def main():
         t2(db, cat, user)
         p1(db, cat, user)
         p2(db, cat, user)
+        phase2(db, cat, user)
 
     print("\n" + "=" * 68)
     if failures:

@@ -267,6 +267,57 @@ def _restore_all(db: Session, order: Order, items) -> None:
         for item in sorted(items, key=lambda i: i.item_id, reverse=True):
             restore_stock_for_order_item(db, item, decisions=decisions)
     db.flush()
+    _record_handovers(db)
+
+
+def _record_handovers(db: Session) -> None:
+    """A bar this window opened that another order had cut into can't go back to stock: the
+    window's uncut length was joined onto what is left of the bar, which now carries on with
+    that order (PROVISIONAL_OFFCUTS_PLAN.md, rule 3). Say so in the operation's summary - the
+    window's order ends with a bar out of stock, and this is where that bar went."""
+    from core.audit.opContext import current, record_summary
+    from core.inventory import offcutLedger as ledger
+    from entities.offcutLedger import OffcutPiece
+
+    op = current()
+    if op is None:
+        return
+    handed = []
+    for line_ref, entries in op.returned.items():
+        for e in entries:
+            if e.get("kind") != "joined":
+                continue
+            piece = ledger.get_piece(db, e.get("piece_id"))
+            if piece is None:
+                continue
+            carriers = sorted({p.consumed_by_order_id for p in db.exec(select(OffcutPiece).where(
+                OffcutPiece.root_piece_id == piece.root_piece_id,
+                OffcutPiece.state == ledger.STATE_CONSUMED)).all()
+                if p.consumed_by_order_id and p.consumed_by_order_id != op.order_id})
+            handed.append({"line_ref": line_ref, "piece_id": piece.piece_id,
+                           "length": piece.length, "to_orders": carriers})
+    if handed:
+        record_summary(op, bar_handed_over=handed)
+
+
+def _own_remainder_rows(db: Session, order_id: int, length=None) -> list:
+    """1D rows holding a remainder this window's own cuts produced. Switch off: the rows held
+    by the window. On they are public, so: rows marked for this window that contain a piece
+    one of its items produced (a row marked for it can also hold a borrower's leftover)."""
+    from entities.offcutLedger import OffcutPiece, STATE_AVAILABLE
+
+    stmt = select(Offcut).where(Offcut.width.is_(None), Offcut.quantity > 0)
+    if length is not None:
+        stmt = stmt.where(Offcut.length >= length - 0.01, Offcut.length <= length + 0.01)
+    if not holdScope.provisional_enabled(db):
+        return db.exec(stmt.where(Offcut.held_by_order_id == order_id).order_by(Offcut.offcutId)).all()
+    item_ids = db.exec(select(OrderItem.item_id).where(OrderItem.order_id == order_id)).all()
+    if not item_ids:
+        return []
+    own_rows = select(OffcutPiece.offcut_row_id).where(
+        OffcutPiece.produced_by_item_id.in_(item_ids), OffcutPiece.state == STATE_AVAILABLE)
+    return db.exec(stmt.where(Offcut.provisional_for.contains([order_id]),
+                              Offcut.offcutId.in_(own_rows)).order_by(Offcut.offcutId)).all()
 
 
 def _remap_own_picks(db: Session, order_id: int, selection, old_sources, held_before: dict, remap) -> list:
@@ -298,12 +349,7 @@ def _remap_own_picks(db: Session, order_id: int, selection, old_sources, held_be
     out = remap(db, consumed, old_sources) if consumed else []
     claimed: dict = {}
     for e in held:
-        length = held_before[int(e["offcut_id"])]
-        rows = db.exec(select(Offcut).where(
-            Offcut.held_by_order_id == order_id,
-            Offcut.length >= length - 0.01, Offcut.length <= length + 0.01,
-            Offcut.quantity > 0,
-        ).order_by(Offcut.offcutId)).all()
+        rows = _own_remainder_rows(db, order_id, held_before[int(e["offcut_id"])])
         row = next((r for r in rows if r.quantity - claimed.get(r.offcutId, 0) >= 1), None)
         if row is not None:
             claimed[row.offcutId] = claimed.get(row.offcutId, 0) + 1
@@ -407,11 +453,7 @@ def _rebuild_items(db: Session, window: SaleWindow, order: Order, req: wm.Window
         for src in line.get("offcut_sources") or []
     ]
 
-    held_before = {
-        r.offcutId: r.length
-        for r in db.exec(select(Offcut).where(Offcut.held_by_order_id == order.orderId,
-                                              Offcut.width.is_(None))).all()
-    }
+    held_before = {r.offcutId: r.length for r in _own_remainder_rows(db, order.orderId)}
 
     _restore_all(db, order, existing)
     doomed = [i.item_id for i in existing]
@@ -451,8 +493,10 @@ def _close(db: Session, window: SaleWindow, reason: str, actor=None) -> None:
         items = db.exec(select(OrderItem).where(OrderItem.order_id == order.orderId)).all()
         _prelock_stock(db, [i.product_id for i in items], [i.variant_id for i in items])
         _restore_all(db, order, items)
-        # Anything still tagged (e.g. a partial-credit piece) is real, unheld material now.
+        # Anything still tagged (e.g. a partial-credit piece) is real, unheld material now;
+        # and whatever another order cut from this window's bar now stands on its own.
         holdScope.publish_held_offcuts(db, order.orderId)
+        holdScope.clear_marks(db, order.orderId)
 
         order.status = ABANDONED
         order.balance = 0.0
@@ -649,8 +693,10 @@ def _confirm(db: Session, window_id: int, user, req: wm.WindowConfirmRequest) ->
                 source_inv.converted_at = datetime.now(timezone.utc)
                 db.add(source_inv)
 
-            # The cut is going ahead: its remainders are real stock for everyone from now on.
+            # The cut is going ahead: its remainders are real stock for everyone from now on,
+            # and nothing depends on this window any more.
             holdScope.publish_held_offcuts(db, order.orderId)
+            holdScope.clear_marks(db, order.orderId)
 
             order.status = "confirmed"
             # The sale happened now, not when the window was opened — every report is by day.

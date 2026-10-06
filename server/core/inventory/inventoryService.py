@@ -1397,7 +1397,14 @@ def _return_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) ->
 
     # Inside an open window's cart change, only the window's own remainders stay private; a
     # public offcut it had consumed goes back to the public pool (holdScope.hold_for_new_row).
-    held_by = hold.hold_for_new_row(db, piece.produced_by_item_id)
+    # With provisional offcuts on, a 1D piece is never held: it goes back marked for the open
+    # windows it still depends on, derived from its ancestry - not from whoever is handing it
+    # back (a manager cancelling the order that borrowed it must not make it ordinary).
+    marks: list = []
+    if piece.geom_kind != ledger.GEOM_2D and hold.provisional_enabled(db):
+        held_by, marks = None, hold.marks_for_piece(db, piece)
+    else:
+        held_by = hold.hold_for_new_row(db, piece.produced_by_item_id)
     if piece.geom_kind == ledger.GEOM_2D:
         new_row = Offcut(
             product_id=product.productId,
@@ -1415,6 +1422,7 @@ def _return_pooled_unit_for_piece(db, product, variant, piece, pool_key: str) ->
             length=piece.length,
             quantity=1, status="scrap" if piece.is_scrap else "available",
             held_by_order_id=held_by,
+            provisional_for=marks,
         )
     db.add(new_row)
     db.flush()
@@ -1530,7 +1538,8 @@ def restore_specific_offcut_sources(
                     _upsert_offcut(db, product, variant, length_used, pool_key=pool_key, status=status,
                                    parent_piece=rev.source_piece, origin=ledger.ORIGIN_RESTORE_CREDIT,
                                    ledger_notes=f"partial credit — {rev.detail}", ledger_out=credit,
-                                   ledger_item_id=item_id)
+                                   ledger_item_id=item_id,
+                                   marks_ignore_piece_id=getattr(rev.source_piece, "piece_id", None))
                     # "own" = the line's already-cut piece, which is what the answer says - not
                     # whether a source piece was on record (a pre-ledger cut has none).
                     is_cut = physical_state == rp.PHYS_ALREADY_CUT
@@ -1642,6 +1651,7 @@ def _rejoin_uncut_1d(db, product, variant, src: dict, rev, pool_key: str,
     _upsert_offcut(db, product, variant, joined_len, pool_key=pool_key, status=status,
                    parent_piece=leaf, origin=ledger.ORIGIN_REJOIN, ledger_out=out,
                    ledger_item_id=item_id,
+                   marks_ignore_piece_id=getattr(rev.source_piece, "piece_id", None),
                    ledger_notes=(f"rejoined: {length_used:.2f} never cut + {leaf.length:.2f} "
                                  "left on the bar"))
     joined = ledger.get_piece(db, out.get("piece_id"))
@@ -1795,6 +1805,7 @@ def _upsert_offcut(
     ledger_notes: Optional[str] = None,
     ledger_out: Optional[dict] = None,
     ledger_item_id: Optional[int] = None,
+    marks_ignore_piece_id: Optional[int] = None,
 ) -> int:
     """
     Create a new offcut record or increment the quantity if one of the
@@ -1817,18 +1828,26 @@ def _upsert_offcut(
     the reversal resolver walks; pass it wherever the caller knows it. Returns the
     pooled row's id, which the ledger keeps as an advisory projection pointer (and
     which mirrors what the 2D _upsert_glass_offcut has always returned).
+
+    `marks_ignore_piece_id` — a reversal handing material back hangs it off the piece the
+    reversing item had consumed; that claim is being given up, so it must not make the
+    returned material provisional (holdScope.marks_for_new_piece).
     """
     if pool_key is None:
         pool_key = compute_pool_key(db, variant)
 
+    # Switch off: an open window's remainder is kept in a row of its own, private to that
+    # window until it closes. On: it is public but marked provisional for the open windows it
+    # depends on (core/inventory/holdScope.py). Either way it never merges into a row of a
+    # different hold or marks.
+    held_by, marks = hold.placement_1d(
+        db, hold.marks_for_new_piece(db, parent_piece, ignore_piece_id=marks_ignore_piece_id))
     stmt = select(Offcut).where(
         Offcut.product_id == product.productId,
         Offcut.length >= length - 0.001,
         Offcut.length <= length + 0.001,
         Offcut.pool_key == pool_key,
-        # An open window's remainder is kept in a row of its own, private to that window
-        # until it closes (core/inventory/holdScope.py) — never merged into a public row.
-        hold.same_scope(),
+        hold.same_placement_1d(db, held_by, marks),
     ).with_for_update()
 
     existing = db.exec(stmt).first()
@@ -1847,7 +1866,8 @@ def _upsert_offcut(
             quantity=1,
             status=status,
             source_item_id=source_item_id,
-            held_by_order_id=hold.current_hold(),
+            held_by_order_id=held_by,
+            provisional_for=marks,
         )
         db.add(new_row)
         db.flush()  # assign a real id now, for the ledger's projection pointer
