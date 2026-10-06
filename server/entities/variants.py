@@ -8,7 +8,7 @@ class Variant(SQLModel, table=True):
     __tablename__ = "variants"
 
     variantId: Optional[int] = Field(default=None, primary_key=True)
-    product_id: int = Field(foreign_key="products.productId", nullable=False)
+    product_id: int = Field(foreign_key="products.productId", nullable=False, index=True)
     
     name: Optional[str] = Field(default=None) # Optional display name override
     

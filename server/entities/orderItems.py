@@ -7,7 +7,7 @@ class OrderItem(SQLModel, table=True):
     __tablename__ = "orderitems"
 
     item_id: Optional[int] = Field(default=None, primary_key=True)
-    order_id: int = Field(foreign_key="orders.orderId")
+    order_id: int = Field(foreign_key="orders.orderId", index=True)
     product_id: int = Field(foreign_key="products.productId")
 
     total_price: float = Field(nullable=False)

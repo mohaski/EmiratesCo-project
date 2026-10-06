@@ -9,7 +9,7 @@ class Offcut(SQLModel, table=True):
     offcutId: Optional[int] = Field(default=None, primary_key=True)
     
     # Product Links
-    product_id: int = Field(foreign_key="products.productId", nullable=False)
+    product_id: int = Field(foreign_key="products.productId", nullable=False, index=True)
     # Provenance only — which SKU's cutting job actually produced this row (or the
     # SKU a manager entered it against). NOT used to scope availability queries —
     # see `pool_key` below.

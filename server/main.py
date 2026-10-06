@@ -31,11 +31,8 @@ from core.failover.controller import router as failover_router
 from ws.router import router as ws_router
 
 # ── Logging Setup ────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Configured once, in loggiing.py (imported by every service before this runs).
+import loggiing  # noqa: F401,E402
 logger = logging.getLogger("emiratesco")
 
 # ── Lifespan (replaces deprecated on_event) ──────────────────────────────────

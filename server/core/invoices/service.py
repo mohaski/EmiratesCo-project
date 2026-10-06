@@ -25,6 +25,86 @@ def _generate_invoice_number(db: Session) -> str:
     return f"INV-{next_id:06d}"
 
 
+def _snapshot_to_item_request(snap: dict, position: int):
+    """A stored cart line -> the OrderItemRequest checkout prices. Mirrors the client's
+    mapItemForBackend (client/src/utils/orderItemMapping.js), so a quotation is priced exactly
+    as the same cart would be at checkout."""
+    from core.ordering.model import OrderItemRequest
+
+    details = snap.get("details") if isinstance(snap.get("details"), dict) else {}
+    dynamic = bool(details.get("isDynamic")) and not details.get("lineItems")
+
+    def num(*values):
+        for v in values:
+            try:
+                if v not in (None, "") and float(v):
+                    return float(v)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    qty = num(snap.get("qty"), snap.get("quantity"), details.get("qty") if dynamic else None)
+    qty = 1.0 if qty is None else qty
+    price = num(snap.get("price"), snap.get("unitPrice"))
+    if price is None and dynamic and qty > 0:
+        price = (num(snap.get("totalPrice")) or 0) / qty
+    product_id = num(snap.get("productId"), snap.get("id"))
+    if product_id is None:
+        raise HTTPException(status_code=400, detail=f"Line {position + 1} of the quotation has no product.")
+    variant_id = snap.get("variantId") or details.get("variantId")
+    return OrderItemRequest(
+        productId=int(product_id),
+        variantId=int(variant_id) if variant_id else None,
+        quantity=qty,
+        unitPrice=price or 0,
+        unitType=snap.get("unit") or "pcs",
+        details=details,
+    )
+
+
+def _price_quotation(items: list, vat_enabled: bool, discount: float, db: Session):
+    """Price a quotation on the server, the same way checkout prices the sale.
+
+    Returns (items, subtotal, vat_amount, total, changed): the items with each line's
+    totalPrice (and its calculator line totals) set to the server's price, and how many lines
+    the browser had priced differently. Totals follow create_order: per-item ceil, discount off
+    the subtotal, VAT on the net."""
+    from core.ordering.orderService import _calculate_complex_item_total, compute_VAT_amount
+
+    priced, subtotal, changed = [], Decimal("0.00"), 0
+    for position, snap in enumerate(items or []):
+        snap = dict(snap)
+        req = _snapshot_to_item_request(snap, position)
+        item_total = ceil_amount(_calculate_complex_item_total(req, db))
+
+        line_items = (req.details or {}).get("lineItems")
+        if isinstance(line_items, list) and line_items:
+            new_lines = []
+            for line in line_items:
+                line = dict(line) if isinstance(line, dict) else line
+                if isinstance(line, dict):
+                    one = req.model_copy(update={"details": {**req.details, "lineItems": [line]}})
+                    line_total = _calculate_complex_item_total(one, db)
+                    if abs(Decimal(str(line.get("total") or 0)) - line_total) > Decimal("0.005"):
+                        qty = Decimal(str(line.get("qty") or 0))
+                        line["total"] = float(line_total)
+                        line["rate"] = float(line_total / qty) if qty else float(line_total)
+                new_lines.append(line)
+            snap["details"] = {**(snap.get("details") or {}), "lineItems": new_lines}
+
+        if abs(ceil_amount(Decimal(str(snap.get("totalPrice") or 0))) - item_total) > Decimal("0.005"):
+            changed += 1
+            snap["totalPrice"] = float(item_total)
+            if req.quantity > 0:
+                snap["price"] = float(item_total / Decimal(str(req.quantity)))
+        priced.append(snap)
+        subtotal += item_total
+
+    net = ceil_amount(max(subtotal - Decimal(str(discount or 0)), Decimal("0.00")))
+    vat = compute_VAT_amount(net) if vat_enabled else Decimal("0.00")
+    return priced, float(subtotal), float(vat), float(net + vat), changed
+
+
 def _invoice_to_response(inv: Invoice) -> model.InvoiceResponse:
     return model.InvoiceResponse(
         invoiceId=inv.invoiceId,
@@ -55,8 +135,11 @@ def create_invoice(
     created_by_id: str,
     db: Session,
 ) -> model.InvoiceCreateResponse:
-    """Save a new invoice (quotation)."""
+    """Save a new invoice (quotation). The server prices it - the totals the browser sends
+    are ignored, so a printed quotation matches what checkout will charge for the same cart."""
     try:
+        items, subtotal, vat_amount, total, changed = _price_quotation(
+            data.items, data.vat_enabled, data.discount, db)
         invoice_number = _generate_invoice_number(db)
 
         inv = Invoice(
@@ -66,12 +149,12 @@ def create_invoice(
             customer_phone=data.customer.phone,
             customer_type=data.customer.type,
             created_by=created_by_id,
-            subtotal=data.subtotal,
-            vat_amount=data.vat_amount,
-            total=data.total,
+            subtotal=subtotal,
+            vat_amount=vat_amount,
+            total=total,
             discount=data.discount,
             vat_enabled=data.vat_enabled,
-            items=data.items,
+            items=items,
             notes=data.notes,
             status="draft",
         )
@@ -84,7 +167,14 @@ def create_invoice(
             message="Invoice created",
             invoiceId=inv.invoiceId,
             invoice_number=inv.invoice_number,
+            subtotal=inv.subtotal,
+            vat_amount=inv.vat_amount,
+            total=inv.total,
+            repriced_lines=changed,
         )
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Create invoice error: {e}", exc_info=True)
@@ -142,8 +232,18 @@ def update_invoice(
     else:
         update_dict.pop("customer", None)
 
+    # Totals are always the server's: never taken from the request, and recomputed whenever
+    # what they depend on changes.
+    for key in ("subtotal", "vat_amount", "total"):
+        update_dict.pop(key, None)
+    reprice = any(k in update_dict for k in ("items", "vat_enabled", "discount"))
+
     for key, value in update_dict.items():
         setattr(inv, key, value)
+
+    if reprice:
+        inv.items, inv.subtotal, inv.vat_amount, inv.total, _ = _price_quotation(
+            inv.items, inv.vat_enabled, inv.discount, db)
 
     db.add(inv)
     db.commit()

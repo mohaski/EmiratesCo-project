@@ -12,4 +12,9 @@ async def websocket_endpoint(websocket: WebSocket):
             # Keep the connection alive; client can send "ping" — we ignore content
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    except Exception:
+        # A connection reset or any other socket error: the client is gone either way.
+        pass
+    finally:
         manager.disconnect(websocket)

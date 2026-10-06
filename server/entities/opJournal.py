@@ -32,7 +32,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, Index
 from sqlmodel import Field, SQLModel
 from config import nairobi_now
 
@@ -93,6 +93,9 @@ class StockOperation(SQLModel, table=True):
 
 class JournalEntry(SQLModel, table=True):
     __tablename__ = "stock_journal"
+    # Undo's "was this row changed again later?" (core/audit/undo._later_entries) and the
+    # integrity check walk one row's history in id order.
+    __table_args__ = (Index("ix_stock_journal_row_history", "table_name", "row_pk", "id"),)
 
     id: Optional[int] = Field(default=None, primary_key=True)
     # NULL when a row changed outside any operation — the integrity check reports those,

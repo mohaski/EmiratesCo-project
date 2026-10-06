@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, Query
 from sqlmodel import Session
 from typing import List, Optional
 
@@ -21,7 +21,7 @@ _STOCK_ROLES = ["ceo", "manager", "admin"]
 def list_containers(
     status: Optional[str] = "open",
     product_id: Optional[int] = None,
-    limit: int = 200,
+    limit: int = Query(200, ge=1, le=1000),
     db: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):

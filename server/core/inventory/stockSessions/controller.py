@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks, Query
 from sqlmodel import Session
 from typing import List
 
@@ -26,7 +26,7 @@ async def finalize_stock_input_session(
 @router.get("/", response_model=List[model.StockInputSessionSummary])
 def list_stock_input_sessions(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):

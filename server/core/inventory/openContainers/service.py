@@ -31,6 +31,7 @@ from core.inventory.inventoryService import (
     _lock_product,
 )
 from loggiing import logger
+from config import nairobi_now
 from . import model
 from core.audit.opContext import stock_operation
 from entities.opJournal import OP_OPEN_CONTAINER
@@ -61,7 +62,9 @@ def _utilization(c: OpenContainer) -> dict:
     "nobody measured it" is the whole point of these numbers."""
     duration_hours = None
     if c.opened_at:
-        end = c.closed_at or datetime.now(timezone.utc)
+        # Still open: "now" in the same frame as opened_at (naive Nairobi wall clock). UTC now
+        # made every open pack read 3 hours younger than it is.
+        end = c.closed_at or nairobi_now()
         # opened_at/closed_at come back from Postgres naive (the column is
         # `timestamp without time zone`); match that before subtracting rather
         # than raising on a naive/aware mix.

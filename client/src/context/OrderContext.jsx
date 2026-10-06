@@ -229,18 +229,6 @@ export const OrderProvider = ({ children }) => {
         return response;
     }, [fetchOrders]);
 
-    const convertInvoiceToOrder = useCallback(async (invoiceId, paymentData = {}) => {
-        const payload = {
-            amount_paid: paymentData.amount_paid ?? 0,
-            payment_method: paymentData.payment_method ?? 'cash',
-            payment_details: paymentData.payment_details ?? null,
-            discount: paymentData.discount ?? null,
-        };
-        const result = await api.invoiceService.convert(invoiceId, payload);
-        await fetchOrders();
-        return result;
-    }, [fetchOrders]);
-
     const updateOrderStatus = useCallback(async (orderId, newStatus) => {
         await api.orderService.updateWorkflowStatus(orderId, newStatus);
         await fetchOrders();
@@ -267,7 +255,6 @@ export const OrderProvider = ({ children }) => {
         addInvoice,
         addOrder,
         updateOrder,
-        convertInvoiceToOrder,
         deleteInvoice,
         cancelOrder,
         updateOrderStatus,

@@ -41,7 +41,7 @@ def list_loans(
     status: Optional[str] = Query(None, description="Filter by status: out|partially_returned|returned"),
     worker: Optional[str] = Query(None, description="Filter by worker name (partial match)"),
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):

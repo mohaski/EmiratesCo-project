@@ -86,7 +86,7 @@ def userRegistration(register_user_request: model.UserRegistrationRequest, db: S
         
     except Exception as e:
         db.rollback()
-        print(f"DEBUG: Error creating user: {e}")
+        logger.error(f"Error creating user: {e}", exc_info=True)
         raise e
     
 def verify_password(plain_password: str, hashed_password: str) -> bool:

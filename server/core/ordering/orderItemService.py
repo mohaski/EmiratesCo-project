@@ -102,14 +102,17 @@ def get_orderItems_by_orderId(order_id: int, db: Session = Depends(get_session))
             # Ideally an order might have no items initially.
             return []
         
+        # quantity / unitType / unitPrice live in `details` (OrderItem has no such columns):
+        # reading them as attributes raised, so this route answered 500 for every order.
         order_items = [
             model.OrderItemResponse(
                 itemId=item.item_id,
                 productId=item.product_id,
                 orderId=item.order_id,
-                quantity=item.quantity,
-                unitType=item.unit_type,
-                unitPrice=item.unit_price,
+                variantId=item.variant_id,
+                quantity=(item.details or {}).get("quantity", 0),
+                unitType=(item.details or {}).get("unitType"),
+                unitPrice=(item.details or {}).get("unitPrice", 0),
                 totalPrice=item.total_price,
                 details=item.details,
                 status=item.status,

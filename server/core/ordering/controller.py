@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, BackgroundTasks, Path
 from typing import List, Optional
 from sqlmodel import Session
 from db.database import get_session
@@ -30,7 +30,7 @@ async def create_order(
 @router.get("/", response_model=List[model.OrderResponse])
 def get_orders(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     search: Optional[str] = None,
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
@@ -43,7 +43,7 @@ def get_orders(
 def get_audit_history(
     entity_type: Optional[str] = None,
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     user_id: Optional[str] = None,
     since: Optional[str] = Query(None, description="Inclusive lower bound, YYYY-MM-DD"),
     until: Optional[str] = Query(None, description="Inclusive upper bound, YYYY-MM-DD"),
@@ -59,7 +59,7 @@ def get_audit_history(
 def get_orders_by_customer(
     customer_id: int,
     skip: int = 0,
-    limit: int = 20,
+    limit: int = Query(20, ge=1, le=1000),
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
@@ -70,7 +70,7 @@ def get_orders_by_customer(
 @router.get("/with-balance", response_model=List[model.OrderResponse])
 def get_orders_with_balance(
     skip: int = 0,
-    limit: int = 200,
+    limit: int = Query(200, ge=1, le=1000),
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
@@ -82,7 +82,7 @@ def get_orders_with_balance(
 @router.get("/cutting-queue", response_model=List[model.PendingCuttingOrder])
 def get_cutting_queue(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user),
 ):
@@ -132,7 +132,9 @@ async def mark_orders_cutting_done(
 
 @router.get("/by-number/{order_no}", response_model=model.OrderResponse)
 def get_order_by_number(
-    order_no: int,
+    # orders.order_no is a 32-bit integer: anything larger can't exist, and passing it to
+    # Postgres overflowed (a 500) instead of answering.
+    order_no: int = Path(..., ge=1, le=2147483647),
     db: Session = Depends(get_session),
     current_user = Depends(get_current_user)
 ):
@@ -402,6 +404,9 @@ async def correct_operation(
 @router.get("/{order_id}/items", response_model=List[model.OrderItemResponse])
 def get_order_items(
     order_id: int,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    current_user = Depends(get_current_user)
 ):
+    # Signed-in staff only, like GET /orders/{id} (this route was open to anyone).
+    require_role(["manager", "cashier", "ceo", "admin"], current_user)
     return orderItemService.get_orderItems_by_orderId(order_id, db)

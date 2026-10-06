@@ -106,35 +106,6 @@ def get_outstanding_credits(
     require_role(["ceo", "manager", "admin"], current_user)
     return creditService.get_all_outstanding_credits(db)
 
-@router.post("/credits", response_model=model.CreditCreateResponse)
-def create_credit(
-    credit_data: model.CreditCreateRequest,
-    db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
-):
-    """
-    Manual credit-record correction. Normal payment flows should use
-    POST /financials/payments (PaymentService.record_payment) instead, which
-    manages the Credit lifecycle automatically.
-    """
-    require_role(["ceo", "admin"], current_user)
-    return creditService.create_credit(credit_data, db)
-
-@router.put("/credits/{order_id}", response_model=model.CreditUpdateResponse)
-def update_credit(
-    order_id: int,
-    credit_data: model.CreditUpdate,
-    paid_amount: float = Query(..., alias="amount"),
-    db: Session = Depends(get_session),
-    current_user = Depends(get_current_user)
-):
-    """
-    Manual credit-record correction (does not touch the Order itself). Normal
-    payment flows should use POST /financials/payments instead.
-    """
-    require_role(["ceo", "admin"], current_user)
-    return creditService.update_credit(paid_amount, order_id, credit_data, db)
-
 @router.get("/credits/customer/{customer_id}")
 def get_customer_credits(
     customer_id: int,

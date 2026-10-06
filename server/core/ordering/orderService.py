@@ -8,6 +8,7 @@ from decimal import Decimal
 from fastapi import Depends, HTTPException, Query
 from sqlmodel import Session, select, update
 from sqlalchemy import func, or_
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from entities.orders import Order
@@ -153,6 +154,12 @@ def _order_version_of(order: Order) -> Optional[str]:
 
     sess = object_session(order)
     return order_version(sess, order.orderId) if sess is not None else None
+
+
+# What the shallow response reads per order (customer, and payments for the latest payment
+# method), loaded for the whole page at once: lazily it was two queries PER ORDER (118 queries
+# for a 100-order page).
+_SHALLOW_LOAD = (selectinload(Order.customer), selectinload(Order.payments))
 
 
 def _order_to_shallow_response(order: Order) -> model.OrderResponse:
@@ -406,7 +413,11 @@ def create_order(order_data: model.OrderCreate, db: Session = Depends(get_sessio
         # 1. Validate source invoice (if converting) before touching anything
         source_inv = None
         if order_data.sourceInvoiceId:
-            source_inv = db.get(Invoice, order_data.sourceInvoiceId)
+            # Locked: two tills converting the same quotation at once would otherwise both see
+            # it unconverted - two orders, the stock taken twice. The second now waits and is
+            # refused as already converted.
+            source_inv = db.exec(select(Invoice).where(Invoice.invoiceId == order_data.sourceInvoiceId)
+                                 .with_for_update()).first()
             if not source_inv:
                 raise HTTPException(status_code=404, detail=f"Invoice {order_data.sourceInvoiceId} not found")
             if source_inv.status == "converted":
@@ -577,7 +588,7 @@ def get_orders_for_period_vatExcluded(
             .offset(skip)
             .limit(limit)
         )
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
         return [_order_to_shallow_response(order) for order in orders]
 
     except HTTPException:
@@ -612,7 +623,7 @@ def get_orders_for_period_vatIncluded(
             .offset(skip)
             .limit(limit)
         )
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
         return [_order_to_shallow_response(order) for order in orders]
 
     except HTTPException:
@@ -641,7 +652,7 @@ def get_orders_by_customerId(
             .offset(skip)
             .limit(limit)
         )
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
         return [_order_to_shallow_response(order) for order in orders]
 
     except HTTPException:
@@ -670,7 +681,7 @@ def get_orders_by_servedby(
             .offset(skip)
             .limit(limit)
         )
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
         return [_order_to_shallow_response(order) for order in orders]
 
     except HTTPException:
@@ -693,7 +704,7 @@ def get_orders_for_certain_day(date: str, db: Session = Depends(get_session)) ->
             Order.created_at <= f"{date} 23:59:59",
             visible_orders(),
         )
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
         return [_order_to_shallow_response(order) for order in orders]
     except HTTPException:
         raise
@@ -708,7 +719,7 @@ def get_child_orders(parent_order_id: int, db: Session = Depends(get_session)) -
     """
     try:
         statement = select(Order).where(Order.parent_orderid == parent_order_id, visible_orders())
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
         return [_order_to_shallow_response(order) for order in orders]
     except HTTPException:
         raise
@@ -733,9 +744,12 @@ def get_all_orders(
         if search and search.strip():
             term = search.strip().lstrip("#")
             by_name = Order.customer_name.ilike(f"%{search.strip()}%")
-            statement = statement.where(or_(by_name, Order.order_no == int(term)) if term.isdigit() else by_name)
+            # A number also matches the order NUMBER - but only one that fits its 32-bit column:
+            # a phone number (2547...) overflowed Postgres and failed the whole search.
+            as_number = int(term) if term.isdigit() and int(term) <= 2147483647 else None
+            statement = statement.where(or_(by_name, Order.order_no == as_number) if as_number else by_name)
         statement = statement.order_by(Order.created_at.desc()).offset(skip).limit(limit)
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
 
         return [_order_to_shallow_response(order) for order in orders]
 
@@ -753,7 +767,7 @@ def getAll_orders_VatIncluded(db: Session = Depends(get_session)) -> list[model.
     """
     try:
         statement = select(Order).where(Order.VAT_status == True, visible_orders())
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
 
         return [_order_to_shallow_response(order) for order in orders]
 
@@ -2069,7 +2083,8 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
         .order_by(Order.created_at.asc())
         .offset(skip).limit(limit)
     )
-    orders = db.exec(stmt).all()
+    # Each order's items and their products in two queries, not one per order and per item.
+    orders = db.exec(stmt.options(selectinload(Order.orderItems).selectinload(OrderItem.product))).all()
     results = []
     for order in orders:
         pending_items = [oi for oi in order.orderItems if not oi.cutting_completed]
@@ -2112,9 +2127,10 @@ def get_audit_history(
     if user_id:
         stmt = stmt.where(EditHistory.edited_by == user_id)
     if since:
-        stmt = stmt.where(func.date(EditHistory.edited_at) >= datetime.strptime(since, "%Y-%m-%d").date())
+        # Plain ranges on the column (index-friendly), not func.date(column).
+        stmt = stmt.where(EditHistory.edited_at >= datetime.strptime(since, "%Y-%m-%d"))
     if until:
-        stmt = stmt.where(func.date(EditHistory.edited_at) <= datetime.strptime(until, "%Y-%m-%d").date())
+        stmt = stmt.where(EditHistory.edited_at < datetime.strptime(until, "%Y-%m-%d") + timedelta(days=1))
 
     rows = db.exec(stmt).all()
 
@@ -2162,7 +2178,7 @@ def get_orders_with_balance(db: Session, skip: int = 0, limit: int = 200) -> lis
             .offset(skip)
             .limit(limit)
         )
-        orders = db.exec(statement).all()
+        orders = db.exec(statement.options(*_SHALLOW_LOAD)).all()
         return [_order_to_shallow_response(order) for order in orders]
     except Exception as e:
         logger.error(f"Error retrieving orders with balance: {e}", exc_info=True)
@@ -2419,7 +2435,11 @@ def apply_cancel(
     """
     from core.inventory import reversalPlan
 
-    order = get_visible_order_or_404(db, order_id)
+    # Locked, like the edit: the refund is worked out from amountPayed, and a debt payment
+    # committed meanwhile must either be counted or wait - never be missed.
+    order = db.exec(select(Order).where(Order.orderId == order_id).with_for_update()).first()
+    if order is None or order.status in HIDDEN_STATUSES:
+        raise HTTPException(status_code=404, detail="Order not found")
     if enforce_window and order.status != "cancelled" and _order_age(db, order) > CANCEL_WINDOW:
         raise HTTPException(status_code=400, detail="This order is more than a week old and can no longer be cancelled.")
     if (expected_refund is not None and order.status != "cancelled"

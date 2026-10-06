@@ -1,5 +1,6 @@
 from fastapi import Depends, HTTPException, status
 from sqlmodel import Session, select
+from sqlalchemy.exc import IntegrityError
 from db.database import get_session
 from entities.users import User
 from .authService import hash_password, verify_password
@@ -228,6 +229,14 @@ def delete_user(id: str, db: Session = Depends(get_session), actor=None) -> dict
         return {"message": "User deleted successfully"}
     except HTTPException:
         raise
+    except IntegrityError:
+        # They served orders, took payments or appear in the history: deleting them would
+        # orphan those records (the database refuses). This was an unexplained 500.
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="This user has sales or other history, so they can't be deleted. Deactivate them instead.",
+        )
     except Exception as e:
         db.rollback()
         logger.error(f"Error deleting user {id}: {e}", exc_info=True)

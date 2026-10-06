@@ -292,6 +292,51 @@ const mkOrder = async (cust = CUST) => (await api(M, '/orders/', { method: 'POST
     await p.context().close();
   }
 
+  console.log('16. A quotation is priced by the server - and agrees with the screen');
+  {
+    const p = await newPage(browser, 'qa_cashier');
+    await p.goto(BASE + '/invoice'); await p.waitForTimeout(800); await pickCustomer(p);
+    const addInv = () => p.getByRole('button', { name: '+ Add to Invoice' });
+    const open = async cat => { await p.getByRole('button', { name: new RegExp(cat) }).click(); await p.waitForTimeout(400); await p.locator('.product-card').first().click(); await p.waitForTimeout(900); };
+    await open('QA Accessories'); await addInv().click(); await p.waitForTimeout(400);
+    await open('QA Profile');
+    await p.locator('input[type=number]').nth(1).fill('7.5'); await p.locator('input[type=number]').nth(0).fill('1'); await p.waitForTimeout(1500);
+    await addInv().click(); await p.waitForTimeout(400);
+    await open('QA Glass');
+    await p.getByRole('button', { name: '4mm' }).click(); await p.waitForTimeout(500);
+    await p.getByPlaceholder(/^L \(/).fill('1500'); await p.getByPlaceholder(/^W \(/).fill('500'); await p.getByPlaceholder('Qty').fill('2'); await p.waitForTimeout(300);
+    await p.getByRole('button', { name: 'Add', exact: true }).click(); await p.waitForTimeout(1500);
+    await addInv().click(); await p.waitForTimeout(400);
+    await p.getByRole('button', { name: /^Review Invoice/ }).click(); await p.waitForTimeout(1200);
+    const saved = p.waitForResponse(r => /:8010\/invoices\/$/.test(r.url()) && r.request().method() === 'POST');
+    await p.getByRole('button', { name: /Save as Draft/ }).click();
+    const res = await (await saved).json(); await p.waitForTimeout(1200);
+    check('three calculator lines (widget, profile, glass) - none repriced', res.repriced_lines === 0, JSON.stringify(res));
+    const inv = (await api(M, `/invoices/${res.invoiceId}`)).data;
+    check('stored total = sum of the stored lines', inv.items.length === 3 && inv.total === inv.items.reduce((a, i) => a + Math.ceil(i.totalPrice), 0), `${inv.total} vs ${inv.items.map(i => i.totalPrice)}`);
+    check('no "saved at current prices" warning when nothing moved', !/saved at current prices/.test(await body(p)));
+    check('no page errors', p.errs.length === 0, p.errs.join(' | '));
+    await p.context().close();
+
+    // The price moves between pricing the cart and saving: the quotation says the new price, and the cashier is told.
+    const v = prod('QA Widget').variants[0];
+    const q = await newPage(browser, 'qa_cashier');
+    await q.goto(BASE + '/invoice'); await q.waitForTimeout(800); await pickCustomer(q);
+    await q.getByRole('button', { name: /QA Accessories/ }).click(); await q.locator('.product-card').first().click();
+    await q.getByRole('button', { name: '+ Add to Invoice' }).click(); await q.waitForTimeout(400);
+    await q.getByRole('button', { name: /^Review Invoice/ }).click(); await q.waitForTimeout(1200);
+    await api(CEO, `/products/variants/${v.variantId}`, { method: 'PUT', body: JSON.stringify({ price: 130 }) });
+    const saved2 = q.waitForResponse(r => /:8010\/invoices\/$/.test(r.url()) && r.request().method() === 'POST');
+    await q.getByRole('button', { name: /Save as Draft/ }).click();
+    const res2 = await (await saved2).json(); await q.waitForTimeout(800);
+    await api(CEO, `/products/variants/${v.variantId}`, { method: 'PUT', body: JSON.stringify({ price: 100 }) });
+    check('saved at the new price (130), 1 line repriced', res2.total === 130 && res2.repriced_lines === 1, JSON.stringify(res2));
+    const t = await body(q);
+    check('the cashier is told: KSH 130, the screen showed KSH 100', /saved at current prices: KSH 130 \(this screen showed KSH 100\)/.test(t), (t.match(/Quotation saved[^\n]*/) || [''])[0]);
+    check('no page errors', q.errs.length === 0, q.errs.join(' | '));
+    await q.context().close();
+  }
+
   await browser.close();
   const f = results.filter(x => !x).length;
   console.log(`\n${results.length - f}/${results.length} passed`); process.exit(f ? 1 : 0);

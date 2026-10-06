@@ -17,9 +17,10 @@ class InvoiceCustomer(BaseModel):
 class InvoiceCreate(BaseModel):
     customer: InvoiceCustomer
     items: List[Dict[str, Any]]       # Full cart item snapshots
-    subtotal: float
+    # The browser's figures - accepted for compatibility but ignored: the server prices it.
+    subtotal: float = 0.0
     vat_amount: float = 0.0
-    total: float
+    total: float = 0.0
     discount: float = 0.0
     vat_enabled: bool = False
     notes: Optional[str] = None
@@ -80,6 +81,11 @@ class InvoiceCreateResponse(BaseModel):
     message: str
     invoiceId: int
     invoice_number: str
+    # The server's pricing - what the quotation actually says.
+    subtotal: float = 0.0
+    vat_amount: float = 0.0
+    total: float = 0.0
+    repriced_lines: int = 0           # lines the browser had priced differently
 
 
 class InvoiceConvertResponse(BaseModel):

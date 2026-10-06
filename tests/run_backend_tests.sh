@@ -9,7 +9,7 @@ cd "$SERVER" || exit 1
 for t in test_*.py; do
   [[ "$LIVEFIX" == *" $t "* ]] && "$PY" "$TESTS/fixture_product15.py" >/dev/null 2>&1
   # Sale-window suites start from the QA seed (users, products, order numbers +1000).
-  [[ "$t" == test_sale_windows* ]] && seed
+  [[ "$t" == test_sale_windows* || "$t" == test_backend_audit.py ]] && seed
   ALLOW_LIVE_TESTS=0 "$PY" "$t" > "$OUT/$t.log" 2>&1; rc=$?
   p=$(grep -cE "\[PASS\]|^PASS|  PASS " "$OUT/$t.log"); f=$(grep -cE "\[FAIL\]|^FAIL|  FAIL " "$OUT/$t.log")
   echo "$t exit=$rc pass=$p fail=$f"

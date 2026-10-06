@@ -26,10 +26,6 @@ class CreditCreateRequest(BaseModel):
     settledAt: Optional[str] = None
 
 
-class CreditCreateResponse(BaseModel):
-    message: str
-    creditId: Optional[int]
-
 class checkCreditResponse(BaseModel):
     customerName: str
     creditId: int
@@ -39,14 +35,6 @@ class checkCreditResponse(BaseModel):
     settled_at: Optional[str] = None
     
     
-class CreditUpdate(BaseModel):
-    amount_due: float
-    status: str
-    settledAt: Optional[str] = None
-
-class CreditUpdateResponse(BaseModel):
-    message: str
-    creditId: Optional[int]
 
 
 class FinancialSummaryResponse(BaseModel):

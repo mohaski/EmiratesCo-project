@@ -24,7 +24,9 @@ DATABASE_URL = settings.get_database_url()
 
 engine: Engine = create_engine(
     DATABASE_URL,
-    echo=settings.DEBUG,
+    # Every SQL statement to the log - for local debugging only, never on by default
+    # (it used to follow DEBUG, which was left true in production). SQL_ECHO=true in .env.
+    echo=os.getenv("SQL_ECHO", "false").lower() == "true",
     poolclass=QueuePool,
     pool_size=10,
     max_overflow=20,

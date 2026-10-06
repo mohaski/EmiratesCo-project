@@ -7,7 +7,7 @@ import InvoiceItemRow from '../components/invoices/InvoiceItemRow';
 import { useCart } from '../context/CartContext';
 import { useCartTotals } from '../hooks/useCartTotals';
 import { parseServerDate } from '../utils/dates';
-import { extractErrorMessage } from '../utils/toast';
+import { extractErrorMessage, showToast } from '../utils/toast';
 
 export default function InvoiceReviewPage() {
     const { addInvoice } = useOrders();
@@ -48,7 +48,13 @@ export default function InvoiceReviewPage() {
         setIsSaving(true);
         setSaveError('');
         try {
-            await addInvoice({ customer, items: cartItems, totals, enableTax });
+            const saved = await addInvoice({ customer, items: cartItems, totals, enableTax });
+            // The server prices the quotation (as checkout will). If prices moved since this
+            // cart was priced, the saved quotation says the server's figure - tell the cashier.
+            const serverTotal = Number(saved?.total);
+            if (saved?.repriced_lines > 0 || (Number.isFinite(serverTotal) && Math.abs(serverTotal - total) >= 1)) {
+                showToast(`Quotation saved at current prices: KSH ${serverTotal.toLocaleString()} (this screen showed KSH ${total.toLocaleString()}). Reopen it to print the updated figures.`, 'warning');
+            }
             navigate('/orders');
         } catch (err) {
             console.error('Failed to save invoice:', err);

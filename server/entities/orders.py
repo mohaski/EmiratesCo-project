@@ -1,5 +1,5 @@
 from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import func, Enum, Column
+from sqlalchemy import func, Enum, Column, Index
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
@@ -7,9 +7,11 @@ from uuid import UUID
 class Order(SQLModel, table=True):
 
     __tablename__ = "orders"
+    # Lists, debts and the cutting queue all filter on the workflow status.
+    __table_args__ = (Index("ix_orders_status", "status"),)
 
     orderId: Optional[int] = Field(default=None, primary_key=True)
-    customerid: Optional[int] = Field(default=None, foreign_key="customers.customerId")
+    customerid: Optional[int] = Field(default=None, foreign_key="customers.customerId", index=True)
     # Display name for this order's customer — the walk-in name typed at
     # checkout for guests, or a snapshot of the registered customer's name.
     # Always populated, unlike the old guest-only guest_name column.

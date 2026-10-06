@@ -480,14 +480,6 @@ export const FinancialService = {
         const response = await api.get(`/financials/summary?${params}`);
         return response.data;
     },
-    createCredit: async (creditData) => {
-        const response = await api.post('/financials/credits', creditData);
-        return response.data;
-    },
-    updateCredit: async (orderId, amount, updateData) => {
-        const response = await api.put(`/financials/credits/${orderId}?amount=${amount}`, updateData);
-        return response.data;
-    },
     getCustomerCredits: async (customerId) => {
         const response = await api.get(`/financials/credits/customer/${customerId}`);
         return response.data;
@@ -585,10 +577,6 @@ export const InvoiceService = {
      * Convert an invoice into a confirmed sales order.
      * data: { amount_paid, payment_method, payment_details?, discount? }
      */
-    convert: async (id, data) => {
-        const response = await api.post(`/invoices/${id}/convert`, data);
-        return response.data;
-    },
 };
 
 export const MessagingService = {

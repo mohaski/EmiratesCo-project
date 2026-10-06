@@ -9,7 +9,7 @@ class Payment(SQLModel, table= True):
     __tablename__ = "payments"
 
     paymentId: Optional[int] = Field(default=None, primary_key= True)
-    orderId: int = Field(foreign_key = "orders.orderId", nullable= False)
+    orderId: int = Field(foreign_key = "orders.orderId", nullable= False, index=True)
     amount: float = Field(nullable= False)
 
     # Method & purpose
@@ -27,7 +27,7 @@ class Payment(SQLModel, table= True):
     payment_details: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
 
     # Audit
-    payed_at: datetime = Field(sa_column_kwargs = {"server_default": func.now()})
+    payed_at: datetime = Field(sa_column_kwargs = {"server_default": func.now()}, index=True)
     recorded_by: Optional[UUID] = Field(default=None, foreign_key="users.userId")
 
     # Relationships

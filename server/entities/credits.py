@@ -8,7 +8,7 @@ class Credit(SQLModel, table= True):
     __tablename__ = "credits"
 
     creditId: Optional[int] = Field(default=None, primary_key= True)
-    orderId: int = Field(foreign_key = "orders.orderId", nullable= False)
+    orderId: int = Field(foreign_key = "orders.orderId", nullable= False, index=True)
     customerId: int = Field(foreign_key = "customers.customerId", nullable= False)
     amount: float = Field(nullable= False)
     amount_due: float = Field(nullable= False, default= 0.0)

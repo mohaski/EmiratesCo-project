@@ -7,7 +7,15 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import Session, select
 from loggiing import logger
 from sqlalchemy import func
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as _time, date as _date
+
+
+def _day_range(column, first: _date, last: _date):
+    """WHERE column falls on any day from `first` to `last`, inclusive - as a plain range on
+    the column, so its index is usable (func.date(column) hid it: every summary scanned every
+    row). Same meaning: timestamps are stored as naive Nairobi wall-clock time."""
+    return (column >= datetime.combine(first, _time.min),
+            column < datetime.combine(last + timedelta(days=1), _time.min))
 from utils import require_role, ceil_amount
 
 from . import model
@@ -21,12 +29,13 @@ def calculate_cash_payments_for_today(db: Session = Depends(get_session)) -> flo
     - Returns the total amount of cash payments.
     """
     try:
-        # 🕒 Filter all 'Cash' payments made today
+        # 🕒 Filter all 'Cash' payments made today (the database's today: Nairobi)
+        today = db.exec(select(func.current_date())).one()
         statement = (
             select(Payment.amount)
             .where(
                 Payment.payment_method == "cash",
-                func.date(Payment.payed_at) == func.current_date()  # ensures date-only comparison
+                *_day_range(Payment.payed_at, today, today)
             )
         )
 
@@ -67,14 +76,14 @@ def calculate_cash_payments_for_certain_date(date: str, db: Session = Depends(ge
             select(func.coalesce(func.sum(Payment.amount), 0))
             .where(
                 Payment.payment_method == "cash",
-                func.date(Payment.payed_at) == parsed_date
+                *_day_range(Payment.payed_at, parsed_date, parsed_date)
             )
         )
 
         # ✅ Step 3: Execute and extract result
-        total_cash = db.exec(statement).one_or_none() or (0,)
-
-        total_cash_amount = float(total_cash[0])  # extract from tuple
+        # exec() of a single-value select returns the value itself, not a tuple: indexing it
+        # ([0]) raised TypeError, so this endpoint failed with a 500 for every date.
+        total_cash_amount = float(db.exec(statement).one_or_none() or 0)
 
         logger.info(f"✅ Total cash payments for {parsed_date}: {total_cash_amount}")
         return total_cash_amount
@@ -132,8 +141,7 @@ def get_financial_summary(period: str, date_str: str | None, db: Session) -> mod
 
     payments = db.exec(
         select(Payment).where(
-            func.date(Payment.payed_at) >= range_start,
-            func.date(Payment.payed_at) <= range_end,
+            *_day_range(Payment.payed_at, range_start, range_end),
         )
     ).all()
 
@@ -170,8 +178,7 @@ def get_financial_summary(period: str, date_str: str | None, db: Session) -> mod
     from core.ordering.visibility import visible_orders
     orders = db.exec(
         select(Order).where(
-            func.date(Order.created_at) >= range_start,
-            func.date(Order.created_at) <= range_end,
+            *_day_range(Order.created_at, range_start, range_end),
             visible_orders(),  # open/abandoned sale windows are not orders
         )
     ).all()
@@ -271,7 +278,10 @@ def record_payment(
             raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
 
         from core.ordering.visibility import is_hidden
-        order = db.exec(select(Order).where(Order.orderId == order_id)).first()
+        # Locked: two tills collecting the same debt at once (or a payment landing during an
+        # edit/cancel, which lock the order too) would otherwise both pass the balance check
+        # and each write amountPayed from the same stale value - one payment lost from the books.
+        order = db.exec(select(Order).where(Order.orderId == order_id).with_for_update()).first()
         if not order or is_hidden(order):
             raise HTTPException(status_code=404, detail="Order not found")
         if order.status == "cancelled":

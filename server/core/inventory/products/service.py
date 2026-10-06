@@ -245,13 +245,13 @@ def remove_product(product_id: int, db: Session = Depends(get_session), current_
     except Exception as e:
         db.rollback()
         logger.error(f"Remove Product Error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Could not delete this product. Please try again.")
 
 # --- VARIANT MANAGEMENT ---
 
 def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session = Depends(get_session)):
     try:
-        product = db.get(Product, product_id)
+        product = db.get(Product, product_id, with_for_update=True, populate_existing=True)  # its stock total changes below
 
         # 1. Generate Name (Strict)
         final_name = " - ".join(str(v) for v in variant_data.attributes.values())
@@ -295,7 +295,7 @@ def add_variants_bulk(product_id: int, variants_data: List[model.VariantCreate],
     """Create multiple variants for a product in a single transaction (used by the
     'Add Variant' matrix generator, which can produce more than one variant at once)."""
     try:
-        product = db.get(Product, product_id)
+        product = db.get(Product, product_id, with_for_update=True, populate_existing=True)  # its stock total changes below
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         if not variants_data:
@@ -344,7 +344,13 @@ def add_variants_bulk(product_id: int, variants_data: List[model.VariantCreate],
 @stock_operation(OP_RESTOCK, order_arg=None)
 def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Session = Depends(get_session), current_user=None):
     try:
-        variant = db.get(Variant, variant_id)
+        # A stock change is read-modify-write on the counters a sale (or sale window) may be
+        # changing right now: lock and re-read them, variant then product - the order every
+        # sale path locks in (inventoryService.lock_stock_rows) - or one update is lost.
+        if update_data.stock_change:
+            variant = db.get(Variant, variant_id, with_for_update=True, populate_existing=True)
+        else:
+            variant = db.get(Variant, variant_id)
         if not variant:
              raise HTTPException(status_code=404, detail="Variant not found")
 
@@ -409,7 +415,7 @@ def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Sessio
              variant.stock_quantity += update_data.stock_change
 
              # Sync Parent
-             product = db.get(Product, variant.product_id)
+             product = db.get(Product, variant.product_id, with_for_update=True, populate_existing=True)
              if product:
                   product.stock_quantity = (product.stock_quantity or 0) + update_data.stock_change
                   db.add(product)
@@ -480,7 +486,7 @@ def remove_variant(variant_id: int, db: Session = Depends(get_session)) -> dict:
     except Exception as e:
         db.rollback()
         logger.error(f"Remove Variant Error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Could not delete this variant. Please try again.")
 
 # --- CATEGORIES ---
 
@@ -500,10 +506,14 @@ def create_category(category_data: model.CategoryCreate, db: Session = Depends(g
         db.commit()
         db.refresh(new_cat)
         return new_cat
+    except HTTPException:
+        # "already exists" (400) is the cashier's answer - it was being turned into a 500.
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Create Category Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Could not create this category. Please try again.")
 
 def getAllCategories(db: Session = Depends(get_session)):
     # Ordered by categoryId (creation order) — an unordered SELECT returns rows in
@@ -578,7 +588,8 @@ def update_simple_product_stock(product_id: int, stock_change: int, db: Session,
     stock_change can be positive (add) or negative (remove).
     """
     try:
-        product = db.get(Product, product_id)
+        # Locked and re-read: a sale may be changing this stock right now (see update_variant).
+        product = db.get(Product, product_id, with_for_update=True, populate_existing=True)
         if not product:
             raise HTTPException(status_code=404, detail="Product not found")
         if product.has_variants:

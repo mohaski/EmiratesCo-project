@@ -30,7 +30,7 @@ def get_products(
     # No default cap: the UI loads the whole catalogue in one go (ProductContext)
     # and a default limit silently hid every product past it. Pass ?limit= only
     # when a caller genuinely wants a page.
-    limit: Optional[int] = None,
+    limit: Optional[int] = Query(None, ge=1, le=5000),
     search: Optional[str] = None,
     category_id: Optional[int] = None,
     db: Session = Depends(get_session),
@@ -187,7 +187,7 @@ async def update_product_stock(
 @router.get("/restock-history", response_model=list[model.RestockHistoryItem])
 def get_restock_history(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     product_id: Optional[int] = None,
     db: Session = Depends(get_session),
     current_user=Depends(require_roles("manager", "ceo", "admin")),

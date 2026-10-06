@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException
 from typing import List, Optional
 from sqlmodel import Session
 
@@ -27,7 +27,7 @@ async def create_invoice(
 @router.get("/", response_model=List[model.InvoiceResponse])
 def list_invoices(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     status: Optional[str] = Query(None, description="Filter by status: draft|sent|converted|cancelled"),
     db: Session = Depends(get_session),
     current_user: TokenData = Depends(get_current_user),
@@ -69,10 +69,12 @@ async def convert_invoice(
     current_user: TokenData = Depends(get_current_user),
 ):
     """
-    Convert a draft/sent invoice into a confirmed sales order.
-    Creates an Order, deducts stock, and marks the invoice as 'converted'.
+    Retired. This path made a confirmed order WITHOUT deducting any stock, priced from the
+    quotation's browser-supplied totals, with no stock operation recorded and no lock on the
+    quotation. No screen used it. A quotation is converted through checkout (POST /orders/
+    with sourceInvoiceId) or a sale window, which price it on the server and take its stock.
     """
-    result = service.convert_invoice_to_order(invoice_id, data, current_user.userId, db)
-    background_tasks.add_task(manager.broadcast, "orders_updated")
-    background_tasks.add_task(manager.broadcast, "invoices_updated")
-    return result
+    raise HTTPException(
+        status_code=410,
+        detail="Convert quotations from Order History > Quotations > Convert (checkout).",
+    )
