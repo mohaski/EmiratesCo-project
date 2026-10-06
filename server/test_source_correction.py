@@ -350,10 +350,10 @@ def c_profile():
     w.cancel(oy, w.item(oy), NOT_CUT)
     w.ok("C5c cancel Y")
     # Neither order cut anything, so all the material comes back: X's uncut 2.0 rejoins the
-    # leftover Y held, and Y's 3.0 rejoins that - one whole 6.0 piece (the rejoin engine hands
-    # rejoined material back as an offcut, not a stock bar - see test_edit_scenarios S2), plus the 3.5.
-    check("all material back: the bar rejoined whole, and the 3.5", (w.stock(), w.pool()),
-          (39, [(3.5, "available"), (6.0, "available")]))
+    # leftover Y held, and Y's 3.0 rejoins that - the whole 6.0 bar, which goes back to STOCK
+    # (it used to land in the pool as a full-length "offcut" with stock a bar short), plus the 3.5.
+    check("all material back: the bar back in stock, and the 3.5", (w.stock(), w.pool()),
+          (40, [(3.5, "available")]))
     w.close()
 
     print("\n--- C6. Corrections stay outside Undo (unchanged): refused, nothing moves ---")

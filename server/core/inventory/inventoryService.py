@@ -1620,6 +1620,23 @@ def _rejoin_uncut_1d(db, product, variant, src: dict, rev, pool_key: str,
 
     joined_len = round(float(leaf.length) + length_used, 4)
     _drop_pooled_unit_for_piece(db, product, variant, leaf, pool_key)
+
+    # Every cut on a bar drawn from stock has now been confirmed not made: the bar is whole
+    # again, so it goes back to stock - not into the pool as a full-length "offcut". Reached
+    # when the order that opened the bar is reversed before the one that cut from its
+    # leftover (X opens a bar for 2ft, Y cuts 18.5 from the 19ft left, X then Y reversed
+    # as not cut: the second rejoin is 2.5 + 18.5 = the whole 21ft bar).
+    root = ledger.get_piece(db, leaf.root_piece_id)
+    if (root is not None and root.origin == ledger.ORIGIN_STOCK_UNIT
+            and root.geom_kind == ledger.GEOM_1D and root.length
+            and joined_len >= float(root.length) - 0.01):
+        bar_variant = db.get(Variant, root.variant_id) if root.variant_id else variant
+        _restore_simple_stock(db, product, bar_variant, 1)
+        for part in (leaf, rev.source_piece):
+            ledger.retire_piece(db, part, item_id=item_id,
+                                reason="cut confirmed not made - the whole bar is back in stock")
+        return True
+
     status = "scrap" if _is_scrap_1d(joined_len, variant) else "available"
     out: dict = {}
     _upsert_offcut(db, product, variant, joined_len, pool_key=pool_key, status=status,

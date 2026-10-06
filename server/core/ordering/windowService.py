@@ -241,15 +241,31 @@ def require_own_held_order(db: Session, order_id: Optional[int], user) -> Option
 
 # ── Stock work shared by cart changes and closing ────────────────────────────
 
+def _not_cut_decisions(items):
+    """Every cut line of these items answered "not cut" - always true in a window, where
+    nothing is cut before payment. Without an answer the chain decides alone, and when
+    another order has cut into this window's remainder it only credits the window's own
+    length as a separate piece: a bar still whole on the rack ends up recorded as two."""
+    from core.inventory import reversalPlan as rp
+
+    return rp.ReversalDecisions({
+        (item.item_id, idx): {"physical_state": rp.PHYS_NOT_CUT, "resolution": None}
+        for item in items
+        for idx, line in enumerate((item.details or {}).get("lineItems") or [])
+        if rp.is_cut_line(line)
+    })
+
+
 def _restore_all(db: Session, order: Order, items) -> None:
     """Give back everything the window holds, newest item first (so a later cut from an
     earlier item's remainder is undone before that remainder is, and the bar recombines).
     Runs in the window's hold scope so the engines find its private remainders."""
     from core.inventory.inventoryService import restore_stock_for_order_item
 
+    decisions = _not_cut_decisions(items)
     with holdScope.holding_for(order.orderId):
         for item in sorted(items, key=lambda i: i.item_id, reverse=True):
-            restore_stock_for_order_item(db, item)
+            restore_stock_for_order_item(db, item, decisions=decisions)
     db.flush()
 
 
