@@ -8,6 +8,12 @@
   T2  A window releases after another order cut from its remainder: the window's uncut
       length is joined onto what is left of the bar, not credited as a separate piece.
 
+Phase 1 - the data model and the switch:
+  P1  offcuts.provisional_for: empty by default (ORM and plain SQL inserts), journaled like
+      any column so undo can put it back.
+  P2  The switch: off by default, CEO/admin only, refused while a sale window is open, and a
+      window can't open while the switch is being changed.
+
 Runs on emiratesco_edit_test (DATABASE_URL). Run from server/.
 """
 import logging
@@ -18,6 +24,7 @@ import uuid
 sys.path.insert(0, os.getcwd())
 logging.disable(logging.CRITICAL)
 
+from fastapi import HTTPException
 from sqlmodel import Session, select, text
 
 import entities  # noqa: F401
@@ -34,6 +41,7 @@ import test_sale_windows_matrix as M  # noqa: E402
 from test_sale_windows import open_w, set_cart, release, stock, cut, FakeUser, FULL_BAR  # noqa: E402
 from core.audit import integrity  # noqa: E402
 from core.audit.opContext import operation  # noqa: E402
+from core.inventory import holdScope  # noqa: E402
 from core.inventory import reversalPlan as rp  # noqa: E402
 from core.ordering import model, orderService  # noqa: E402
 
@@ -169,6 +177,93 @@ def t2(db, cat, user):
     clean(db, "T2", since)
 
 
+def set_flag_raw(db, value):
+    """Test setup only: the switch's stored value, whatever a previous run left behind."""
+    db.exec(text("INSERT INTO system_settings (key, value) VALUES (:k, :v) "
+                 "ON CONFLICT (key) DO UPDATE SET value = :v")
+            .bindparams(k=holdScope.PROVISIONAL_FLAG_KEY, v=value))
+    db.commit()
+
+
+def p1(db, cat, user):
+    print("P1  offcuts.provisional_for")
+    bar, bv = T.seed_product(db, cat, "P1 Bar", kind="bar", stock=1)
+    orm_row = T.public_offcut(db, bar, bv, 7.0)
+    db.refresh(orm_row)
+    check("ORM insert: empty", orm_row.provisional_for == [], orm_row.provisional_for)
+    sql_id = db.exec(text("INSERT INTO offcuts (product_id, variant_id, pool_key, length, quantity, status, created_at) "
+                          "VALUES (:p, :v, '', 5.0, 1, 'available', now()) RETURNING \"offcutId\"")
+                     .bindparams(p=bar.productId, v=bv.variantId)).one()[0]
+    db.commit()
+    db.expire_all()
+    check("plain SQL insert: empty (server default)", db.get(Offcut, sql_id).provisional_for == [],
+          db.get(Offcut, sql_id).provisional_for)
+
+    with operation(db, "maintenance", actor=FakeUser(user)) as op:
+        row = db.get(Offcut, orm_row.offcutId)
+        row.provisional_for = [41, 42]
+        db.add(row)
+        db.flush()
+        op_id = op.op_id
+    db.commit()
+    db.expire_all()
+    check("stored as an integer list", db.get(Offcut, orm_row.offcutId).provisional_for == [41, 42],
+          db.get(Offcut, orm_row.offcutId).provisional_for)
+    entry = db.exec(text("SELECT before, after FROM stock_journal WHERE op_id = :o AND table_name = 'offcuts'")
+                    .bindparams(o=op_id)).first()
+    check("journaled before/after", entry is not None and (entry[0] or {}).get("provisional_for") == []
+          and (entry[1] or {}).get("provisional_for") == [41, 42], entry)
+    with operation(db, "maintenance", actor=FakeUser(user)):
+        row = db.get(Offcut, orm_row.offcutId)
+        row.provisional_for = []
+        db.add(row)
+    db.commit()
+
+
+def p2(db, cat, user):
+    print("P2  The switch")
+    set_flag_raw(db, "false")
+    ceo, cashier = M.ceo(user), M.cashier(user)
+    check("off by default", holdScope.provisional_enabled(db) is False)
+    try:
+        holdScope.set_provisional_enabled(db, True, cashier)
+        check("a cashier can't switch it", False, "allowed")
+    except HTTPException as e:
+        db.rollback()
+        check("a cashier can't switch it", e.status_code == 403, e.status_code)
+    check("on, with no window open", holdScope.set_provisional_enabled(db, True, ceo) == {"enabled": True})
+    check("reads on", holdScope.provisional_enabled(db) is True)
+
+    win = open_w(db, user)
+    try:
+        holdScope.set_provisional_enabled(db, False, ceo)
+        check("refused while a window is open", False, "allowed")
+    except HTTPException as e:
+        check("refused while a window is open", e.status_code == 409 and "1 sale window" in e.detail, e.detail)
+    db.expire_all()
+    check("still on after the refusal", holdScope.provisional_enabled(db) is True)
+    check("setting it to what it already is is allowed", holdScope.set_provisional_enabled(db, True, ceo) == {"enabled": True})
+    release(db, user, win)
+    check("off once the window is closed", holdScope.set_provisional_enabled(db, False, ceo) == {"enabled": False})
+
+    # A window can't open while the switch is mid-change: hold the switch's lock in another
+    # session and give the open a short lock_timeout - it must wait, not slip through.
+    with Session(engine) as switching, Session(engine) as till:
+        switching.exec(text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=holdScope._SWITCH_LOCK))
+        till.exec(text("SET lock_timeout = '300ms'"))
+        try:
+            open_w(till, user)
+            check("open waits for the switch", False, "opened")
+        except Exception as e:
+            till.rollback()
+            check("open waits for the switch", "lock timeout" in str(e).lower(), str(e)[:120])
+        switching.rollback()
+    win = open_w(db, user)
+    check("opens normally once the switch is done", win.windowId is not None)
+    release(db, user, win)
+    set_flag_raw(db, "false")
+
+
 def main():
     with Session(engine) as db:
         T.reset(db)
@@ -178,6 +273,8 @@ def main():
         db.commit()
         t1(db, cat, user)
         t2(db, cat, user)
+        p1(db, cat, user)
+        p2(db, cat, user)
 
     print("\n" + "=" * 68)
     if failures:

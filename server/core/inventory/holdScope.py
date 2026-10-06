@@ -125,3 +125,63 @@ def publish_held_offcuts(db, order_id: int) -> int:
         db.add(row)
     db.flush()
     return len(rows)
+
+
+# ── Provisional offcuts switch (PROVISIONAL_OFFCUTS_PLAN.md) ─────────────────
+#
+# Off unless switched on. It only changes while NO sale window is open, so every window lives
+# its whole life under one rule (private remainders, or provisional ones) and nothing ever has
+# to convert a window's rows from one to the other. open_window takes the shared side of an
+# advisory lock and the switch the exclusive side, so a window can't open between the switch
+# counting open windows and committing.
+
+PROVISIONAL_FLAG_KEY = "provisional_offcuts_enabled"
+_SWITCH_LOCK = 7_310_021  # pg advisory lock id: the switch vs. opening a window
+
+
+def provisional_enabled(db) -> bool:
+    from entities.settings import SystemSetting
+
+    row = db.get(SystemSetting, PROVISIONAL_FLAG_KEY)
+    return row is not None and row.value == "true"
+
+
+def lock_switch_shared(db) -> None:
+    """Opening a window: wait out a switch in progress (held to the end of the transaction)."""
+    from sqlmodel import text
+
+    db.exec(text("SELECT pg_advisory_xact_lock_shared(:k)").bindparams(k=_SWITCH_LOCK))
+
+
+def set_provisional_enabled(db, enabled: bool, user) -> dict:
+    """CEO/admin. Refused while any sale window is open: unlike the windows switch it never
+    releases a customer's sale on its own - the cashiers finish or release theirs first."""
+    from fastapi import HTTPException
+    from sqlmodel import text
+
+    from entities.saleWindows import SaleWindow
+    from entities.settings import SystemSetting
+    from utils import require_role
+
+    require_role(["ceo", "admin"], user)
+    db.exec(text("SELECT pg_advisory_xact_lock(:k)").bindparams(k=_SWITCH_LOCK))
+    current = provisional_enabled(db)
+    if current != enabled:
+        open_count = len(db.exec(select(SaleWindow.window_id)
+                                 .where(SaleWindow.closed_at.is_(None))).all())
+        if open_count:
+            db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(f"{open_count} sale window(s) are open. Ask the cashiers to confirm or "
+                        "release them, then switch again."),
+            )
+    row = db.get(SystemSetting, PROVISIONAL_FLAG_KEY) or SystemSetting(key=PROVISIONAL_FLAG_KEY, value="false")
+    row.value = "true" if enabled else "false"
+    try:
+        row.updated_by = user.get_uuid() if hasattr(user, "get_uuid") else None
+    except (ValueError, TypeError):
+        row.updated_by = None
+    db.add(row)
+    db.commit()
+    return {"enabled": enabled}

@@ -489,6 +489,8 @@ def open_window(db: Session, user, req: wm.WindowOpenRequest) -> wm.WindowRespon
     require_role(_ROLES, user)
     _require_enabled(db)
     try:
+        # The provisional-offcuts switch can't change while a window is open (holdScope).
+        holdScope.lock_switch_shared(db)
         # Serialise this cashier's opens so two simultaneous clicks can't both pass the limit.
         db.exec(select(User).where(User.userId == user.userId).with_for_update()).one()
         open_windows = db.exec(

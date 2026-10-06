@@ -6,6 +6,7 @@ from sqlmodel import Session
 from db.database import get_session
 from core.userManagement.authService import get_current_user
 from ws.manager import manager
+from core.inventory import holdScope
 from . import windowService, windowModel as wm
 
 # Sync endpoints on purpose: they hold row locks and run the stock engines, so they belong
@@ -52,6 +53,25 @@ def set_windows_setting(
     result = windowService.set_windows_enabled(db, payload.enabled, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
     background_tasks.add_task(manager.broadcast, "windows_updated")
+    return result
+
+
+@router.get("/provisional-offcuts/settings")
+def get_provisional_setting(db: Session = Depends(get_session), current_user=Depends(get_current_user)):
+    """Whether open windows' bar remainders are shared as provisional offcuts."""
+    return {"enabled": holdScope.provisional_enabled(db)}
+
+
+@router.put("/provisional-offcuts/settings")
+def set_provisional_setting(
+    payload: WindowsSetting,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """CEO/admin. Refused (409) while any sale window is open."""
+    result = holdScope.set_provisional_enabled(db, payload.enabled, current_user)
+    background_tasks.add_task(manager.broadcast, "products_updated")
     return result
 
 

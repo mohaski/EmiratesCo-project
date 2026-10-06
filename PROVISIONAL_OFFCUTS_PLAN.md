@@ -3,8 +3,9 @@
 Make a sale window's bar remainders visible to every till, marked **provisional**, instead of
 hiding them, so two sales never open two bars when one is enough.
 
-Status: **Phase 0 done** on branch `provisional-offcuts-phase0` (R1, R2; suite
-`server/test_provisional_offcuts.py`). Phases 1 to 6 not started. Decisions D1 to D4 accepted as
+Status: **Phases 0 and 1 done**: Phase 0 on branch `provisional-offcuts-phase0` (R1, R2),
+Phase 1 on `provisional-offcuts-phase1` (column, migration, switch). Suite:
+`server/test_provisional_offcuts.py`. Phases 2 to 6 not started. Decisions D1 to D4 accepted as
 recommended (2026-10-06). Written 2026-10-06 from the production dump of the same day and the code
 at `9416d04`.
 
@@ -117,12 +118,25 @@ Each was checked against the code at `9416d04`. **R1 and R2 were reproduced on t
   passes it to `restore_stock_for_order_item`.
 - Tests: T1, T2 (§4) with private holds still on, plus the existing edit and cancel suites.
 
-### Phase 1: data model
-- `server/migrate_add_provisional_offcuts.py`: add the column and GIN index; idempotent, like the
-  other migrations.
-- `entities/offcuts.py`: the field, plus a docstring stating rules 1 to 5.
-- Feature setting `provisional_offcuts_enabled` (`system_settings`), default off. The switch requires
-  zero open windows (R16).
+### Phase 1: data model (done)
+- `server/migrate_add_provisional_offcuts.py`: adds the column and a GIN index; idempotent, like
+  the other migrations. **Run it before starting the new server code**, because the Offcut entity
+  now selects the column.
+- `entities/offcuts.py`: `provisional_for: List[int]` (`INTEGER[]`, server default `{}`). Always
+  assign a new list. The stock journal records it like any other column, so undo can restore it.
+- Switch `provisional_offcuts_enabled` (`system_settings`), off when absent:
+  - `holdScope.provisional_enabled` / `set_provisional_enabled`;
+  - `GET`/`PUT /windows/provisional-offcuts/settings`, CEO/admin only.
+- **The switch is refused (409) while any window is open** (R16). Unlike the windows switch, it
+  never releases a customer's sale on its own.
+- `open_window` takes the shared side of an advisory lock and the switch takes the exclusive side,
+  so a window can't open mid-switch. Every window lives its whole life under one rule.
+- No screen for the switch yet (Phase 4). It has no effect until Phase 2.
+- The column is `INTEGER[]` on Postgres and JSON on SQLite, because several suites
+  (`test_offcut_ledger`, `test_offcut_confirmation`, `test_partial_order_edit`, ...) run on
+  in-memory SQLite. **Phase 2 must not put Postgres array operators (`@>`, `ANY`, `array_remove`)
+  on paths those suites reach.** Filter marks in Python, or use the array operators only in the
+  window confirm and release lookups, which those suites never run.
 
 ### Phase 2: marks lifecycle (`core/inventory/holdScope.py`, renamed in docs to "provisional")
 - `marks_for_piece(db, piece) -> set[int]`: walk `parent_piece_id` up to the root and collect
@@ -135,9 +149,11 @@ Each was checked against the code at `9416d04`. **R1 and R2 were reproduced on t
   - rejoin
   - restore credit
 - Merge rule: same `provisional_for` (R5).
-- **Confirm** (`windowService._confirm`, replacing `publish_held_offcuts` for 1D):
-  `UPDATE offcuts SET provisional_for = array_remove(provisional_for, :order)`.
-- **Release** (`_close`): Phase 0's not-cut restore, then the same `array_remove`. Add the
+- **Confirm** (`windowService._confirm`, replacing `publish_held_offcuts` for 1D): remove the
+  window's id from each marked row **through the ORM, row by row** (as `publish_held_offcuts`
+  does). Not a bulk `UPDATE ... array_remove`: the stock journal can't see bulk statements, so
+  undo and the integrity trace would miss the change.
+- **Release** (`_close`): Phase 0's not-cut restore, then the same row-by-row mark removal. Add the
   `bar_handed_over` summary when a rejoin happened (R10).
 
 ### Phase 3: visibility and source choice

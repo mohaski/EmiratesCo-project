@@ -1,5 +1,7 @@
+from sqlalchemy import JSON, Column, Integer
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlmodel import SQLModel, Field, Relationship
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 from config import nairobi_now
 
@@ -43,6 +45,19 @@ class Offcut(SQLModel, table=True):
     # bar back whole. Cleared when the window is confirmed or released
     # (core/inventory/holdScope.publish_held_offcuts). NULL = public, the normal case.
     held_by_order_id: Optional[int] = Field(default=None, foreign_key="orders.orderId", index=True)
+
+    # Provisional offcuts (PROVISIONAL_OFFCUTS_PLAN.md, behind provisional_offcuts_enabled):
+    # the open sale windows whose UNCUT cut this 1D material depends on. Unlike
+    # held_by_order_id it never hides the row - every till may cut from it, with a badge - and
+    # empty means an ordinary offcut. Derived from the piece ledger (who consumed this piece's
+    # ancestors), stored here as a cache. Always ASSIGN a new list, never append in place: the
+    # stock journal and undo only see a changed attribute.
+    provisional_for: List[int] = Field(
+        default_factory=list,
+        # INTEGER[] on Postgres; the in-memory SQLite suites keep the same list as JSON.
+        sa_column=Column(ARRAY(Integer).with_variant(JSON(), "sqlite"), nullable=False,
+                         server_default="{}"),
+    )
 
     # Metadata
     created_at: datetime = Field(default_factory=nairobi_now)
