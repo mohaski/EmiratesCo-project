@@ -42,6 +42,7 @@ class World:
             self.var.length = 6.0
             self.db.add(self.var)
         self.db.commit()
+        M.rebaseline(self.db)
         self.fu = M.FakeUser(self.user.userId)
 
     # -- material ------------------------------------------------------------------------

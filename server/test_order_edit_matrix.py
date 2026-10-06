@@ -83,6 +83,30 @@ def reset(db):
     db.commit()
 
 
+def rebaseline(db):
+    """Start the integrity check's stock-vs-journal comparison from the stock as it is NOW.
+
+    Call it after a suite has reset the journal and seeded its products. stock_baseline is
+    shared by every suite on this database, and a baseline left by another suite (or taken
+    when different products existed) makes the check compare today's stock with someone
+    else's numbers - "stock is 39 but baseline + journal says 3". With no stock rows yet a
+    sentinel row is written instead: the check runs only when the baseline table is non-empty,
+    and every product inserted afterwards is journaled from its insert."""
+    db.exec(text("DELETE FROM stock_baseline"))
+    last = db.exec(text("SELECT coalesce(max(id), 0) FROM stock_journal")).one()[0]
+    taken = 0
+    for table, col in (("variants", '"variantId"'), ("products", '"productId"')):
+        taken += db.exec(text(
+            f"INSERT INTO stock_baseline (table_name, row_pk, quantity, taken_at, after_journal_id) "
+            f"SELECT '{table}', {col}::text, coalesce(stock_quantity, 0), now() at time zone 'utc', :last "
+            f"FROM {table}").bindparams(last=last)).rowcount
+    if not taken:
+        db.exec(text("INSERT INTO stock_baseline (table_name, row_pk, quantity, taken_at, after_journal_id) "
+                     "VALUES ('variants', '0', 0, now() at time zone 'utc', :last)").bindparams(last=last))
+    db.commit()
+    return last
+
+
 def seed_base(db):
     cat = db.exec(select(Category)).first()
     if cat is None:

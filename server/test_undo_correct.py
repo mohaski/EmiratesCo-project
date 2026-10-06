@@ -41,6 +41,7 @@ def fresh():
     db.commit()
     cat, user = M.seed_base(db)
     db.commit()
+    M.rebaseline(db)  # no products yet: each test's seeding is journaled from its insert
     return db, cat, user
 
 

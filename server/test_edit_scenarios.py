@@ -40,6 +40,7 @@ class World:
         self.var.length = bar_len
         self.db.add(self.var)
         self.db.commit()
+        M.rebaseline(self.db)
 
     @property
     def fu(self):
@@ -280,6 +281,7 @@ def s10():
     cat, user = M.seed_base(db)
     glass, gvar = M.seed_product(db, cat, "Scenario Glass", kind="glass")
     db.commit()
+    M.rebaseline(db)
     fu = M.FakeUser(user.userId)
     sheet_area = M.SHEET_W * M.SHEET_H
     a = M.new_order(db, user)
@@ -326,6 +328,7 @@ def s13():
     cat, user = M.seed_base(db)
     glass, gvar = M.seed_product(db, cat, "Scenario Glass 2", kind="glass")
     db.commit()
+    M.rebaseline(db)
     a = M.new_order(db, user)
     ai = M.add_item(db, a, glass, gvar, [M.line_full(1), M.line_cut_2d(600, 500)])
     ai.cutting_completed = True
@@ -412,6 +415,7 @@ def s16():
     cat, user = M.seed_base(db)
     glass, gvar = M.seed_product(db, cat, "Scenario Glass 3", kind="glass")
     db.commit()
+    M.rebaseline(db)
     z = M.new_order(db, user)                       # leaves a 1240x1830 offcut
     M.add_item(db, z, glass, gvar, [M.line_cut_2d(1200, 1830)])
     a = M.new_order(db, user)                       # cut from that offcut
