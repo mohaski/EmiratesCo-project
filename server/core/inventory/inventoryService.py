@@ -1537,8 +1537,20 @@ def restore_specific_offcut_sources(
                     _return_pooled_unit_for_piece(db, product, variant, rev.source_piece, pool_key)
                     ledger.release_piece(db, rev.source_piece, item_id=item_id,
                                          reason="order edit/cancel restored this cut")
-                    returned(rev.source_piece, "source",
-                             f"{rev.source_piece.length:.2f} offcut this cut came from")
+                    # Back on its bar: if the bar has another leftover meanwhile (another
+                    # sale's cut undone while this one held the piece), they are one piece.
+                    others = (_bar_leftovers(db, rev.source_piece, exclude={rev.source_piece.piece_id})
+                              if rev.source_piece in _bar_leftovers(db, rev.source_piece) else [])
+                    if others and not any(hold.held_elsewhere(db, o) for o in others + [rev.source_piece]):
+                        _drop_pooled_unit_for_piece(db, product, variant, rev.source_piece, pool_key)
+                        joined = _merge_bar_leftover(db, product, variant, pool_key, others,
+                                                     extra=float(rev.source_piece.length), extra_piece=rev.source_piece,
+                                                     item_id=item_id, why="order edit/cancel restored this cut")
+                        if joined is not None:
+                            returned(joined, "joined", f"{joined.length:.2f} - this cut's piece back on the bar")
+                    else:
+                        returned(rev.source_piece, "source",
+                                 f"{rev.source_piece.length:.2f} offcut this cut came from")
             elif (physical_state == rp.PHYS_NOT_CUT and not rev.retire_source
                   and _rejoin_uncut_1d(db, product, variant, src, rev, pool_key, item_id, returned)):
                 # Never cut, but a later order has cut into this bar's leftover: the uncut
@@ -1639,57 +1651,103 @@ def _rejoin_uncut_1d(db, product, variant, src: dict, rev, pool_key: str,
     7.00. In one dimension a cut from a bar always leaves one contiguous piece, which is
     what makes this exact rather than an estimate.
 
-    Returns False (caller credits this cut's own length on its own, as before) when there
-    is no leftover to join: the later cuts used it all, or it was retired.
+    When the later cuts used the leftover up exactly, there is nothing at the end of the chain
+    to join - but the bar can still have an uncut leftover from an EARLIER "not cut" that also
+    had nothing to join (several sale windows on one bar, released one after another). That is
+    the same piece on the rack, so this length joins it. With none either, this length IS what
+    is left of the bar: it becomes a rejoin piece of its own, for the next "not cut" to join.
+    (Credited as separate pieces instead, three released windows left 1.5 + 3.0 + 3.5 in the
+    records where the rack has one 8.0.)
+
+    Returns False (caller credits this cut's own length on its own, as before) only when the
+    leftover is an open window's private one (provisional offcuts off).
     """
     from core.inventory import offcutResolver as resolver
 
     length_used = float(src.get("length_used", 0) or 0)
-    if length_used <= 0 or not rev.remainder_pieces:
+    if length_used <= 0 or rev.source_piece is None:
         return False
-    _, leaf = resolver.chain_walk(db, rev.remainder_pieces[0], exclude_item_ids={item_id} if item_id else ())
-    if leaf is None or leaf.geom_kind != ledger.GEOM_1D:
-        return False
-    if hold.held_elsewhere(db, leaf):
+    leaves = []
+    if rev.remainder_pieces:
+        _, leaf = resolver.chain_walk(db, rev.remainder_pieces[0], exclude_item_ids={item_id} if item_id else ())
+        if leaf is not None and leaf.geom_kind == ledger.GEOM_1D:
+            leaves.append(leaf)
+    # Whatever else is left of this bar is the same piece on the rack (one leftover per bar).
+    leaves += _bar_leftovers(db, rev.source_piece, exclude={l.piece_id for l in leaves})
+    if any(hold.held_elsewhere(db, l) for l in leaves):
         # What is left of the bar is an open sale window's private remainder: that window
         # gives it back whole when it closes. Credit only this cut's own length.
         return False
+    joined = _merge_bar_leftover(db, product, variant, pool_key, leaves, extra=length_used, extra_piece=rev.source_piece,
+                                 item_id=item_id, why="cut confirmed not made")
+    if joined is not None:
+        returned(joined, "joined",
+                 f"{joined.length:.2f} = {length_used:.2f} never cut + {joined.length - length_used:.2f} left on the bar"
+                 if leaves else f"{length_used:.2f} never cut - all that is left of the bar")
+    return True
 
-    joined_len = round(float(leaf.length) + length_used, 4)
-    _drop_pooled_unit_for_piece(db, product, variant, leaf, pool_key)
 
-    # Every cut on a bar drawn from stock has now been confirmed not made: the bar is whole
-    # again, so it goes back to stock - not into the pool as a full-length "offcut". Reached
-    # when the order that opened the bar is reversed before the one that cut from its
-    # leftover (X opens a bar for 2ft, Y cuts 18.5 from the 19ft left, X then Y reversed
-    # as not cut: the second rejoin is 2.5 + 18.5 = the whole 21ft bar).
-    root = ledger.get_piece(db, leaf.root_piece_id)
-    if (root is not None and root.origin == ledger.ORIGIN_STOCK_UNIT
-            and root.geom_kind == ledger.GEOM_1D and root.length
-            and joined_len >= float(root.length) - 0.01):
+def _bar_leftovers(db, piece, exclude=()) -> list:
+    """The leftovers of the stock bar `piece` belongs to that are still in the pool and never
+    left the bar physically: cut remainders and rejoins, not a piece returned after it was
+    already cut (restore credit), a re-measured part (correction) or anything under one. A bar
+    cut from one end has ONE such piece; records holding more (several sale windows released in
+    turn) are merged by _merge_bar_leftover."""
+    if piece is None or not piece.root_piece_id:
+        return []
+    tree = {p.piece_id: p for p in db.exec(select(OffcutPiece).where(
+        OffcutPiece.root_piece_id == piece.root_piece_id)).all()}
+    root = tree.get(piece.root_piece_id)
+    if root is None or root.origin != ledger.ORIGIN_STOCK_UNIT or root.geom_kind != ledger.GEOM_1D:
+        return []
+    separate = (ledger.ORIGIN_RESTORE_CREDIT, ledger.ORIGIN_CORRECTION, ledger.ORIGIN_MANUAL_ENTRY, ledger.ORIGIN_LEGACY)
+
+    def on_the_bar(p):
+        cur = p
+        while cur is not None:
+            if cur.origin in separate:
+                return False
+            cur = tree.get(cur.parent_piece_id) if cur.parent_piece_id else None
+        return True
+    return sorted((p for p in tree.values()
+                   if p.piece_id not in exclude and p.state == ledger.STATE_AVAILABLE
+                   and p.geom_kind == ledger.GEOM_1D and p.offcut_row_id is not None
+                   and p.origin in (ledger.ORIGIN_CUT_REMAINDER, ledger.ORIGIN_REJOIN) and on_the_bar(p)),
+                  key=lambda p: p.piece_id)
+
+
+def _merge_bar_leftover(db, product, variant, pool_key, parts: list, *, extra: float, extra_piece,
+                        item_id, why: str):
+    """Put `parts` (leftovers of one bar, in the pool) and `extra` (length coming back to the bar
+    - a cut never made, or a piece released) together as ONE piece: the bar's leftover. If that
+    is the whole bar, it goes back to stock instead (returns None). `extra_piece` is the piece the
+    extra length was recorded on; it and the parts are joined into the new piece."""
+    length = round(sum(float(p.length) for p in parts) + extra, 4)
+    for p in parts:
+        _drop_pooled_unit_for_piece(db, product, variant, p, pool_key)
+    root = ledger.get_piece(db, (parts[0] if parts else extra_piece).root_piece_id)
+    if (root is not None and root.origin == ledger.ORIGIN_STOCK_UNIT and root.geom_kind == ledger.GEOM_1D
+            and root.length and length >= float(root.length) - 0.01):
+        # Every cut on this bar is undone: it is whole again - back to stock, not an "offcut".
         bar_variant = db.get(Variant, root.variant_id) if root.variant_id else variant
         _restore_simple_stock(db, product, bar_variant, 1)
-        for part in (leaf, rev.source_piece):
-            ledger.retire_piece(db, part, item_id=item_id,
-                                reason="cut confirmed not made - the whole bar is back in stock")
-        return True
-
-    status = "scrap" if _is_scrap_1d(joined_len, variant) else "available"
+        for part in parts + [extra_piece]:
+            ledger.retire_piece(db, part, item_id=item_id, reason=f"{why} - the whole bar is back in stock")
+        return None
+    status = "scrap" if _is_scrap_1d(length, variant) else "available"
     out: dict = {}
-    _upsert_offcut(db, product, variant, joined_len, pool_key=pool_key, status=status,
-                   parent_piece=leaf, origin=ledger.ORIGIN_REJOIN, ledger_out=out,
-                   ledger_item_id=item_id,
-                   marks_ignore_piece_id=getattr(rev.source_piece, "piece_id", None),
-                   ledger_notes=(f"rejoined: {length_used:.2f} never cut + {leaf.length:.2f} "
-                                 "left on the bar"))
+    parent = parts[0] if parts else extra_piece
+    _upsert_offcut(db, product, variant, length, pool_key=pool_key, status=status,
+                   parent_piece=parent, origin=ledger.ORIGIN_REJOIN, ledger_out=out,
+                   ledger_item_id=item_id, marks_ignore_piece_id=getattr(extra_piece, "piece_id", None),
+                   ledger_notes=f"{why}: {extra:.2f} back on the bar" + (
+                       f" + {length - extra:.2f} left on it" if parts else " - all that is left of it"))
     joined = ledger.get_piece(db, out.get("piece_id"))
-    # The leftover and the uncut source both now live in the joined piece; their
-    # superseded_by link lets a later reversal on this bar follow the material there.
-    ledger.join_into(db, [leaf, rev.source_piece], joined, item_id=item_id,
-                     reason="cut confirmed not made - rejoined with the rest of the bar")
-    returned(joined, "joined",
-             f"{joined_len:.2f} = {length_used:.2f} never cut + {leaf.length:.2f} left on the bar")
-    return True
+    # The parts now live in the joined piece; superseded_by lets a later reversal on this bar
+    # follow the material there.
+    ledger.join_into(db, parts + [extra_piece], joined, item_id=item_id,
+                     reason=f"{why} - one leftover per bar")
+    return joined
 
 
 def _consume_offcut_sources(

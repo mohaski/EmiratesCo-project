@@ -237,6 +237,32 @@ Each was checked against the code at `9416d04`. **R1 and R2 were reproduced on t
   - Correction fingerprints ignore these display-only keys (`physical`, `pending_source_notice`);
     without that, a correction made from a displayed record was refused as "changed".
 
+- **Stress-tested with many sales on one bar (2026-10-08, `server/test_provisional_worksheets.py`).**
+  The suite runs 9 hand-picked scenarios, 100 random ones (3-8 windows each, checkouts, sales
+  making 2-3 cuts, random confirm/release order) and a bar shared by 8 windows and 8
+  checkouts. A simulated cutter follows every worksheet in confirmation order. Each piece it is
+  told to take must be on the rack, the bars taken must equal the stock drop, and the rack must
+  equal the system's pool at the end. Worksheets must not change after they are confirmed. A new
+  bar may be opened only when the engine's own choice (D1) finds no piece that fits. Integrity
+  must be clean after every step.
+
+  This found and fixed:
+  - **The first physical-source rule was wrong after releases.** It adjusted the recorded
+    length, but a release's rejoined piece already contains the uncut length, so it was counted
+    twice. It is replaced by the whole-chain rule above (bar − cuts that come first; one query
+    for the bar's chain).
+  - **Fragmented leftovers in the records.** When the later cuts used a bar's leftover up exactly,
+    each released window's uncut length was recorded as a separate piece (1.5 + 3.0 + 3.5 where
+    the rack has one 8.0). Likewise, a released piece went back beside the bar's other leftover
+    instead of onto it. `_rejoin_uncut_1d` and the release branch now merge into the bar's one
+    leftover (`_bar_leftovers` / `_merge_bar_leftover`). Pieces that really are separate (a cut
+    piece returned, a re-measure, anything under one) stay separate. The edit, correction, undo
+    and edit-matrix suites are unchanged.
+  - The worst worksheet on a 16-sale bar costs 31 queries / about 10 ms.
+
+  Each rule was checked by breaking it: the suite fails for hidden provisional pieces,
+  cutting order taken from window opening, a sale's own earlier cuts forgotten, the rejoin
+  ignoring the bar's other leftovers, and a released piece not merged back.
 - **Switch:** a CEO/admin button on the Orders page ("Shared leftovers: On/Off"), next to the
   sale-windows button. While a window is open it shows the server's refusal.
 - Tests: T16-T20 (server, mutation-checked) and `suite_provisional.cjs` (browser: switch and
