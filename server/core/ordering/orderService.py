@@ -125,7 +125,7 @@ def _order_to_response(order: Order) -> model.OrderResponse:
                 unitType=item.details.get("unitType") if item.details else None,
                 unitPrice=item.details.get("unitPrice", 0) if item.details else 0,
                 totalPrice=item.total_price,
-                details=live_details(db, item.details),
+                details=live_details(db, item.details, order, item.item_id),
                 status=None,
                 cuttingCompleted=item.cutting_completed,
                 cuttingCompletedAt=item.cutting_completed_at.isoformat() if item.cutting_completed_at else None,
@@ -1573,14 +1573,21 @@ def apply_order_edit(
         raise HTTPException(status_code=422, detail=str(e))
 
 
-def _canonical_event(value):
+# Keys an order's cut records carry only when SHOWN (core/inventory/sourceNotice.py works them
+# out from where the other sales are now): not part of what a cut event is, so a correction's
+# fingerprint must not depend on them - the screen shows them, the stored record may not.
+_DISPLAY_ONLY_EVENT_KEYS = ("physical", "pending_source_notice")
+
+
+def _canonical_event(value, _top=True):
     """An offcut_sources event in a form that survives a trip through the browser: JSON
     numbers lose the int/float distinction (3.0 comes back as 3), so numbers compare as
-    rounded floats and dict keys in sorted order."""
+    rounded floats and dict keys in sorted order. Display-only keys are left out."""
     if isinstance(value, dict):
-        return {k: _canonical_event(value[k]) for k in sorted(value)}
+        return {k: _canonical_event(value[k], False) for k in sorted(value)
+                if not (_top and k in _DISPLAY_ONLY_EVENT_KEYS)}
     if isinstance(value, list):
-        return [_canonical_event(v) for v in value]
+        return [_canonical_event(v, False) for v in value]
     if isinstance(value, bool) or value is None or isinstance(value, str):
         return value
     if isinstance(value, (int, float)):
@@ -2101,7 +2108,7 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
             "orderNo": order.order_no,
             "customerName": order.customer_name,
             "items": [
-                {"itemId": oi.item_id, "productName": oi.product.name, "details": live_details(db, oi.details)}
+                {"itemId": oi.item_id, "productName": oi.product.name, "details": live_details(db, oi.details, order, oi.item_id)}
                 for oi in pending_items
             ],
         })

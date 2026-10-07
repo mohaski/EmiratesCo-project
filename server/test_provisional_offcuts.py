@@ -747,33 +747,94 @@ def t19(db, cat, alice, bob):
 
 
 def t20(db, cat, alice, bob):
-    print("T20 The worksheet notice is worked out when the order is shown")
-    def notice(order_id):
+    print("T20 The worksheet shows each cut's PHYSICAL source (bars are cut in confirmation order)")
+
+    def shown(order_id, item_idx=0):
+        """The first cut record of an order as the worksheet gets it."""
         db.expire_all()
         o = orderService.get_order_by_orderId(order_id, db)
-        return o.items[0].details["lineItems"][0]["offcut_sources"][0].get("pending_source_notice")
+        return o.items[item_idx].details["lineItems"][0]["offcut_sources"][0]
 
-    for ending in ("released", "confirmed"):
+    def phys(src):
+        p = src.get("physical")
+        return None if p is None else (p["kind"], p["length"], p["after_order_no"], p["keep"], p["keep_status"])
+
+    # A window cuts 3ft from a new 21ft bar (18ft provisional); a checkout cuts 4ft of it.
+    for ending in ("open", "released", "confirmed later"):
         bar, bv, since = bar_for(db, cat, f"T20 {ending}")
         w = window_cut(db, alice, 3.0)
         y = checkout(db, bob, [cut(bar, bv, 4.0)])
-        n = notice(y.orderId)
-        check(f"{ending}: while the window is open - take the whole 21ft bar (window and cashier named)",
-              n is not None and (n.get("state"), n.get("bar"), n.get("cashier")) == ("window", {"length": 21.0}, alice.username),
-              n)
         if ending == "released":
             release(db, alice, w)
-            n = notice(y.orderId)
-            check("released: the bar was never cut - still take it whole", n is not None and (n.get("state"), n.get("bar")) == ("released", {"length": 21.0}), n)
-        else:
+        elif ending == "confirmed later":
             res = confirm(db, alice, w)
-            n = notice(y.orderId)
-            check("confirmed: a pending cut on its receipt number", n is not None and (n.get("state"), n.get("order_no")) == ("pending", res.orderNo), n)
-            orderService.mark_cutting_complete_batch([item_of(db, w.orderId).item_id], db, M.manager(alice))
-            db.commit()
-            check("its cut reported done: no notice any more", notice(y.orderId) is None, notice(y.orderId))
-        stored = item_of(db, y.orderId).details["lineItems"][0]["offcut_sources"][0].get("pending_source_notice")
-        check(f"{ending}: the stored record is untouched (worked out on display only)", stored is not None and "state" not in stored, stored)
+        src = shown(y.orderId)
+        check(f"{ending}: the checkout's worksheet - New bar, CUT 4, KEEP 17, no note",
+              (src["offcut_length"], phys(src), "pending_source_notice" in src) == (18.0, ("new_bar", 21.0, None, 17.0, "available"), False),
+              (phys(src), src.get("pending_source_notice")))
+        if ending == "confirmed later":
+            wsrc = shown(w.orderId)
+            y_no = db.exec(select(T.Order.order_no).where(T.Order.orderId == y.orderId)).one()
+            check("confirmed later: the window's worksheet - the 17ft piece left after the checkout's cut, CUT 3, KEEP 14",
+                  phys(wsrc) == ("piece", 17.0, y_no, 14.0, "available"), phys(wsrc))
+        stored = item_of(db, y.orderId).details["lineItems"][0]["offcut_sources"][0]
+        check(f"{ending}: the stored record is untouched", "physical" not in stored and stored.get("offcut_length") == 18.0, stored)
+
+    print("    ...and ordinary sales read exactly as before")
+    bar, bv, since = bar_for(db, cat, "T20 ordinary")
+    a = checkout(db, alice, [cut(bar, bv, 3.0)])            # opens the bar: 18ft left
+    b = checkout(db, bob, [cut(bar, bv, 4.0)])              # cuts from it, confirmed after
+    a_no = db.exec(select(T.Order.order_no).where(T.Order.orderId == a.orderId)).one()
+    sa, sb = shown(a.orderId), shown(b.orderId)
+    check("ordinary: no physical override on either sale", (phys(sa), phys(sb)) == (None, None), (phys(sa), phys(sb)))
+    check("ordinary: the later sale keeps the usual 'depends on Order #N' note",
+          (sb.get("pending_source_notice") or {}).get("order_no") == a_no, sb.get("pending_source_notice"))
+    orderService.mark_cutting_complete_batch([item_of(db, a.orderId).item_id], db, M.manager(alice))
+    db.commit()
+    check("ordinary: the note goes once that cut is reported", "pending_source_notice" not in shown(b.orderId), shown(b.orderId))
+
+    bar, bv, since = bar_for(db, cat, "T20 corrected")
+    a = checkout(db, alice, [cut(bar, bv, 3.0)])
+    ai = item_of(db, a.orderId)
+    orderService.correct_profile_offcut_for_order_item(a.orderId, ai.item_id, 0, 0, 17.0, False, None, "damaged end",
+                                                      db, M.manager(alice))
+    db.commit()
+    b = checkout(db, bob, [cut(bar, bv, 4.0)])
+    sb = shown(b.orderId)
+    check("a manager-corrected leftover (18 -> 17) is not 'physically' undone", (sb["offcut_length"], phys(sb)) == (17.0, None),
+          (sb["offcut_length"], phys(sb)))
+
+    bar, bv, since = bar_for(db, cat, "T20 cancelled")
+    a = checkout(db, alice, [cut(bar, bv, 3.0)])            # opens the bar
+    b = checkout(db, bob, [cut(bar, bv, 4.0)])              # cuts from its 18ft
+    cancel_not_cut(db, alice, a.orderId)                    # A never cut: its 3ft rejoins
+    sb = shown(b.orderId)
+    check("an opener cancelled 'not cut': the other sale now opens the bar - New bar, KEEP 17, no note",
+          (phys(sb), "pending_source_notice" in sb) == (("new_bar", 21.0, None, 17.0, "available"), False),
+          (phys(sb), sb.get("pending_source_notice")))
+
+    print("    ...two checkouts from one window's bar")
+    bar, bv, since = bar_for(db, cat, "T20 two")
+    w = window_cut(db, alice, 3.0)
+    b1 = checkout(db, bob, [cut(bar, bv, 4.0)])               # 18 -> 14 (provisional)
+    b2 = checkout(db, bob, [cut(bar, bv, 5.0)])               # 14 -> 9 (provisional)
+    b1_no = db.exec(select(T.Order.order_no).where(T.Order.orderId == b1.orderId)).one()
+    check("first: New bar, CUT 4, KEEP 17", phys(shown(b1.orderId)) == ("new_bar", 21.0, None, 17.0, "available"), phys(shown(b1.orderId)))
+    check("second: the 17ft piece left after the first one's cut, CUT 5, KEEP 12",
+          phys(shown(b2.orderId)) == ("piece", 17.0, b1_no, 12.0, "available"), phys(shown(b2.orderId)))
+
+    print("    ...a correction made from the worksheet as shown is not refused as 'changed'")
+    displayed = shown(b1.orderId)
+    try:
+        orderService.correct_profile_offcut_for_order_item(
+            b1.orderId, item_of(db, b1.orderId).item_id, 0, 0, 13.5, False, None, "re-measured", db, M.manager(alice),
+            expected_event=displayed)
+        db.commit()
+        check("correction with the displayed record accepted", True)
+    except HTTPException as e:
+        db.rollback()
+        check("correction with the displayed record accepted", False, (e.status_code, e.detail))
+    release(db, alice, w)
 
 
 def phase4(db, cat, alice, bob):

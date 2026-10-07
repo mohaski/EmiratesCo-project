@@ -219,16 +219,23 @@ Each was checked against the code at `9416d04`. **R1 and R2 were reproduced on t
   and says which sale.
 - **R9:** `GET /windows/provisional-offcuts` (managers). The held-stock banner on Inventory
   adds "N provisional offcuts not cut yet" and lists them as "only on paper".
-- **R7, worksheet:** `core/inventory/sourceNotice.py` works the `pending_source_notice` out
-  **when an order is shown** (order responses, the cutting queue), from where the producing sale
-  is now. The stored record is never changed.
-
-  | Producing sale is now | The worksheet says |
-  |---|---|
-  | an open window | "the bar is still whole - take the whole 21ft bar" |
-  | released or cancelled before cutting | "closed before cutting - take the whole bar" |
-  | confirmed, cut not reported | the warning as before, with its receipt number (it used to show the internal id for a sale made through a window) |
-  | cut reported done | no notice |
+- **R7, worksheet (revised 2026-10-07 after feedback from the shop: notes mean little on the
+  floor).** `core/inventory/sourceNotice.py` works out each bar cut's **physical** source when an
+  order is shown, assuming bars are cut in the order sales are confirmed. The worksheet then just
+  says "Source: New bar" or "Source: 16ft piece (left after Order #356's cut)" with the real
+  CUT/KEEP, and no note.
+  - The physical length is the recorded source, plus the cuts above it on the bar that come later
+    (an open window, a released one, a sale confirmed later, a reversal "not cut"), minus the cuts
+    below it that come first.
+  - When that equals the record (every ordinary sale, manager corrections included), the
+    worksheet is unchanged. The stored record is never changed.
+  - Example: a window cuts 14ft, checkout #356 cuts 5ft of its 7ft and is confirmed first →
+    #356: New bar, CUT 5, KEEP 16. The window, paid later: 16ft piece left after #356's cut,
+    CUT 14, KEEP 2.
+  - The old "depends on an offcut from Order #N" note remains only for its original case (that
+    order confirmed first, cut not reported yet) and disappears once that cut is reported.
+  - Correction fingerprints ignore these display-only keys (`physical`, `pending_source_notice`);
+    without that, a correction made from a displayed record was refused as "changed".
 
 - **Switch:** a CEO/admin button on the Orders page ("Shared leftovers: On/Off"), next to the
   sale-windows button. While a window is open it shows the server's refusal.

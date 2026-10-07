@@ -12,41 +12,14 @@ import { RECEIPT_THEME, fmtLen, fmtMm, groupCuts, canonicalWH } from '../../util
 // doesn't block anything, just tells the cutter to double-check with a colleague
 // (or themselves) before assuming the piece physically exists. Monochrome-safe
 // (bold + border only) so it still reads clearly on a plain thermal print.
-//
-// The server works the notice out when the order is shown (server/core/inventory/
-// sourceNotice.py), from where the producing sale is NOW:
-//   window   an open sale (provisional offcut): its bar is still whole on the rack
-//   released that sale closed before cutting: the bar was never cut either
-//   pending  confirmed, cut not reported yet (and notices stored before this had no state)
-// A piece whose producing cut is reported done carries no notice at all.
-const barText = (bar) => (!bar ? 'the whole bar'
-    : bar.length ? `the whole ${fmtLen(bar.length)} bar` : `the whole ${fmtMm(bar.width)} x ${fmtMm(bar.height)} sheet`);
-const PendingSourceNotice = ({ notice, theme }) => {
-    const style = { fontSize: '9.5px', fontWeight: 700, color: theme.border, border: `1px solid ${theme.border}`, borderRadius: '3px', padding: '2px 5px', margin: '3px 0' };
-    if (notice.state === 'window') {
-        const who = [notice.window, notice.cashier].filter(Boolean).join(', ');
-        return (
-            <div style={style} data-source-notice="window">
-                ⚠ Not cut yet: this piece comes from a bar an open sale{who ? ` (${who})` : ''} hasn't paid for.
-                {' '}The bar is still whole - take {barText(notice.bar)} and cut from it.
-            </div>
-        );
-    }
-    if (notice.state === 'released') {
-        return (
-            <div style={style} data-source-notice="released">
-                ⚠ The sale that opened this bar was closed before cutting - the bar is still whole.
-                {' '}Take {barText(notice.bar)} and cut from it.
-            </div>
-        );
-    }
-    return (
-        <div style={style} data-source-notice="pending">
-            ⚠ Depends on an offcut from Order #{notice.order_no ?? notice.order_id}
-            {notice.customer_name ? ` (${notice.customer_name})` : ''} - check it has been cut.
-        </div>
-    );
-};
+// Kept current by the server (core/inventory/sourceNotice.py): it disappears once that order's
+// cut is reported, and whenever the cut's physical source (below) replaces the recorded one.
+const PendingSourceNotice = ({ notice, theme }) => (
+    <div style={{ fontSize: '9.5px', fontWeight: 700, color: theme.border, border: `1px solid ${theme.border}`, borderRadius: '3px', padding: '2px 5px', margin: '3px 0' }}>
+        ⚠ Depends on an offcut from Order #{notice.order_no ?? notice.order_id}
+        {notice.customer_name ? ` (${notice.customer_name})` : ''}.
+    </div>
+);
 
 // Small labeled tag used in front of every dimension so the cutter never has
 // to infer, from font weight alone, whether a number is what to CUT or what's
@@ -67,13 +40,25 @@ const CutChip = ({ variant, theme }) => <span style={chipStyle(theme, variant)}>
 // `superseded` marks an event a manager correction has fully reversed and
 // replaced with a separate new entry (see inventoryService.correct_profile_offcut_event) —
 // kept in place as a historical record rather than deleted.
-const CuttingInstructionLine1D = ({ src, theme, renderActions }) => (
+// `physical` (set by the server only when it differs from the record - see
+// server/core/inventory/sourceNotice.py): where the material really comes from on the floor,
+// bars being cut in the order sales are confirmed. A sale confirmed before the one whose
+// leftover it was recorded against opens the bar itself: "New bar", and what is really left.
+const CuttingInstructionLine1D = ({ src, theme, renderActions }) => {
+    const phys = src.physical;
+    const keep = phys ? phys.keep : src.remainder_created;
+    const keepStatus = phys ? phys.keep_status : src.remainder_status;
+    return (
     <div style={{ fontSize: '10.5px', lineHeight: 1.4, opacity: src.superseded ? 0.5 : 1 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap' }}>
             <div style={{ fontSize: '8px', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: theme.label }}>
-                {src.source === 'offcut'
-                    ? <>Source: Offcut #{src.offcut_id}<span style={{ textTransform: 'none', fontWeight: theme.dimWeight, color: theme.dim }}> ({fmtLen(src.offcut_length)} available)</span></>
-                    : <>Source: New bar</>
+                {phys
+                    ? (phys.kind === 'new_bar'
+                        ? <>Source: New bar</>
+                        : <>Source: {fmtLen(phys.length)} piece<span style={{ textTransform: 'none', fontWeight: theme.dimWeight, color: theme.dim }}>{phys.after_order_no ? ` (left after Order #${phys.after_order_no}'s cut)` : ''}</span></>)
+                    : src.source === 'offcut'
+                        ? <>Source: Offcut #{src.offcut_id}<span style={{ textTransform: 'none', fontWeight: theme.dimWeight, color: theme.dim }}> ({fmtLen(src.offcut_length)} available)</span></>
+                        : <>Source: New bar</>
                 }
                 {src.superseded && <span style={{ textTransform: 'none', color: theme.dim, fontWeight: theme.dimWeight }}> — replaced</span>}
             </div>
@@ -85,15 +70,16 @@ const CuttingInstructionLine1D = ({ src, theme, renderActions }) => (
                 <CutChip variant="cut" theme={theme} />
                 <strong style={{ color: theme.strong, fontSize: '11.5px' }}>{fmtLen(src.length_used)}</strong>
             </div>
-            {src.remainder_created > 0 && (
+            {keep > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '2px' }}>
-                    <CutChip variant={src.remainder_status === 'scrap' ? 'waste' : 'stock'} theme={theme} />
-                    <span style={{ color: theme.dim, fontWeight: theme.dimWeight }}>{fmtLen(src.remainder_created)}</span>
+                    <CutChip variant={keepStatus === 'scrap' ? 'waste' : 'stock'} theme={theme} />
+                    <span style={{ color: theme.dim, fontWeight: theme.dimWeight }}>{fmtLen(keep)}</span>
                 </div>
             )}
         </div>
     </div>
-);
+    );
+};
 
 // Small sketch of where the cut(s) and remainder(s) sit within the sheet/offcut
 // this event consumed — monochrome-safe (no reliance on color) so it stays

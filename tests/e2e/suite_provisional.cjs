@@ -132,7 +132,7 @@ async function windowWithCut(t, feet) {
     await p.context().close();
   }
 
-  console.log('5. A sale that cuts from it: the worksheet says take the whole bar');
+  console.log('5. A sale that cuts from it, confirmed first: its worksheet says New bar - no notes');
   const sale = (await api(M, '/orders/', { method: 'POST', body: JSON.stringify({ servedBy: ME.userId, status: 'confirmed', amountPaid: 0, items: [cutItem(4)] }) })).data;
   const openReview = async (p) => {
     await p.goto(BASE + '/orders'); await p.waitForTimeout(1500);
@@ -143,15 +143,15 @@ async function windowWithCut(t, feet) {
     const p = await newPage(browser, 'qa_manager');
     await openReview(p);
     let t = await body(p);
-    check('window open: "not cut yet ... take the whole 21ft bar"',
-      /Not cut yet: this piece comes from a bar an open sale \(Window 1, qa_cashier\) hasn't paid for\.\s*The bar is still whole - take the whole 21ft bar/.test(t),
-      (t.match(/[^\n]*(⚠|bar)[^\n]*/g) || []).slice(0, 3).join(' | '));
+    const sheet = /Source: New bar[\s\S]{0,60}CUT\s*4ft[\s\S]{0,30}KEEP\s*17ft/i;
+    const noNotes = (txt) => !/Not cut yet|closed before cutting|Depends on an offcut|available\)/i.test(txt);
+    check('window open: Source New bar, CUT 4ft, KEEP 17ft', sheet.test(t), (t.match(/[^\n]*(Source|CUT|KEEP)[^\n]*/gi) || []).slice(0, 4).join(' | '));
+    check('...and no note for the cutter', noNotes(t), (t.match(/[^\n]*(⚠|available\))[^\n]*/g) || []).join(' | '));
     await api(CASH, `/windows/${win.windowId}`, { method: 'DELETE' });
     await openReview(p);
     t = await body(p);
-    check('window released: "closed before cutting ... take the whole 21ft bar"',
-      /The sale that opened this bar was closed before cutting - the bar is still whole\.\s*Take the whole 21ft bar/.test(t),
-      (t.match(/[^\n]*(⚠|bar)[^\n]*/g) || []).slice(0, 3).join(' | '));
+    check('window released: still New bar, CUT 4ft, KEEP 17ft, no note', sheet.test(t) && noNotes(t),
+      (t.match(/[^\n]*(Source|CUT|KEEP|⚠)[^\n]*/gi) || []).slice(0, 4).join(' | '));
     check('no page errors', p.errs.length === 0, p.errs.join(' | '));
     await p.context().close();
   }
