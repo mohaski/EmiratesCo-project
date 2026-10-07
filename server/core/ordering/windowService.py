@@ -825,6 +825,21 @@ def held_stock(db: Session, user) -> list:
     return out
 
 
+def provisional_offcuts(db: Session, user) -> list:
+    """Managers (provisional offcuts on): every offcut that is only on paper - a leftover of a
+    bar an open sale window hasn't paid for - and which sales it waits on. A stock count must
+    not "find" these on the rack: the bar they come from is still whole (R9)."""
+    require_role(["manager", "ceo", "admin"], user)
+    if not holdScope.provisional_enabled(db):
+        return []
+    rows = db.exec(select(Offcut).where(Offcut.quantity > 0, func.cardinality(Offcut.provisional_for) > 0)
+                   .order_by(Offcut.product_id, Offcut.length.desc())).all()
+    described = holdScope.describe_rows(db, rows)
+    return [{"offcutId": r.offcutId, "productId": r.product_id, "variantId": r.variant_id,
+             "length": r.length, "quantity": r.quantity, "windows": described.get(r.offcutId, [])}
+            for r in rows]
+
+
 def check_cart(db: Session, window_id: int, user, req: wm.WindowCartRequest) -> dict:
     """Would this cart save? The real save, run and rolled back - so a calculator's stock
     check for a window line answers exactly what saving will (the window's own material

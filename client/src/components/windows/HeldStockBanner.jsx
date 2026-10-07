@@ -4,6 +4,7 @@ import { wsEvents } from '../../utils/wsEvents';
 import { useWindows } from '../../context/WindowContext';
 import { useProducts } from '../../context/ProductContext';
 import { parseServerDate } from '../../utils/dates';
+import { provisionalLabel } from '../../utils/provisional';
 
 /**
  * Managers: what open sale windows are holding right now. A window's stock is really
@@ -14,20 +15,25 @@ export default function HeldStockBanner() {
     const { enabled } = useWindows();
     const { products } = useProducts();
     const [holds, setHolds] = useState([]);
+    // Provisional offcuts (switch on): leftovers of bars open sales haven't paid for. They are
+    // in the offcut pool but NOT on the rack - the bar is still whole - so a count must not
+    // "find" them. Empty while the switch is off.
+    const [paper, setPaper] = useState([]);
     const [open, setOpen] = useState(false);
 
     const load = useCallback(() => {
         if (!enabled) return; // nothing is shown while windows are off
         api.windowService.holds().then(setHolds).catch(() => {});
+        api.windowService.provisionalOffcuts().then(setPaper).catch(() => {});
     }, [enabled]);
 
     useEffect(() => {
         load();
-        const off = wsEvents.on('windows_updated', load);
-        return off;
+        const offs = [wsEvents.on('windows_updated', load), wsEvents.on('products_updated', load)];
+        return () => offs.forEach(off => off());
     }, [load]);
 
-    if (!enabled || holds.length === 0) return null;
+    if (!enabled || (holds.length === 0 && paper.length === 0)) return null;
     const nameOf = (h) => {
         const p = products.find(x => x.id === h.productId);
         const v = p?.variants?.find(x => (x.variantId ?? x.id) === h.variantId);
@@ -49,6 +55,7 @@ export default function HeldStockBanner() {
             }}>
                 {open ? '▾' : '▸'} {holds.length} item{holds.length === 1 ? '' : 's'} held in {windowsCount} open sale{windowsCount === 1 ? '' : 's'} -
                 {' '}this stock is reserved for customers who are paying, not missing.
+                {paper.length > 0 && ` ${paper.length} provisional offcut${paper.length === 1 ? '' : 's'} not cut yet.`}
             </button>
             {open && (
                 <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.25rem', color: '#cbd5e1' }}>
@@ -56,6 +63,12 @@ export default function HeldStockBanner() {
                         <li key={`${h.windowId}-${i}`}>
                             {nameOf(h)}: {what(h)} - {h.cashier}, {h.label}
                             {h.expiresAt ? ` (released by ${parseServerDate(h.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} if idle)` : ''}
+                        </li>
+                    ))}
+                    {paper.map(r => (
+                        <li key={`p${r.offcutId}`} data-provisional-offcut>
+                            {nameOf(r)}: {r.quantity > 1 ? `${r.quantity} × ` : ''}{r.length} offcut - provisional, only on paper
+                            {' '}until {provisionalLabel(r.windows) || 'an open sale'} pays (the bar is still whole on the rack)
                         </li>
                     ))}
                 </ul>

@@ -11,6 +11,7 @@ import OrderCard from '../components/orders/OrderCard';
 import InvoiceCard from '../components/orders/InvoiceCard';
 import SetCancelPinModal from '../components/orders/SetCancelPinModal';
 import SaleWindowsToggle from '../components/windows/SaleWindowsToggle';
+import ProvisionalOffcutsToggle from '../components/windows/ProvisionalOffcutsToggle';
 import CuttingQueueSection from '../components/orders/CuttingQueueSection';
 import useCancelOrderFlow from '../hooks/useCancelOrderFlow';
 import { showToast } from '../utils/toast';
@@ -219,6 +220,7 @@ export default function OrdersPage() {
                     }}>🔐 Set Cancel PIN</button>
                 )}
                 {canSetPin && <SaleWindowsToggle />}
+                {canSetPin && <ProvisionalOffcutsToggle />}
 
                 {activeTab !== 'cutting' && (
                     <div style={{ position: 'relative', minWidth: '280px' }}>

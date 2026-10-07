@@ -75,6 +75,12 @@ def set_provisional_setting(
     return result
 
 
+@router.get("/provisional-offcuts")
+def provisional_offcuts(db: Session = Depends(get_session), current_user=Depends(get_current_user)):
+    """Managers: offcuts that exist only on paper until an open sale window is paid."""
+    return windowService.provisional_offcuts(db, current_user)
+
+
 @router.get("/holds")
 def held_stock(db: Session = Depends(get_session), current_user=Depends(get_current_user)):
     """Managers: what every open window is holding right now."""

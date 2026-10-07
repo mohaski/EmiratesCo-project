@@ -764,6 +764,12 @@ export const WindowService = {
     setSettings: async (enabled) => (await api.put('/windows/settings', { enabled })).data,
     /** Managers: what every open window is holding right now. */
     holds: async () => (await api.get('/windows/holds')).data,
+    /** { enabled } - whether open windows' bar leftovers are shared as provisional offcuts. */
+    getProvisionalSettings: async () => (await api.get('/windows/provisional-offcuts/settings')).data,
+    /** CEO/admin. Refused (409) while any sale window is open. */
+    setProvisionalSettings: async (enabled) => (await api.put('/windows/provisional-offcuts/settings', { enabled })).data,
+    /** Managers: offcuts that exist only on paper until an open sale window is paid. */
+    provisionalOffcuts: async () => (await api.get('/windows/provisional-offcuts')).data,
 };
 
 export const FailoverService = {

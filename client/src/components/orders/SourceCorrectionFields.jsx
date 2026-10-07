@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { fmtLen, fmtMm } from '../../utils/cuttingInstructionFormat';
+import { provisionalLabel } from '../../utils/provisional';
 
 // Shared by CorrectOffcutModal (glass) and CorrectProfileOffcutModal (bars): "this source was
 // never used" and the replacement source picker. The server side is core/inventory/cutCorrection.py.
@@ -127,7 +128,10 @@ export function SourceSelect({ value, onChange, offcuts, newOk, newLabel, is2d }
                 </option>
             ))}
             {others.map(o => (
-                <option key={o.offcutId} value={String(o.offcutId)}>Offcut #{o.offcutId} — {size(o)} (qty {o.quantity})</option>
+                <option key={o.offcutId} value={String(o.offcutId)}>
+                    Offcut #{o.offcutId} — {size(o)} (qty {o.quantity}){o.provisional?.length
+                        ? ` — provisional: ${provisionalLabel(o.provisional)} hasn't paid, the bar isn't cut yet` : ''}
+                </option>
             ))}
             <option value="new" disabled={!newOk}>{newLabel}</option>
         </select>

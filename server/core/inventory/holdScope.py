@@ -316,3 +316,36 @@ def own_marks_first(db) -> list:
     if hold is None or not provisional_enabled(db):
         return []
     return [func.cardinality(Offcut.provisional_for) == 0]
+
+
+# ── Telling people about provisional pieces (Phase 4) ────────────────────────
+
+def describe_marks(db, order_ids) -> list:
+    """The open windows behind a provisional piece, for a badge: [{orderId, window, cashier}],
+    in window order. A mark whose window has closed meanwhile is simply left out."""
+    from entities.saleWindows import SaleWindow
+    from entities.users import User
+
+    ids = sorted({int(i) for i in (order_ids or [])})
+    if not ids:
+        return []
+    rows = db.exec(
+        select(SaleWindow, User).join(User, User.userId == SaleWindow.user_id)
+        .where(SaleWindow.order_id.in_(ids), SaleWindow.closed_at.is_(None))
+        .order_by(SaleWindow.window_id)
+    ).all()
+    return [{"orderId": w.order_id, "window": w.label, "cashier": u.username} for w, u in rows]
+
+
+def describe_rows(db, rows) -> dict:
+    """{offcutId: describe_marks(...)} for the provisional rows among `rows` (one query per
+    distinct mark set; usually none)."""
+    out, cache = {}, {}
+    for r in rows:
+        marks = tuple(sorted(getattr(r, "provisional_for", None) or ()))
+        if not marks:
+            continue
+        if marks not in cache:
+            cache[marks] = describe_marks(db, marks)
+        out[r.offcutId] = cache[marks]
+    return out

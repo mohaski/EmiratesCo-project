@@ -7,6 +7,7 @@ import { getCategoryAccent, hexToRgba } from '../utils/colors';
 import { subCategoriesFor, matchesSubCategory } from '../utils/subCategories';
 import ConfirmationModal from '../components/common/ConfirmationModal';
 import { parseServerDate } from '../utils/dates';
+import ProvisionalBadge from '../components/offcuts/ProvisionalBadge';
 
 const editInput = {
     background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(6,182,212,0.35)', borderRadius: '6px',
@@ -47,6 +48,9 @@ function Checkbox({ checked, indeterminate = false, onChange, title }) {
 /** One offcut row — read-only until the CEO opens it for editing, at which point
  * the size cell becomes the input(s) that product's measurement shape calls for. */
 function OffcutRow({ row, selected, onToggleSelect, isEditing, onStartEdit, onCancelEdit, onSave }) {
+    // A provisional piece (an open sale's uncut bar) is only on paper: the server refuses to
+    // edit or delete it until that sale is confirmed or released, so it is shown read-only.
+    const isProvisional = (row.provisional || []).length > 0;
     const [draft, setDraft] = useState({});
     const [saving, setSaving] = useState(false);
     // The offcut as it was when editing started. The list refreshes on every sale/restock
@@ -103,7 +107,9 @@ function OffcutRow({ row, selected, onToggleSelect, isEditing, onStartEdit, onCa
             border: `1px solid ${selected ? 'rgba(6,182,212,0.35)' : 'rgba(255,255,255,0.06)'}`,
             transition: 'background 0.15s, border-color 0.15s',
         }}>
-            <Checkbox checked={selected} onChange={onToggleSelect} />
+            {isProvisional
+                ? <span style={{ width: '18px', flexShrink: 0 }} title="Provisional - can't be deleted until that sale closes" />
+                : <Checkbox checked={selected} onChange={onToggleSelect} />}
 
             <span style={{
                 fontSize: '0.65rem', color: '#475569', fontFamily: 'var(--font-mono)',
@@ -151,6 +157,7 @@ function OffcutRow({ row, selected, onToggleSelect, isEditing, onStartEdit, onCa
                             borderRadius: '100px', padding: '1px 7px',
                         }}>scrap</span>
                     )}
+                    <ProvisionalBadge windows={row.provisional} />
                 </div>
             )}
 
@@ -172,6 +179,9 @@ function OffcutRow({ row, selected, onToggleSelect, isEditing, onStartEdit, onCa
                             color: draftValid && !saving ? '#fff' : '#334155', fontSize: '0.75rem', fontWeight: 800,
                         }}>{saving ? 'Saving…' : 'Save'}</button>
                     </>
+                ) : isProvisional ? (
+                    <span style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700 }}
+                        title="This piece is only on paper until that sale is confirmed or released.">Locked until the sale closes</span>
                 ) : (
                     <button onClick={onStartEdit} style={{
                         background: 'none', border: 'none', cursor: 'pointer', color: '#60a5fa', fontSize: '0.75rem', fontWeight: 700,
@@ -394,7 +404,8 @@ export default function OffcutManagementPage() {
         return next;
     });
 
-    const toggleMany = (items) => setSelectedIds(prev => {
+    const toggleMany = (all) => setSelectedIds(prev => {
+        const items = all.filter(i => !(i.provisional || []).length);  // provisional: never deletable
         const next = new Set(prev);
         const allSelected = items.every(i => next.has(i.offcutId));
         items.forEach(i => (allSelected ? next.delete(i.offcutId) : next.add(i.offcutId)));

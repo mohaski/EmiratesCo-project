@@ -32,6 +32,16 @@ Phase 3 - choosing and locking, switch ON:
   T14 a cancel racing a checkout on the same bar never deadlocks
   T15 a correction racing a sale on the same variant never loses the sale's stock change
 
+Phase 4 - what people see, switch ON:
+  T16 the till's listing badges a provisional piece with its window and cashier; a reopened
+      window line still never sees its own leftover (marked, not held)
+  T17 Offcut Management lists provisional pieces but refuses to edit or delete them, saying
+      why; once the window confirms they are ordinary and editable
+  T18 a correction's replacement list badges provisional pieces and puts them after ordinary
+  T19 managers' list of provisional pieces
+  T20 the worksheet notice is worked out when shown: window -> take the whole bar; released ->
+      the bar was never cut; confirmed -> its receipt number; cut -> no notice
+
 Runs on emiratesco_edit_test (DATABASE_URL). Run from server/.
 """
 import logging
@@ -646,6 +656,126 @@ def t15(db, cat, alice, bob):
     clean(db, "T15", since)
 
 
+# ── Phase 4 ──────────────────────────────────────────────────────────────────
+
+def listing(db, bar, bv, hold=None, for_item=None):
+    from core.inventory.products import service as psvc
+    db.expire_all()
+    return [(r.length, r.quantity, [(m["orderId"], m["window"], m["cashier"]) for m in r.provisional])
+            for r in psvc.get_offcuts_for_product(bar.productId, db, bv.variantId, hold, for_item)]
+
+
+def t16(db, cat, alice, bob):
+    print("T16 The till's listing: provisional badge; a reopened line never sees its own leftover")
+    bar, bv, since = bar_for(db, cat, "T16 Bar")
+    T.public_offcut(db, bar, bv, 4.0)
+    w = window_cut(db, alice, 3.0, new_bar=True)
+    label = db.exec(select(T.SaleWindow).where(T.SaleWindow.order_id == w.orderId)).one().label
+    check("another till sees the 18ft badged with the window and cashier, the 4ft plain",
+          listing(db, bar, bv) == [(18.0, 1, [(w.orderId, label, alice.username)]), (4.0, 1, [])], listing(db, bar, bv))
+    own_item = item_of(db, w.orderId).item_id
+    check("the window reopening that line is not offered its own 18ft",
+          listing(db, bar, bv, w.orderId, own_item) == [(4.0, 1, [])], listing(db, bar, bv, w.orderId, own_item))
+    confirm(db, alice, w)
+    check("after the confirm: an ordinary 18ft", listing(db, bar, bv) == [(18.0, 1, []), (4.0, 1, [])], listing(db, bar, bv))
+
+
+def t17(db, cat, alice, bob):
+    print("T17 Offcut Management: provisional pieces listed, but not editable or deletable")
+    from core.inventory.products import service as psvc, model as pmodel
+    bar, bv, since = bar_for(db, cat, "T17 Bar")
+    w = window_cut(db, alice, 3.0)
+    ceo = M.ceo(alice)
+    row = db.exec(select(Offcut).where(Offcut.product_id == bar.productId, Offcut.quantity > 0)).one()
+    listed = [r for r in psvc.list_all_offcuts(db, ceo) if r.offcutId == row.offcutId]
+    check("listed, with its window", len(listed) == 1 and [m["orderId"] for m in listed[0].provisional] == [w.orderId],
+          [(r.offcutId, r.provisional) for r in listed])
+    for label, call in (("edit", lambda: psvc.update_offcut_admin(row.offcutId, pmodel.OffcutAdminUpdate(length=17.0), db, ceo)),
+                        ("delete", lambda: psvc.bulk_delete_offcuts([row.offcutId], db, ceo))):
+        try:
+            call()
+            check(f"{label} refused", False, "allowed")
+        except HTTPException as e:
+            db.rollback()
+            check(f"{label} refused (409), saying it's an open sale's uncut bar",
+                  e.status_code == 409 and "provisional" in str(e.detail) and "Window" in str(e.detail), (e.status_code, e.detail))
+    check("nothing changed", rows(db, bar) == [(18.0, None, (w.orderId,), 1)], rows(db, bar))
+    confirm(db, alice, w)
+    psvc.update_offcut_admin(row.offcutId, pmodel.OffcutAdminUpdate(length=17.5), db, ceo)
+    db.commit()
+    check("window confirmed: the CEO can now correct it", rows(db, bar) == [(17.5, None, (), 1)], rows(db, bar))
+
+
+def t18(db, cat, alice, bob):
+    print("T18 Correction candidates: provisional pieces badged, after ordinary ones")
+    from core.inventory.cutCorrection import profile_candidates
+    bar, bv, since = bar_for(db, cat, "T18 Bar")
+    T.public_offcut(db, bar, bv, 19.0)
+    w = window_cut(db, alice, 3.0, new_bar=True)
+    db.expire_all()
+    got = [(o["length"], [m["orderId"] for m in o["provisional"]])
+           for o in profile_candidates(db, db.get(type(bar), bar.productId), db.get(type(bv), bv.variantId), 5.0)["offcuts"]]
+    check("the ordinary 19ft before the tighter provisional 18ft, which is badged",
+          got == [(19.0, []), (18.0, [w.orderId])], got)
+    release(db, alice, w)
+
+
+def t19(db, cat, alice, bob):
+    print("T19 Managers' list of provisional pieces")
+    bar, bv, since = bar_for(db, cat, "T19 Bar")
+    w = window_cut(db, alice, 3.0)
+    got = [(r["productId"], r["length"], [m["orderId"] for m in r["windows"]])
+           for r in windowService.provisional_offcuts(db, M.manager(bob))]
+    check("the window's 18ft, with the window", got == [(bar.productId, 18.0, [w.orderId])], got)
+    try:
+        windowService.provisional_offcuts(db, FakeUser(bob))
+        check("cashiers can't list them", False, "allowed")
+    except HTTPException as e:
+        check("cashiers can't list them", e.status_code == 403, e.status_code)
+    release(db, alice, w)
+    check("after the release: none", windowService.provisional_offcuts(db, M.manager(bob)) == [])
+
+
+def t20(db, cat, alice, bob):
+    print("T20 The worksheet notice is worked out when the order is shown")
+    def notice(order_id):
+        db.expire_all()
+        o = orderService.get_order_by_orderId(order_id, db)
+        return o.items[0].details["lineItems"][0]["offcut_sources"][0].get("pending_source_notice")
+
+    for ending in ("released", "confirmed"):
+        bar, bv, since = bar_for(db, cat, f"T20 {ending}")
+        w = window_cut(db, alice, 3.0)
+        y = checkout(db, bob, [cut(bar, bv, 4.0)])
+        n = notice(y.orderId)
+        check(f"{ending}: while the window is open - take the whole 21ft bar (window and cashier named)",
+              n is not None and (n.get("state"), n.get("bar"), n.get("cashier")) == ("window", {"length": 21.0}, alice.username),
+              n)
+        if ending == "released":
+            release(db, alice, w)
+            n = notice(y.orderId)
+            check("released: the bar was never cut - still take it whole", n is not None and (n.get("state"), n.get("bar")) == ("released", {"length": 21.0}), n)
+        else:
+            res = confirm(db, alice, w)
+            n = notice(y.orderId)
+            check("confirmed: a pending cut on its receipt number", n is not None and (n.get("state"), n.get("order_no")) == ("pending", res.orderNo), n)
+            orderService.mark_cutting_complete_batch([item_of(db, w.orderId).item_id], db, M.manager(alice))
+            db.commit()
+            check("its cut reported done: no notice any more", notice(y.orderId) is None, notice(y.orderId))
+        stored = item_of(db, y.orderId).details["lineItems"][0]["offcut_sources"][0].get("pending_source_notice")
+        check(f"{ending}: the stored record is untouched (worked out on display only)", stored is not None and "state" not in stored, stored)
+
+
+def phase4(db, cat, alice, bob):
+    set_flag_raw(db, "true")
+    try:
+        for fn in (t16, t17, t18, t19, t20):
+            fn(db, cat, alice, bob)
+    finally:
+        T.close_all(db)
+        set_flag_raw(db, "false")
+
+
 def phase3(db, cat, alice, bob):
     set_flag_raw(db, "true")
     try:
@@ -654,6 +784,7 @@ def phase3(db, cat, alice, bob):
     finally:
         T.close_all(db)
         set_flag_raw(db, "false")
+    phase4(db, cat, alice, bob)
 
 
 def phase2(db, cat, alice):

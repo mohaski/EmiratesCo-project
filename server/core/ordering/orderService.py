@@ -75,7 +75,11 @@ def _latest_payment_method(order: Order) -> Optional[str]:
     return max(payments, key=lambda p: p.payed_at).payment_method
 
 def _order_to_response(order: Order) -> model.OrderResponse:
-    """Map ORM → response Pydantic model (centralised)."""
+    """Map ORM → response Pydantic model (centralised). Source notices in the items' cut
+    records are re-read from where the producing sale is now (inventory/sourceNotice.py)."""
+    from sqlalchemy.orm import object_session
+    from core.inventory.sourceNotice import live_details
+    db = object_session(order)
     customer_name = order.customer_name
     customer_type = None
     customer_phone = None
@@ -121,7 +125,7 @@ def _order_to_response(order: Order) -> model.OrderResponse:
                 unitType=item.details.get("unitType") if item.details else None,
                 unitPrice=item.details.get("unitPrice", 0) if item.details else 0,
                 totalPrice=item.total_price,
-                details=item.details,
+                details=live_details(db, item.details),
                 status=None,
                 cuttingCompleted=item.cutting_completed,
                 cuttingCompletedAt=item.cutting_completed_at.isoformat() if item.cutting_completed_at else None,
@@ -2088,6 +2092,7 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
     )
     # Each order's items and their products in two queries, not one per order and per item.
     orders = db.exec(stmt.options(selectinload(Order.orderItems).selectinload(OrderItem.product))).all()
+    from core.inventory.sourceNotice import live_details
     results = []
     for order in orders:
         pending_items = [oi for oi in order.orderItems if not oi.cutting_completed]
@@ -2096,7 +2101,7 @@ def get_pending_cutting_orders(db: Session, current_user, skip: int = 0, limit: 
             "orderNo": order.order_no,
             "customerName": order.customer_name,
             "items": [
-                {"itemId": oi.item_id, "productName": oi.product.name, "details": oi.details}
+                {"itemId": oi.item_id, "productName": oi.product.name, "details": live_details(db, oi.details)}
                 for oi in pending_items
             ],
         })
@@ -2574,6 +2579,7 @@ def projected_offcuts(order_id: int, item_id: int, answers: Optional[dict], vari
                     "product_id": r.product_id, "variant_id": r.variant_id,
                     "length": r.length, "width": r.width, "height": r.height,
                     "status": r.status, "quantity": r.quantity,
+                    "provisional": r.provisional,
                     "returned": by_row.get(r.offcutId, []),
                 })
             db.refresh(variant) if variant else None

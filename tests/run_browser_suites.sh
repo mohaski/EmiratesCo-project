@@ -9,7 +9,7 @@ claim_test_db
 OUT="$TESTS/.logs/browser"; mkdir -p "$OUT"
 FAILED=()
 SUITES=("$@")
-[[ ${#SUITES[@]} -eq 0 ]] && SUITES=(suite suite_g2 edit_session_suite suite_g3 suite_g4 suite_g5 suite_g6 suite_g7 security_api suite_windows suite_offcuts)
+[[ ${#SUITES[@]} -eq 0 ]] && SUITES=(suite suite_g2 edit_session_suite suite_g3 suite_g4 suite_g5 suite_g6 suite_g7 security_api suite_windows suite_offcuts suite_provisional)
 for s in "${SUITES[@]}"; do
   seed
   if [[ $s == suite_g3 ]]; then  # its PIN check assumes a cancel PIN exists

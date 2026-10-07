@@ -3,15 +3,15 @@
 Make a sale window's bar remainders visible to every till, marked **provisional**, instead of
 hiding them, so two sales never open two bars when one is enough.
 
-Status: **Phases 0 to 3 done**, each on its own branch (`provisional-offcuts-phase0`, `-phase1`,
-`-phase2`, `-phase3`, stacked; `test-suite-hardening` sits between 2 and 3). Suite:
-`server/test_provisional_offcuts.py`. Phases 4 to 6 not started. Decisions D1 to D4 accepted as
-recommended (2026-10-06).
+Status: **Phases 0 to 4 done**, each on its own branch (`provisional-offcuts-phase0` ... `-phase4`,
+stacked; `test-suite-hardening` sits between 2 and 3). Suites: `server/test_provisional_offcuts.py`,
+`tests/e2e/suite_provisional.cjs`. Phases 5 (live messages) and 6 (integrity invariants) not
+started. Decisions D1 to D4 accepted as recommended (2026-10-06).
 
-**Do not switch the feature on in the shop before Phase 4 is done.** With the switch on,
-provisional rows are visible but:
-- Offcut Management can still edit or delete them (R8);
-- the till's picker doesn't badge them or filter the window's not-yet-made remainders.
+**Ready to try in the shop after Phase 4**, with two known limits until Phase 5:
+- other tills' screens refresh on the existing `products_updated` / `windows_updated` events,
+  not instantly on every provisional change;
+- a till whose borrowed bar is handed over isn't told (the worksheet says it when printed).
 
 Written 2026-10-06 from the production dump of the same day and the code at `9416d04`.
 
@@ -203,17 +203,35 @@ Each was checked against the code at `9416d04`. **R1 and R2 were reproduced on t
   - Deadlock-retry wrappers on checkout, edit and correction: the single lock order removes
     the deadlock instead of retrying it.
 
-### Phase 4: listings and screens
-- Offcut picker (`products/service.py` ~685): include provisional rows with `provisional: [{order,
-  window label, cashier}]`. `OffcutSelectorModal.jsx` shows a badge; the client's
-  window-own-remainder logic is unchanged.
-- Correction modals (`CorrectProfileOffcutModal.jsx`): the same badge.
-- Offcut Management: list provisional rows read-only (R8).
-- `held_stock` (manager view): add "borrowed from Window N" lines (R9).
-- Worksheet (R7):
-  - `_pending_source_notice` returns `in_window` and `bar_length`;
-  - `cuttingInstructionFormat.js` renders "Take a {bar} bar (shared with Window N, not cut yet)";
-  - the cutting queue asks the server for the current physical source when showing a line.
+### Phase 4: what people see (done)
+- **Badge everywhere a piece can be picked:**
+  - the till's picker (`OffcutResponse.provisional` = `[{orderId, window, cashier}]`,
+    `components/offcuts/ProvisionalBadge.jsx`);
+  - edit mode's projected listing;
+  - the correction screens' replacement list, where provisional pieces are marked in the option
+    text and sorted after ordinary ones (D1).
+- **Own leftovers:** a reopened window line still never sees its own leftover with the switch
+  on. `_remainders_not_yet_made` treats rows marked for the window as its own.
+- **R8:** Offcut Management lists provisional pieces with the badge, read-only ("Locked until
+  the sale closes", never selectable for delete). The server refuses edit and delete with 409
+  and says which sale.
+- **R9:** `GET /windows/provisional-offcuts` (managers). The held-stock banner on Inventory
+  adds "N provisional offcuts not cut yet" and lists them as "only on paper".
+- **R7, worksheet:** `core/inventory/sourceNotice.py` works the `pending_source_notice` out
+  **when an order is shown** (order responses, the cutting queue), from where the producing sale
+  is now. The stored record is never changed.
+
+  | Producing sale is now | The worksheet says |
+  |---|---|
+  | an open window | "the bar is still whole - take the whole 21ft bar" |
+  | released or cancelled before cutting | "closed before cutting - take the whole bar" |
+  | confirmed, cut not reported | the warning as before, with its receipt number (it used to show the internal id for a sale made through a window) |
+  | cut reported done | no notice |
+
+- **Switch:** a CEO/admin button on the Orders page ("Shared leftovers: On/Off"), next to the
+  sale-windows button. While a window is open it shows the server's refusal.
+- Tests: T16-T20 (server, mutation-checked) and `suite_provisional.cjs` (browser: switch and
+  refusal, picker badge, Offcut Management lock, banner, worksheet before and after release).
 
 ### Phase 5: live messaging (information only, never correctness)
 - `ws/manager.broadcast(event, data=None)`: optional payload (today it sends `{type}` only).

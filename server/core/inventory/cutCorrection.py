@@ -449,9 +449,13 @@ def profile_candidates(db: Session, product: Product, variant: Optional[Variant]
         Offcut.status == "available", Offcut.quantity > 0, Offcut.length >= length - 0.001,
         holdScope.visible_to_scope(),  # never an open sale window's private remainder
     ).order_by(Offcut.length.asc())).all()
-    offcuts = [{"offcutId": r.offcutId, "length": r.length, "quantity": r.quantity, "original": originals.get(r.offcutId)}
+    provisional = holdScope.describe_rows(db, rows)
+    offcuts = [{"offcutId": r.offcutId, "length": r.length, "quantity": r.quantity, "original": originals.get(r.offcutId),
+                "provisional": provisional.get(r.offcutId, [])}
                for r in rows if r.offcutId != exclude_row and (r.width is None or r.width == 0)]
-    offcuts.sort(key=lambda o: o["original"] is None)
+    # The order's original pieces first, then ordinary offcuts, then provisional ones (pieces
+    # an open sale's bar still owes - decision D1), each shortest-fit first (stable sort).
+    offcuts.sort(key=lambda o: (o["original"] is None, bool(o["provisional"])))
     return {"offcuts": offcuts, "bar": {"stock": _unit_stock(variant)}}
 
 

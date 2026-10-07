@@ -12,12 +12,41 @@ import { RECEIPT_THEME, fmtLen, fmtMm, groupCuts, canonicalWH } from '../../util
 // doesn't block anything, just tells the cutter to double-check with a colleague
 // (or themselves) before assuming the piece physically exists. Monochrome-safe
 // (bold + border only) so it still reads clearly on a plain thermal print.
-const PendingSourceNotice = ({ notice, theme }) => (
-    <div style={{ fontSize: '9.5px', fontWeight: 700, color: theme.border, border: `1px solid ${theme.border}`, borderRadius: '3px', padding: '2px 5px', margin: '3px 0' }}>
-        ⚠ Depends on an offcut from Order #{notice.order_no ?? notice.order_id}
-        {notice.customer_name ? ` (${notice.customer_name})` : ''}.
-    </div>
-);
+//
+// The server works the notice out when the order is shown (server/core/inventory/
+// sourceNotice.py), from where the producing sale is NOW:
+//   window   an open sale (provisional offcut): its bar is still whole on the rack
+//   released that sale closed before cutting: the bar was never cut either
+//   pending  confirmed, cut not reported yet (and notices stored before this had no state)
+// A piece whose producing cut is reported done carries no notice at all.
+const barText = (bar) => (!bar ? 'the whole bar'
+    : bar.length ? `the whole ${fmtLen(bar.length)} bar` : `the whole ${fmtMm(bar.width)} x ${fmtMm(bar.height)} sheet`);
+const PendingSourceNotice = ({ notice, theme }) => {
+    const style = { fontSize: '9.5px', fontWeight: 700, color: theme.border, border: `1px solid ${theme.border}`, borderRadius: '3px', padding: '2px 5px', margin: '3px 0' };
+    if (notice.state === 'window') {
+        const who = [notice.window, notice.cashier].filter(Boolean).join(', ');
+        return (
+            <div style={style} data-source-notice="window">
+                ⚠ Not cut yet: this piece comes from a bar an open sale{who ? ` (${who})` : ''} hasn't paid for.
+                {' '}The bar is still whole - take {barText(notice.bar)} and cut from it.
+            </div>
+        );
+    }
+    if (notice.state === 'released') {
+        return (
+            <div style={style} data-source-notice="released">
+                ⚠ The sale that opened this bar was closed before cutting - the bar is still whole.
+                {' '}Take {barText(notice.bar)} and cut from it.
+            </div>
+        );
+    }
+    return (
+        <div style={style} data-source-notice="pending">
+            ⚠ Depends on an offcut from Order #{notice.order_no ?? notice.order_id}
+            {notice.customer_name ? ` (${notice.customer_name})` : ''} - check it has been cut.
+        </div>
+    );
+};
 
 // Small labeled tag used in front of every dimension so the cutter never has
 // to infer, from font weight alone, whether a number is what to CUT or what's

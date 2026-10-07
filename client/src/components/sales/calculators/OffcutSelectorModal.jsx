@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import api from '../../../services/api';
 import { useCart } from '../../../context/CartContext';
+import ProvisionalBadge from '../../offcuts/ProvisionalBadge';
 
 /**
  * Lets the cashier pick which existing offcuts fulfill a custom cut, before
@@ -341,6 +342,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                                                 <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e2e8f0', fontFamily: 'var(--font-mono)' }}>
                                                     {fmtLen(oc.length)}
                                                 </span>
+                                                <ProvisionalBadge windows={oc.provisional} />
                                                 {oc.quantity > 1 ? (
                                                     <span data-testid="same-size-count" style={{
                                                         fontSize: '0.68rem', fontWeight: 800, color: '#fbbf24', marginLeft: '0.5rem',

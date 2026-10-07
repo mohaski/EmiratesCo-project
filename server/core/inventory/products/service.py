@@ -689,6 +689,7 @@ def get_offcuts_for_product(
     from entities.offcuts import Offcut
     from entities.variants import Variant
     from core.inventory.poolKey import compute_pool_key
+    from core.inventory import holdScope
 
     stmt = (
         select(Offcut)
@@ -704,16 +705,26 @@ def get_offcuts_for_product(
         pool_key = compute_pool_key(db, variant) if variant else ""
         stmt = stmt.where(Offcut.pool_key == pool_key)
     rows = db.exec(stmt).all()
-    if hold_order_id and for_item_id:
-        rows = _without_remainders_not_yet_made(db, rows, hold_order_id, for_item_id)
-    return rows
+    not_yet = (_remainders_not_yet_made(db, rows, hold_order_id, for_item_id)
+               if hold_order_id and for_item_id else {})
+    # Provisional pieces (switch on) are listed like any other, with the open windows they
+    # depend on, so the till can badge them (holdScope.describe_rows).
+    provisional = holdScope.describe_rows(db, rows)
+    out = []
+    for r in rows:
+        left = r.quantity - not_yet.get(r.offcutId, 0)
+        if left > 0:
+            out.append(model.OffcutResponse.model_validate(r).model_copy(
+                update={"quantity": left, "provisional": provisional.get(r.offcutId, [])}))
+    return out
 
 
-def _without_remainders_not_yet_made(db: Session, rows, hold_order_id: int, for_item_id: int):
-    """Drop, unit by unit, the window's held remainders produced by `for_item_id` or a later
-    line of the same window (by cart position). The ledger says exactly which pieces of a
-    pooled row came from which item, so a same-size remainder from an EARLIER line - one
-    this line really can cut from - stays listed. Returns detached copies; rows untouched."""
+def _remainders_not_yet_made(db: Session, rows, hold_order_id: int, for_item_id: int) -> dict:
+    """{row id: units to leave out}: the window's own remainders produced by `for_item_id` or a
+    later line of the same window (by cart position). The ledger says exactly which pieces of a
+    pooled row came from which item, so a same-size remainder from an EARLIER line - one this
+    line really can cut from - stays listed. The window's own rows are the ones it holds
+    (switch off) or the ones marked for it (provisional offcuts on)."""
     from entities.offcutLedger import OffcutPiece, STATE_AVAILABLE
     from entities.orderItems import OrderItem
 
@@ -721,23 +732,19 @@ def _without_remainders_not_yet_made(db: Session, rows, hold_order_id: int, for_
                     .where(OrderItem.order_id == hold_order_id)).all()
     position = {item_id: pos for item_id, pos in items}
     if for_item_id not in position:
-        return rows
+        return {}
     not_yet = [i for i, pos in position.items() if (pos, i) >= (position[for_item_id], for_item_id)]
-    held_ids = [r.offcutId for r in rows if r.held_by_order_id == hold_order_id]
-    if not held_ids or not not_yet:
-        return rows
+    own_ids = [r.offcutId for r in rows
+               if r.held_by_order_id == hold_order_id or hold_order_id in (r.provisional_for or [])]
+    if not own_ids or not not_yet:
+        return {}
     counts: dict = {}
     for row_id in db.exec(select(OffcutPiece.offcut_row_id).where(
-            OffcutPiece.offcut_row_id.in_(held_ids),
+            OffcutPiece.offcut_row_id.in_(own_ids),
             OffcutPiece.state == STATE_AVAILABLE,
             OffcutPiece.produced_by_item_id.in_(not_yet))).all():
         counts[row_id] = counts.get(row_id, 0) + 1
-    out = []
-    for r in rows:
-        left = r.quantity - counts.get(r.offcutId, 0)
-        if left > 0:
-            out.append(model.OffcutResponse.model_validate(r).model_copy(update={"quantity": left}))
-    return out
+    return counts
 
 
 @stock_operation(OP_OFFCUT_ENTRY, order_arg=None)
@@ -851,6 +858,7 @@ def list_all_offcuts(
     behind by a product that has since been switched to another stock mode."""
     from entities.offcuts import Offcut
 
+    from core.inventory import holdScope
     require_role(["ceo"], current_user)
 
     stmt = (
@@ -865,6 +873,10 @@ def list_all_offcuts(
         .order_by(col(Product.name), col(Offcut.offcutId).desc())
     )
 
+    results = db.exec(stmt).all()
+    # A provisional piece (provisional offcuts on) depends on an open sale window's uncut cut:
+    # listed so the pool adds up, but read-only until that window closes (update/delete refuse).
+    provisional = holdScope.describe_rows(db, [o for o, _, _ in results])
     return [
         model.OffcutAdminRow(
             offcutId=offcut.offcutId,
@@ -881,9 +893,18 @@ def list_all_offcuts(
             status=offcut.status,
             source_item_id=offcut.source_item_id,
             created_at=offcut.created_at,
+            provisional=provisional.get(offcut.offcutId, []),
         )
-        for offcut, product, variant in db.exec(stmt).all()
+        for offcut, product, variant in results
     ]
+
+
+def _provisional_refusal(db: Session, offcut) -> str:
+    """Why a provisional piece can't be edited or deleted (R8): it is only on paper."""
+    from core.inventory import holdScope
+    who = ", ".join(f"{m['window']} ({m['cashier']})" for m in holdScope.describe_marks(db, offcut.provisional_for))
+    return ("This offcut is provisional: it comes from a bar an open sale" + (f" - {who} -" if who else "") +
+            " hasn't paid for, so it isn't cut yet. It can be changed once that sale is confirmed or released.")
 
 
 @stock_operation(OP_OFFCUT_ADMIN, order_arg=None)
@@ -915,6 +936,8 @@ def update_offcut_admin(
         raise HTTPException(status_code=404, detail="Offcut not found")
     if offcut.held_by_order_id is not None:
         raise HTTPException(status_code=409, detail="This offcut is being held by an open sale window - try again once it closes")
+    if offcut.provisional_for:
+        raise HTTPException(status_code=409, detail=_provisional_refusal(db, offcut))
     product = db.get(Product, offcut.product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -1036,6 +1059,8 @@ def bulk_delete_offcuts(
             raise HTTPException(status_code=404, detail=f"Offcut {offcut_id} no longer exists - refresh and try again")
         if offcut.held_by_order_id is not None:
             raise HTTPException(status_code=409, detail=f"Offcut {offcut_id} is being held by an open sale window - try again once it closes")
+        if offcut.provisional_for:
+            raise HTTPException(status_code=409, detail=f"Offcut {offcut_id}: " + _provisional_refusal(db, offcut))
         offcuts.append(offcut)
 
     try:

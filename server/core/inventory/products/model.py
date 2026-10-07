@@ -210,6 +210,9 @@ class OffcutResponse(BaseModel):
     height: Optional[float] = None
     status: str = "available"
     quantity: int
+    # Provisional offcuts: the open sale windows this piece depends on - [{orderId, window,
+    # cashier}]. Empty for an ordinary offcut. The piece is only on paper until they are paid.
+    provisional: List[dict] = []
 
     class Config:
         from_attributes = True
@@ -243,6 +246,8 @@ class OffcutAdminRow(BaseModel):
     width: Optional[float] = None
     height: Optional[float] = None
     quantity: int
+    # Provisional (see OffcutResponse): read-only in Offcut Management until its windows close.
+    provisional: List[dict] = []
     status: str
     source_item_id: Optional[int] = None
     created_at: Optional[datetime] = None
