@@ -156,6 +156,35 @@ async function windowWithCut(t, feet) {
     await p.context().close();
   }
 
+  console.log('6. The till whose order now has the bar is told, live');
+  {
+    const p = await newPage(browser, 'qa_manager');
+    await p.goto(BASE + '/orders'); await p.waitForTimeout(1500);
+    // 17.5ft: longer than any ordinary offcut left by the sections above, so the sale has to
+    // borrow from the window's provisional 18ft (ordinary pieces are always used first).
+    const w2 = await windowWithCut(CASH, 3);
+    const borrow = (await api(M, '/orders/', { method: 'POST', body: JSON.stringify({ servedBy: ME.userId, status: 'confirmed', amountPaid: 0, items: [cutItem(17.5)] }) })).data;
+    await api(CASH, `/windows/${w2.windowId}`, { method: 'DELETE' });
+    let shown = false;
+    for (let i = 0; i < 10 && !shown; i++) { await p.waitForTimeout(500); shown = await showsText(p, /was closed without paying/); }
+    const t = await body(p);
+    check('a notice names the closed window and this cashier\'s order', shown && new RegExp(`Window \\d \\(qa_cashier\\) was closed without paying[\\s\\S]*#${borrow.orderNo}`).test(t),
+      (t.match(/[^\n]*closed without paying[^\n]*/) || [''])[0]);
+    check('no page errors', p.errs.length === 0, p.errs.join(' | '));
+    await p.context().close();
+  }
+  {
+    // ...and a till that served nobody involved is not bothered.
+    const p = await newPage(browser, 'qa_admin');
+    await p.goto(BASE + '/orders'); await p.waitForTimeout(1500);
+    const w3 = await windowWithCut(CASH, 3);
+    await api(M, '/orders/', { method: 'POST', body: JSON.stringify({ servedBy: ME.userId, status: 'confirmed', amountPaid: 0, items: [cutItem(17.5)] }) });
+    await api(CASH, `/windows/${w3.windowId}`, { method: 'DELETE' });
+    await p.waitForTimeout(3000);
+    check('another cashier sees no handover notice', !(await showsText(p, /was closed without paying/)));
+    await p.context().close();
+  }
+
   await closeAll(CASH);
   check('switched back off (no window open)', (await api(CEO, '/windows/provisional-offcuts/settings', { method: 'PUT', body: JSON.stringify({ enabled: false }) })).status === 200);
   await browser.close();

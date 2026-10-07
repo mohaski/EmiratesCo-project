@@ -33,6 +33,7 @@ runs. Two windows touching the same products therefore queue up instead of deadl
 if Postgres still reports a deadlock (offcut rows are locked by the engines themselves),
 the whole operation is retried from scratch.
 """
+import queue
 import time
 from datetime import timedelta
 from decimal import Decimal
@@ -298,6 +299,53 @@ def _record_handovers(db: Session) -> None:
                            "length": piece.length, "to_orders": carriers})
     if handed:
         record_summary(op, bar_handed_over=handed)
+        _queue_handover_notice(db, op.order_id, handed)
+
+
+# ── Handover notices for the tills (PROVISIONAL_OFFCUTS_PLAN.md phase 5) ──────
+#
+# When a released window's bar carries on with the order that cut from it, that order's till
+# is told (a websocket "bar_handed_over"). Queued only once the release COMMITS - a rolled-back
+# release or a dry run (check_cart) tells nobody - and sent by the window routes and the idle
+# sweeper (drain_handover_notices). Information only: the stock is already right either way.
+
+_HANDOVER_OUTBOX: "queue.SimpleQueue" = queue.SimpleQueue()
+
+
+def _queue_handover_notice(db: Session, order_id: int, handed: list) -> None:
+    from sqlalchemy import event
+
+    window = db.exec(select(SaleWindow, User).join(User, User.userId == SaleWindow.user_id)
+                     .where(SaleWindow.order_id == order_id)).first()
+    orders = {}
+    for h in handed:
+        for oid in h["to_orders"]:
+            if oid not in orders:
+                o = db.get(Order, oid)
+                orders[oid] = {"orderId": oid, "orderNo": o.order_no if o else None,
+                               "servedBy": str(o.servedby) if o and o.servedby else None}
+    notice = {"window": window[0].label if window else None, "cashier": window[1].username if window else None,
+              "pieces": [{"length": h["length"], "toOrders": [orders[o] for o in h["to_orders"]]} for h in handed]}
+    pending = db.info.setdefault("handover_notices", [])
+    pending.append(notice)
+    if not db.info.get("handover_hooks"):
+        db.info["handover_hooks"] = True
+        event.listen(db, "after_commit", _flush_handover_notices)
+        event.listen(db, "after_soft_rollback", lambda s, previous: s.info.pop("handover_notices", None))
+
+
+def _flush_handover_notices(session) -> None:
+    for notice in session.info.pop("handover_notices", None) or []:
+        _HANDOVER_OUTBOX.put(notice)
+
+
+def drain_handover_notices() -> list:
+    out = []
+    while True:
+        try:
+            out.append(_HANDOVER_OUTBOX.get_nowait())
+        except queue.Empty:
+            return out
 
 
 def _own_remainder_rows(db: Session, order_id: int, length=None) -> list:

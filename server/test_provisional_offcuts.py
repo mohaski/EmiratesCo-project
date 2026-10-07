@@ -42,6 +42,16 @@ Phase 4 - what people see, switch ON:
   T20 the worksheet notice is worked out when shown: window -> take the whole bar; released ->
       the bar was never cut; confirmed -> its receipt number; cut -> no notice
 
+Phase 5 - tills are told:
+  T21 a released window whose bar another order cut from queues one "bar_handed_over" notice,
+      only once the release commits, naming that order and who served it; a dry run or a
+      plain release queues nothing
+
+Phase 6 - the integrity check knows the provisional rules (each corruption must be reported):
+  I1 a mark naming a closed window      I2 marks out of step with the pieces' ancestry
+  I3 a held 1D row with the switch on   I4 marks while the switch is off
+  I5 a whole bar sitting in the offcut pool
+
 Runs on emiratesco_edit_test (DATABASE_URL). Run from server/.
 """
 import logging
@@ -771,6 +781,98 @@ def phase4(db, cat, alice, bob):
     try:
         for fn in (t16, t17, t18, t19, t20):
             fn(db, cat, alice, bob)
+    finally:
+        T.close_all(db)
+        set_flag_raw(db, "false")
+    set_flag_raw(db, "true")
+    try:
+        t21(db, cat, alice, bob)
+    finally:
+        T.close_all(db)
+        set_flag_raw(db, "false")
+    phase6(db, cat, alice, bob)
+
+
+# ── Phase 5 ──────────────────────────────────────────────────────────────────
+
+def t21(db, cat, alice, bob):
+    print("T21 Handover notices for the tills")
+    windowService.drain_handover_notices()          # start empty
+    bar, bv, since = bar_for(db, cat, "T21 Bar")
+    w = window_cut(db, alice, 3.0)
+    y = checkout(db, bob, [cut(bar, bv, 4.0)])
+    # Emptying the cart after the borrow would hand the bar over - but a dry run is rolled back.
+    res = windowService.check_cart(db, w.windowId, FakeUser(alice), T.wm.WindowCartRequest(version=w.version, items=[]))
+    check("a dry run that would hand the bar over tells nobody", res["ok"] and windowService.drain_handover_notices() == [], res)
+    release(db, alice, w)
+    notices = windowService.drain_handover_notices()
+    want_no = db.exec(select(T.Order.order_no).where(T.Order.orderId == y.orderId)).one()
+    got = [(n["window"], n["cashier"], [(o["orderId"], o["orderNo"], o["servedBy"]) for p in n["pieces"] for o in p["toOrders"]])
+           for n in notices]
+    check("one notice: the window, its cashier, and the order that now has the bar (with who served it)",
+          got == [("Window 1", alice.username, [(y.orderId, want_no, str(bob.userId))])], got)
+    w2 = window_cut(db, alice, 3.0)
+    release(db, alice, w2)
+    check("a window nobody borrowed from tells nobody", windowService.drain_handover_notices() == [])
+
+
+# ── Phase 6 ──────────────────────────────────────────────────────────────────
+
+def phase6(db, cat, alice, bob):
+    print("I   The integrity check reports every provisional corruption, and only then")
+    from core.inventory import offcutLedger as ledger
+    set_flag_raw(db, "true")
+
+    def errors(label_part):
+        db.expire_all()
+        return [e for e in integrity.check(db)["errors"] if label_part in e]
+
+    def poke(row_id, **fields):
+        with operation(db, "maintenance", actor=FakeUser(bob)):
+            row = db.get(Offcut, row_id)
+            for k, v in fields.items():
+                setattr(row, k, v)
+            db.add(row)
+        db.commit()
+
+    try:
+        bar, bv, since = bar_for(db, cat, "I Bar")
+        closed = window_cut(db, bob, 2.0)
+        release(db, bob, closed)
+        w = window_cut(db, alice, 3.0)
+        row_id = db.exec(select(Offcut.offcutId).where(Offcut.product_id == bar.productId, Offcut.quantity > 0)).one()
+        check("I0 a real window's 18ft: no provisional errors", errors("provisional") == [] and errors("held by") == [],
+              integrity.check(db)["errors"][:3])
+
+        poke(row_id, provisional_for=[w.orderId, closed.orderId])
+        check("I1 a mark naming a closed window is reported", any(f"[{closed.orderId}], not an open sale window" in e for e in errors("not an open")),
+              errors("provisional"))
+        poke(row_id, provisional_for=[])
+        check("I2 marks out of step with the pieces' ancestry are reported",
+              any(f"marked provisional [] but its pieces depend on [{w.orderId}]" in e for e in errors("depend on")), errors("provisional"))
+        poke(row_id, provisional_for=[w.orderId], held_by_order_id=w.orderId)
+        check("I3 a held 1D row with the switch on is reported", any("is held by order" in e for e in errors("held by")), errors("held"))
+        poke(row_id, held_by_order_id=None)
+        set_flag_raw(db, "false")
+        check("I4 marks while the switch is off are reported", any("provisional offcuts are off" in e for e in errors("are off")),
+              errors("provisional"))
+        set_flag_raw(db, "true")
+        check("put back: no provisional errors", errors("provisional") == [] and errors("held by") == [], integrity.check(db)["errors"][:3])
+
+        with operation(db, "maintenance", actor=FakeUser(bob)):
+            root = ledger.mint_piece(db, product_id=bar.productId, variant_id=bv.variantId, pool_key="",
+                                     geom=ledger.geom_1d(21.0), origin=ledger.ORIGIN_STOCK_UNIT, notes="test")
+            whole = ledger.mint_piece(db, product_id=bar.productId, variant_id=bv.variantId, pool_key="",
+                                      geom=ledger.geom_1d(21.0), origin=ledger.ORIGIN_REJOIN, parent=root, notes="test")
+        db.commit()
+        check("I5 a whole bar sitting in the offcut pool is reported",
+              any(f"piece {whole.piece_id} is a whole 21 bar" in e for e in errors("whole")), errors("whole"))
+        with operation(db, "maintenance", actor=FakeUser(bob)):
+            for piece in (whole, root):
+                ledger.retire_piece(db, db.get(type(piece), piece.piece_id), reason="test cleanup")
+        db.commit()
+        check("cleaned up: no whole-bar error", errors("whole") == [], errors("whole"))
+        release(db, alice, w)
     finally:
         T.close_all(db)
         set_flag_raw(db, "false")

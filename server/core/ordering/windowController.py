@@ -14,6 +14,12 @@ from . import windowService, windowModel as wm
 router = APIRouter(prefix="/windows", tags=["Sale windows"])
 
 
+async def broadcast_handovers():
+    """Tell the tills about any bar a closed window handed over (windowService)."""
+    for notice in windowService.drain_handover_notices():
+        await manager.broadcast("bar_handed_over", notice)
+
+
 @router.get("/", response_model=List[wm.WindowResponse])
 def list_windows(db: Session = Depends(get_session), current_user=Depends(get_current_user)):
     """The current cashier's open windows. Does not count as activity."""
@@ -53,6 +59,7 @@ def set_windows_setting(
     result = windowService.set_windows_enabled(db, payload.enabled, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
     background_tasks.add_task(manager.broadcast, "windows_updated")
+    background_tasks.add_task(broadcast_handovers)
     return result
 
 
@@ -98,6 +105,7 @@ def release_my_windows(
     if released:
         background_tasks.add_task(manager.broadcast, "products_updated")
         background_tasks.add_task(manager.broadcast, "windows_updated")
+        background_tasks.add_task(broadcast_handovers)
     return {"released": released}
 
 
@@ -119,6 +127,7 @@ def set_cart(
     result = windowService.set_cart(db, window_id, current_user, payload)
     background_tasks.add_task(manager.broadcast, "products_updated")
     background_tasks.add_task(manager.broadcast, "windows_updated")
+    background_tasks.add_task(broadcast_handovers)
     return result
 
 
@@ -162,4 +171,5 @@ def release_window(
     result = windowService.release_window(db, window_id, current_user)
     background_tasks.add_task(manager.broadcast, "products_updated")
     background_tasks.add_task(manager.broadcast, "windows_updated")
+    background_tasks.add_task(broadcast_handovers)
     return result

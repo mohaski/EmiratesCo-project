@@ -200,6 +200,21 @@ export const WindowProvider = ({ children }) => {
         return () => { off(); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
     }, [userId, refresh]);
 
+    // Provisional offcuts: a sale window was closed after another order cut from its bar, so the
+    // bar now belongs to that order. Tell the cashier who served it - nothing changes for the
+    // customer, but the cut comes off a whole bar (the worksheet says which).
+    useEffect(() => {
+        if (!userId) return undefined;
+        return wsEvents.on('bar_handed_over', (e) => {
+            const notice = e.detail;
+            const mine = (notice?.pieces || []).flatMap(p => p.toOrders || []).filter(o => String(o.servedBy) === String(userId));
+            if (!mine.length) return;
+            const nos = [...new Set(mine.map(o => `#${o.orderNo ?? o.orderId}`))].join(', ');
+            showToast(`${notice.window || 'A sale window'}${notice.cashier ? ` (${notice.cashier})` : ''} was closed without paying. `
+                + `The bar it opened now goes with your order ${nos} - nothing changes for the customer; the worksheet says which bar to cut.`, 'info');
+        });
+    }, [userId]);
+
     const setBusy = useCallback((windowId, busy) => {
         setBusyIds(prev => {
             const next = new Set(prev);

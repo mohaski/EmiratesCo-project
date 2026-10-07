@@ -20,12 +20,14 @@ Every test scenario and the live audit run this after each step. The invariants:
   TRACE
     - ledger events written since journaling began carry the operation that wrote them
 """
+import json
 from collections import defaultdict
 from typing import Dict, List
 
-from sqlmodel import Session, text
+from sqlmodel import Session, select, text
 
 from entities.offcutLedger import event_retires
+from entities.orders import Order
 
 
 def _fold(events: List[dict]) -> tuple:
@@ -143,7 +145,89 @@ def check(db: Session, *, since_journal_id: int = None, product_ids=None) -> Dic
         if untraced:
             errors.append(f"{untraced} journaled change(s) since {since_journal_id} ran outside any operation")
 
+    # ── provisional offcuts (PROVISIONAL_OFFCUTS_PLAN.md) ────────────────────
+    _check_provisional(db, conn, errors, prod_filter, params)
+
     return {"errors": errors, "warnings": warnings}
+
+
+def _marks_of(value) -> list:
+    """offcuts.provisional_for as read raw: a list on Postgres, JSON text on SQLite."""
+    if isinstance(value, str):
+        value = json.loads(value or "[]")
+    return sorted(int(v) for v in (value or []))
+
+
+def _check_provisional(db: Session, conn, errors: List[str], prod_filter: str, params: dict) -> None:
+    """PROVISIONAL marks agree with the open windows and the ledger; no bar sits whole in the pool.
+
+      - a mark names an OPEN sale window (a closed one must have been cleared)
+      - switch off: no marks at all; switch on: no 1D row is held (they are marked instead)
+      - a row's marks equal what its pieces' ancestry says (holdScope.marks_for_piece): the
+        stored marks are a cache of that, refreshed on every write
+      - no available piece is a whole bar drawn from stock sitting in the pool as an "offcut"
+        (rejoins put a whole bar back in stock - the R1 bug, guarded here)
+    """
+    from core.inventory import holdScope
+    from core.ordering.visibility import HELD
+    from entities.offcutLedger import OffcutPiece, STATE_AVAILABLE
+
+    rows = conn.execute(text(f'''
+        SELECT o."offcutId" AS row_id, o.width, o.held_by_order_id, o.provisional_for
+        FROM offcuts o WHERE o.quantity > 0 {prod_filter}
+    '''), params).fetchall()
+    on = holdScope.provisional_enabled(db)
+    marked = {r.row_id: _marks_of(r.provisional_for) for r in rows}
+    named = sorted({m for ms in marked.values() for m in ms})
+    open_windows = set()
+    if named:
+        open_windows = {r[0] for r in conn.execute(text('''
+            SELECT o."orderId" FROM orders o JOIN sale_windows w ON w.order_id = o."orderId"
+            WHERE o.status = :held AND w.closed_at IS NULL
+        '''), {"held": HELD})}
+    for r in rows:
+        marks = marked[r.row_id]
+        if marks and not on:
+            errors.append(f"offcut row {r.row_id} is marked provisional {marks} but provisional offcuts are off")
+        stale = [m for m in marks if m not in open_windows]
+        if stale:
+            errors.append(f"offcut row {r.row_id} is marked provisional for {stale}, not an open sale window")
+        if on and not r.width and r.held_by_order_id is not None:
+            errors.append(f"offcut row {r.row_id} (1D) is held by order {r.held_by_order_id} with provisional offcuts on")
+
+    if on:
+        # Rows that should carry marks: those holding a descendant of a piece an open window
+        # consumed, plus every row that does carry some. Each is re-derived from its pieces.
+        held_claims = db.exec(select(OffcutPiece).where(OffcutPiece.state == "consumed",
+                                                        OffcutPiece.consumed_by_order_id.in_(
+                                                            select(Order.orderId).where(Order.status == HELD)))).all()
+        candidates = {rid for rid, ms in marked.items() if ms}
+        for claim in held_claims:
+            for d in ledger_descendants(db, claim.piece_id):
+                if d.state == STATE_AVAILABLE and d.offcut_row_id in marked:
+                    candidates.add(d.offcut_row_id)
+        for rid in sorted(candidates):
+            pieces = db.exec(select(OffcutPiece).where(OffcutPiece.offcut_row_id == rid,
+                                                       OffcutPiece.state == STATE_AVAILABLE)).all()
+            if not pieces or any(p.width for p in pieces):
+                continue
+            derived = sorted({m for p in pieces for m in holdScope.marks_for_piece(db, p)})
+            if derived != marked[rid]:
+                errors.append(f"offcut row {rid}: marked provisional {marked[rid]} but its pieces depend on {derived}")
+
+    pfilter = " AND p.product_id = ANY(:pids)" if prod_filter else ""
+    for p in conn.execute(text(f'''
+        SELECT p.piece_id, p.length, r.length AS bar FROM offcut_pieces p
+        JOIN offcut_pieces r ON r.piece_id = p.root_piece_id
+        WHERE p.state = 'available' AND p.geom_kind = '1d' AND r.origin = 'stock_unit'
+          AND p.piece_id <> r.piece_id AND p.length >= r.length - 0.01 {pfilter}
+    '''), params).fetchall():
+        errors.append(f"piece {p.piece_id} is a whole {p.bar:g} bar sitting in the offcut pool - it belongs in stock")
+
+
+def ledger_descendants(db: Session, piece_id: int) -> list:
+    from core.inventory import offcutLedger as ledger
+    return ledger.descendants(db, piece_id)
 
 
 def journal_high_water(db: Session) -> int:

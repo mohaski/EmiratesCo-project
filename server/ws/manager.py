@@ -30,10 +30,11 @@ class ConnectionManager:
         except Exception:
             return False
 
-    async def broadcast(self, event: str):
-        """Send { "type": event } to every live connection at once - one slow or stalled till
-        can no longer delay the others. Sockets that fail or time out are pruned."""
-        payload = json.dumps({"type": event})
+    async def broadcast(self, event: str, data=None):
+        """Send { "type": event } (plus "data" when given) to every live connection at once - one
+        slow or stalled till can no longer delay the others. Sockets that fail or time out are
+        pruned. Information only: nothing a till must not miss rides on a message."""
+        payload = json.dumps({"type": event} if data is None else {"type": event, "data": data}, default=str)
         targets = list(self._connections)
         if not targets:
             return

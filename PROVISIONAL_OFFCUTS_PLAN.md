@@ -3,15 +3,17 @@
 Make a sale window's bar remainders visible to every till, marked **provisional**, instead of
 hiding them, so two sales never open two bars when one is enough.
 
-Status: **Phases 0 to 4 done**, each on its own branch (`provisional-offcuts-phase0` ... `-phase4`,
-stacked; `test-suite-hardening` sits between 2 and 3). Suites: `server/test_provisional_offcuts.py`,
-`tests/e2e/suite_provisional.cjs`. Phases 5 (live messages) and 6 (integrity invariants) not
-started. Decisions D1 to D4 accepted as recommended (2026-10-06).
+Status: **all phases (0 to 6) done**, each on its own branch (`provisional-offcuts-phase0` ...
+`-phase4`, then `-phase5-6`; stacked, with `test-suite-hardening` between 2 and 3). Suites:
+`server/test_provisional_offcuts.py`, `tests/e2e/suite_provisional.cjs`. Decisions D1 to D4
+accepted as recommended (2026-10-06).
 
-**Ready to try in the shop after Phase 4**, with two known limits until Phase 5:
-- other tills' screens refresh on the existing `products_updated` / `windows_updated` events,
-  not instantly on every provisional change;
-- a till whose borrowed bar is handed over isn't told (the worksheet says it when printed).
+**Ready for the shop.** Deploy order:
+1. Run `server/migrate_add_provisional_offcuts.py`.
+2. Start the new server.
+3. Switch "Shared leftovers" on (Orders page, CEO/admin) at a quiet moment with no sale window open.
+
+Watch `check_integrity.py` daily for the first week.
 
 Written 2026-10-06 from the production dump of the same day and the code at `9416d04`.
 
@@ -233,23 +235,35 @@ Each was checked against the code at `9416d04`. **R1 and R2 were reproduced on t
 - Tests: T16-T20 (server, mutation-checked) and `suite_provisional.cjs` (browser: switch and
   refusal, picker badge, Offcut Management lock, banner, worksheet before and after release).
 
-### Phase 5: live messaging (information only, never correctness)
-- `ws/manager.broadcast(event, data=None)`: optional payload (today it sends `{type}` only).
-- New event `offcuts_updated {variantIds}` on window cart save, confirm, release, expiry (sweeper in
-  `main.py`), and any borrow of a provisional row. Pickers and stock screens refetch.
-- `bar_handed_over {fromWindow, toOrder, variantId}`: the borrower's till shows "Window 2 was
-  released - your 3ft now comes from the bar it opened. Nothing changes for the customer."
-  Tills filter by their own windows or orders.
-- Every rule in Phases 2 and 3 runs in the same transaction as the sale. A till that misses a
-  message is only showing stale screens; stock stays correct.
+### Phase 5: live messaging (done)
+- `ws/manager.broadcast(event, data=None)` carries an optional payload; the client's
+  `wsEvents.emit(type, detail)` passes it on.
+- **Handover notice:**
+  - `windowService` queues a `bar_handed_over` notice
+    `{window, cashier, pieces: [{length, toOrders: [{orderId, orderNo, servedBy}]}]}` only when
+    the release, cart change or expiry **commits**; a dry run (`check_cart`) or a rollback
+    queues nothing;
+  - the window routes and the idle sweeper send it;
+  - the till of the cashier who served the order now carrying the bar shows: "Window 1
+    (cashier) was closed without paying. The bar it opened now goes with your order #N".
+- **No new "offcuts_updated" event:** every route that changes offcuts already broadcasts
+  `products_updated`. The open offcut picker now refetches on it quietly, and drops a pick
+  whose row has gone, with the existing "no longer available" note.
+- Tests: T21 (mutation-checked: queuing before commit fails it); `suite_provisional` section 6
+  (the right till is told, another isn't).
 
-### Phase 6: audit and integrity (`core/audit/integrity.py`)
-New invariants:
-- every id in `provisional_for` is an **open** window;
-- `provisional_for` equals `marks_for_piece` for each available piece (the cache equals the
-  derived value);
-- no 1D row has `held_by_order_id` set while the feature is on;
-- no 1D offcut is at least its bar's full length with a stock-bar root (catches R1 coming back).
+### Phase 6: audit and integrity (done)
+`core/audit/integrity.py` (`check_integrity.py`) now reports:
+- a mark naming a closed window;
+- marks while the switch is off;
+- a held 1D row while it is on;
+- a row whose marks differ from what its pieces' ancestry says;
+- any available piece that is a whole stock bar sitting in the offcut pool (the R1 bug).
+
+Every provisional test runs it after each step. Tests I1-I5 corrupt the data one way at a
+time. Run on the 2026-10-06 shop data: clean (so R1 never reached real data). Also: a claim by
+an item that no longer exists (a window's rebuilt cart) no longer marks anything, matching the
+reversal code.
 
 ---
 

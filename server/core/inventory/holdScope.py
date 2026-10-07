@@ -209,10 +209,15 @@ def _held_consumers(db, pieces) -> list:
     """Sorted ids of the open windows that consumed any of `pieces`."""
     from core.ordering.visibility import HELD
     from entities.offcutLedger import STATE_CONSUMED
+    from entities.orderItems import OrderItem
     from entities.orders import Order
 
-    ids = {p.consumed_by_order_id for p in pieces
-           if p is not None and p.state == STATE_CONSUMED and p.consumed_by_order_id}
+    claims = [p for p in pieces if p is not None and p.state == STATE_CONSUMED and p.consumed_by_order_id]
+    # A claim by an item that no longer exists is dead (a window's cart rebuild deletes its old
+    # items once their material is given back) - offcutLedger._consumption_is_live says the same.
+    item_ids = {p.consumed_by_item_id for p in claims if p.consumed_by_item_id}
+    alive = set(db.exec(select(OrderItem.item_id).where(OrderItem.item_id.in_(item_ids))).all()) if item_ids else set()
+    ids = {p.consumed_by_order_id for p in claims if p.consumed_by_item_id is None or p.consumed_by_item_id in alive}
     if not ids:
         return []
     return sorted(db.exec(select(Order.orderId).where(Order.orderId.in_(ids),

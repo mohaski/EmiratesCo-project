@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import api from '../../../services/api';
 import { useCart } from '../../../context/CartContext';
 import ProvisionalBadge from '../../offcuts/ProvisionalBadge';
+import { wsEvents } from '../../../utils/wsEvents';
 
 /**
  * Lets the cashier pick which existing offcuts fulfill a custom cut, before
@@ -89,9 +90,14 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
     // (or a later one) made - 9ft from a new 21ft bar must not offer its own 12ft back.
     const heldItemId = windowMode && cartIndex !== null ? (cart[cartIndex]?.details?._heldItemId ?? null) : null;
 
+    // Another till's sale, a window closing, a correction... changes the pool: refetch quietly
+    // (no spinner) so the list - and its provisional badges - stay current while it is open.
+    const [refreshTick, setRefreshTick] = useState(0);
+    useEffect(() => wsEvents.on('products_updated', () => setRefreshTick(t => t + 1)), []);
+
     useEffect(() => {
         let cancelled = false;
-        setLoading(true);
+        if (refreshTick === 0) setLoading(true);
         const proj = projectionKey ? JSON.parse(projectionKey) : null;
         // Editing a saved order: what the pool will hold once this item's material is given
         // back. A sale window: the public pool plus the window's own held remainders, and
@@ -131,6 +137,10 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
                         const cap = oc.returned?.length ? 1 : oc.quantity;
                         if (units && units.length > cap) { next[oc.offcutId] = units.slice(0, cap); trimmed = true; }
                     });
+                    // A picked row that is gone altogether (cut by another till meanwhile).
+                    Object.keys(next).forEach(id => {
+                        if (!adjusted.some(oc => String(oc.offcutId) === id)) { delete next[id]; trimmed = true; }
+                    });
                     if (trimmed) setTrimmedNote('Some pieces you had picked are no longer available - fewer are selected now.');
                     return trimmed ? next : prev;
                 });
@@ -138,7 +148,7 @@ export default function OffcutSelectorModal({ productId, variantId, requiredLeng
             .catch(() => { if (!cancelled) setError('Failed to load offcuts — please try again.'); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [productId, variantId, claimedElsewhere, projectionKey, holdOrderId, heldItemId, ownSources]);
+    }, [productId, variantId, claimedElsewhere, projectionKey, holdOrderId, heldItemId, ownSources, refreshTick]);
 
     // Each new piece starts at what is still needed (capped at the piece's length).
     const nextUse = (oc, sel) => {

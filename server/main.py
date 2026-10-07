@@ -66,6 +66,9 @@ async def _expire_idle_windows_forever():
             if await asyncio.to_thread(sweep_idle_windows_once):
                 await manager.broadcast("products_updated")
                 await manager.broadcast("windows_updated")
+                from core.ordering.windowService import drain_handover_notices
+                for notice in drain_handover_notices():
+                    await manager.broadcast("bar_handed_over", notice)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # never let one bad sweep stop the sweeper

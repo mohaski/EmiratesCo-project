@@ -57,8 +57,8 @@ export const WebSocketProvider = ({ children }) => {
             socket.onmessage = (e) => {
                 if (!alive) return;
                 try {
-                    const { type } = JSON.parse(e.data);
-                    if (type) wsEvents.emit(type);
+                    const { type, data } = JSON.parse(e.data);
+                    if (type) wsEvents.emit(type, data);
                 } catch { /* ignore malformed frames */ }
             };
 
