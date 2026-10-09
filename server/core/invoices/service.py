@@ -75,7 +75,10 @@ def _price_quotation(items: list, vat_enabled: bool, discount: float, db: Sessio
     for position, snap in enumerate(items or []):
         snap = dict(snap)
         req = _snapshot_to_item_request(snap, position)
-        item_total = ceil_amount(_calculate_complex_item_total(req, db))
+        try:
+            item_total = ceil_amount(_calculate_complex_item_total(req, db))
+        except ValueError as e:  # a line with no price set (glass) - the cashier must see why
+            raise HTTPException(status_code=422, detail=str(e))
 
         line_items = (req.details or {}).get("lineItems")
         if isinstance(line_items, list) and line_items:

@@ -213,6 +213,72 @@ def compute_VAT_amount(subtotal: Decimal) -> Decimal:
     vat = subtotal * Decimal("0.16")  # 16% VAT
     return ceil_amount(vat)
 
+
+# The line types GlassCalculator writes. They are priced from the database only: the price the
+# browser sent is never a fallback (a zero-priced half sheet or cut used to ride along free next
+# to a priced full sheet), and a cut's area is worked out here from its size, not taken from the
+# browser's meta.area.
+GLASS_LINE_TYPES = ("sheet-full", "sheet-half", "glass-cut")
+_MM_PER_FOOT = 304.79999025
+
+
+def _round_half_with_rule(value: float) -> float:
+    """client/src/utils/calculations.js roundToHalfWithRule, exactly: a side is priced in half
+    feet. JS's toFixed(2) rounds the exact binary value half-up, which is what Decimal(float)
+    with ROUND_HALF_UP does - the two must agree, or the till shows one price and the server
+    charges another."""
+    import math
+    from decimal import ROUND_HALF_UP
+
+    frac = Decimal(value - math.floor(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if frac < Decimal("0.05") or Decimal("0.5") < frac < Decimal("0.55"):
+        return math.floor(value * 2) / 2
+    return math.ceil(value * 2) / 2
+
+
+def glass_cut_area_sqft(meta: dict) -> float:
+    """Priced area of one glass piece, in sq ft - GlassCalculator.jsx getArea(), exactly."""
+    try:
+        l_val, w_val = float(meta.get("l")), float(meta.get("w"))
+    except (TypeError, ValueError):
+        return 0.0
+    if not (l_val > 0 and w_val > 0):
+        return 0.0
+    per_foot = {"ft": 1.0, "inch": 12.0, "mm": _MM_PER_FOOT}.get(meta.get("u", "mm"))
+    if per_foot is None:
+        return 0.0
+    return _round_half_with_rule(l_val / per_foot) * _round_half_with_rule(w_val / per_foot)
+
+
+def _glass_line_rate(line: dict, product: Product, variant: Optional[Variant]) -> Decimal:
+    """Price of ONE unit of a glass line (a full sheet, a half sheet, a cut piece). Raises
+    ValueError when the database has no price for it - such a line can't be sold."""
+    l_type = line.get("type", "")
+
+    def no_price(which: str, selling: str) -> ValueError:
+        attrs = getattr(variant, "attributes", None) or {}
+        what = " ".join(str(v) for v in attrs.values() if v)
+        name = f"{product.name} ({what})" if what else product.name
+        return ValueError(f"No {which} is set for {name}. Set it in Inventory before selling {selling}.")
+
+    if l_type == "glass-cut":
+        meta = line.get("meta") or {}
+        per_sqft = Decimal(str(variant.price_unit or 0)) if variant else Decimal("0")
+        if per_sqft <= 0:
+            raise no_price("price per sq ft", "cut pieces of it")
+        if meta.get("l") in (None, "") or meta.get("w") in (None, ""):
+            raise ValueError(f"A cut piece of {product.name} has no size.")
+        area = glass_cut_area_sqft(meta)
+        if area <= 0:
+            raise ValueError(f"The {meta.get('l')}x{meta.get('w')}{meta.get('u', 'mm')} piece of {product.name} "
+                             "is too small to price.")
+        return Decimal(str(area)) * per_sqft
+    full = l_type == "sheet-full"
+    rate = Decimal(str(((variant.price if full else variant.price_half) if variant else 0) or 0))
+    if rate <= 0:
+        raise no_price("full-sheet price" if full else "half-sheet price", "a full sheet" if full else "a half sheet")
+    return rate
+
 def _calculate_complex_item_total(
     item_req: model.OrderItemRequest, 
     db: Session, 
@@ -258,9 +324,13 @@ def _calculate_complex_item_total(
             qty = Decimal(line.get("qty", 0))
             meta = line.get("meta", {})
             
+            if l_type in GLASS_LINE_TYPES:
+                total += qty * _glass_line_rate(line, product, variant)
+                continue
+
             # Rate determination logic
             rate = Decimal("0.00")
-            
+
             if "full" in l_type:
                 # Use Variant Full Price
                 rate = Decimal(variant.price) if variant and variant.price else Decimal("0")

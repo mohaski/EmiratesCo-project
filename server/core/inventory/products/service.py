@@ -275,6 +275,8 @@ def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session 
             popular_size_ranges=[r.dict() for r in variant_data.popular_size_ranges],
         )
         db.add(variant)
+        if product and product.has_dimensions:
+            share_popular_ranges(db, variant, variant.popular_size_ranges or None)
 
         # 2. Update Parent Product Stock
         # We must keep the cache in sync
@@ -290,6 +292,31 @@ def add_variant(product_id: int, variant_data: model.VariantCreate, db: Session 
         db.rollback()
         logger.error(f"Add Variant Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+def share_popular_ranges(db: Session, variant: Variant, ranges=None) -> None:
+    """Glass popular sizes belong to the variant's offcut POOL (one glass type and thickness,
+    every sheet size - see poolKey.py), so they are entered once: `ranges` given -> written to
+    every variant of the pool; None -> the variant takes its pool's (a sheet size added later).
+    The engine reads them pool-wide as well (glassOffcutService.popular_ranges)."""
+    from core.inventory.poolKey import pool_sibling_variants
+
+    db.flush()  # a new variant needs its id to be told apart from its siblings
+    siblings = pool_sibling_variants(db, variant)
+    if ranges is None:
+        merged = list(variant.popular_size_ranges or [])
+        for sibling in siblings:
+            merged += [r for r in (sibling.popular_size_ranges or []) if r not in merged]
+        variant.popular_size_ranges = merged
+        db.add(variant)
+        return
+    unique = []
+    for r in ranges:
+        if dict(r) not in unique:          # the same range entered twice is one range
+            unique.append(dict(r))
+    for v in (variant, *siblings):
+        v.popular_size_ranges = [dict(r) for r in unique]
+        db.add(v)
+
 
 def add_variants_bulk(product_id: int, variants_data: List[model.VariantCreate], db: Session = Depends(get_session)):
     """Create multiple variants for a product in a single transaction (used by the
@@ -323,6 +350,8 @@ def add_variants_bulk(product_id: int, variants_data: List[model.VariantCreate],
                 popular_size_ranges=[r.dict() for r in variant_data.popular_size_ranges],
             )
             db.add(variant)
+            if product.has_dimensions:
+                share_popular_ranges(db, variant, variant.popular_size_ranges or None)
             created.append(variant)
             total_stock += variant_data.stock_quantity
 
@@ -398,6 +427,11 @@ def update_variant(variant_id: int, update_data: model.VariantUpdate, db: Sessio
              merged_attrs = {**(variant.attributes or {}), **update_data.attributes}
              variant.attributes = merged_attrs
              variant.name = " - ".join(str(v) for v in merged_attrs.values())
+
+        if update_data.popular_size_ranges is not None:
+             owner = db.get(Product, variant.product_id)
+             if owner is not None and owner.has_dimensions:
+                  share_popular_ranges(db, variant, variant.popular_size_ranges)
 
         # 2. Update Stock (Delta). A 0 change (sent with every price-only save) moves nothing
         # and must not write a "restock, change 0" audit row.

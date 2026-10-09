@@ -67,11 +67,14 @@ only the cashier's cut input (in ft/inch/mm, from GlassCalculator's per-cut unit
 needs converting, into mm, before comparison.
 """
 
+import functools
 import math
 import uuid
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy.orm import object_session
 from sqlmodel import Session, select
 
 from entities.offcuts import Offcut
@@ -80,7 +83,7 @@ from entities.variants import Variant
 from entities.orderItems import OrderItem
 from config import nairobi_now
 from entities.orders import Order
-from core.inventory.poolKey import compute_pool_key, safe_delete_offcut
+from core.inventory.poolKey import compute_pool_key, pool_sibling_variants, safe_delete_offcut
 from core.inventory import offcutLedger as ledger
 from core.inventory import holdScope as hold
 from loggiing import logger
@@ -174,9 +177,16 @@ def _grid_arrangements(src_w: float, src_h: float, piece_w: float, piece_h: floa
             for c in range(row_count):
                 positions.append((c * piece_w, r * piece_h))
             remaining -= row_count
+        # A last row with fewer pieces than columns (3 pieces as 2x2) leaves an empty cell
+        # inside the block. It is real glass - cut off with the last row - so it is handed back
+        # as a rectangle of its own: other pieces can go in it and the rest is a leftover. It
+        # used to belong to nothing, and dropped out of the books (orders 108 and 211).
+        last = k - (rows - 1) * cols
+        hole = ({"x": last * piece_w, "y": (rows - 1) * piece_h, "width": (cols - last) * piece_w, "height": piece_h}
+                if last < cols else None)
         arrangements.append({
             "k": k, "cols": cols, "rows": rows,
-            "grid_w": cols * piece_w, "grid_h": rows * piece_h, "positions": positions,
+            "grid_w": cols * piece_w, "grid_h": rows * piece_h, "positions": positions, "hole": hole,
         })
     return arrangements
 
@@ -314,12 +324,17 @@ def _pack_result_key(result: dict, min_usable: float) -> tuple:
       1. most pieces placed — a source that swallows one more pane is worth more
          than any leftover shape, since the alternative is opening another sheet;
       2. most placed area (a piece from a bigger line beats a token small one);
-      3. least true scrap — leftovers with a side under this variant's
-         min_usable are dead material, so the search actively avoids producing
-         them rather than only counting rectangles;
-      4. fewest usable leftovers, then
-      5. largest single usable leftover (and the rest of the size profile) —
-         one big sellable offcut beats the same area shattered into slivers.
+      3. the biggest usable leftover, less the true scrap thrown away (leftovers
+         with a side under this variant's min_usable) — a thin sliver is worth
+         throwing away when it keeps one bigger leftover instead of a smaller one
+         plus a strip. Order 351: a 414x263 out of a 440x820 kept 440x406 + a
+         177mm strip (no scrap) where turning it keeps 440x557 + a 26mm sliver.
+         "No scrap at all" used to come first and always won that trade;
+      4. least true scrap;
+      5. fewest usable leftovers, then the rest of the size profile — one big
+         sellable offcut beats the same area shattered into slivers.
+    Areas are compared to the whole mm2, so float noise can't decide between two
+    physically identical layouts (L/W typed either way round).
     """
     placed = result["placed"]
     placed_area = sum(c["width"] * c["height"] for c in placed)
@@ -331,9 +346,10 @@ def _pack_result_key(result: dict, min_usable: float) -> tuple:
         else:
             scrap_area += area
     usable.sort(reverse=True)
+    biggest = usable[0] if usable else 0.0
     return (
-        -len(placed), -placed_area, scrap_area,
-        len(usable), -(usable[0] if usable else 0.0), tuple(-a for a in usable),
+        -len(placed), -placed_area, -round(biggest - scrap_area), round(scrap_area),
+        len(usable), tuple(-round(a) for a in usable),
     )
 
 
@@ -416,6 +432,8 @@ def _pack_rect_multi(w: float, h: float, needs: list, allow_rotation: bool, stra
                 )
                 for split, pair in splits:
                     rects = [r for r in pair if r["width"] > eps and r["height"] > eps]
+                    if arr["hole"] is not None:
+                        rects.append(arr["hole"])
                     order_key = (
                         -arr["k"],                                          # most pieces first
                         rank,                                               # then this strategy's preferred need
@@ -432,10 +450,23 @@ def _pack_rect_multi(w: float, h: float, needs: list, allow_rotation: bool, stra
         branches.sort(key=lambda b: b[0])
 
     # ── Explore the best few, keep whichever subtree actually turns out best ──
+    explore = branches[:BRANCH_WIDTH]
+    if depth == 0:
+        # The FIRST cut decides the shape of everything left, and the ranking above puts the
+        # move that places the most pieces first - so one big piece (a half sheet) was never cut
+        # first when two smaller ones could be: order 386's 1830x1220 half sheet went beside
+        # two 500x1040s and kept 830x1040 + 1830x180 instead of 830x1220 + 1000x180. Every piece
+        # size also gets tried as the first cut, either way round; _pack_result_key decides.
+        tried = {(b[1]["line_idx"], b[5]) for b in explore}
+        for b in branches[BRANCH_WIDTH:]:
+            if (b[1]["line_idx"], b[5]) not in tried:
+                tried.add((b[1]["line_idx"], b[5]))
+                explore.append(b)
     best, best_key = None, None
-    for order_key, need, arr, ow, oh, rotated, rects in branches[:BRANCH_WIDTH]:
-        if best is not None and _budget["nodes"] <= 0:
-            break  # out of search budget — degrade to the first (greedy) branch
+    for i, (order_key, need, arr, ow, oh, rotated, rects) in enumerate(explore):
+        if best is not None and _budget["nodes"] <= 0 and i < BRANCH_WIDTH:
+            continue  # out of search budget — degrade to the first (greedy) branch; the extra
+            # first cuts above still run, greedily below this level once the budget is spent
         _budget["nodes"] -= 1
 
         all_placed = [
@@ -610,6 +641,48 @@ def _is_scrap(dims: Optional[tuple], variant: Optional[Variant]) -> bool:
     return w < m or h < m
 
 
+# The CEO's popular sizes belong to an offcut POOL (one glass type and thickness, every sheet
+# size of it - see poolKey.py), not to one sheet size: an offcut is shared by every size, so it
+# must be "small" or "popular" the same way whichever size a sale is for. They are entered once
+# per pool (products/service.share_popular_ranges writes them to every variant of the pool) and
+# read here as the union over the pool, so a sheet size added later, or saved before ranges were
+# shared, still has them. Looked up once per engine call (_pool_ranges_cached).
+_POOL_RANGES: ContextVar[Optional[dict]] = ContextVar("glass_pool_ranges", default=None)
+
+
+def popular_ranges(variant) -> list:
+    """The popular size ranges of `variant`'s offcut pool."""
+    if variant is None:
+        return []
+    own = list(getattr(variant, "popular_size_ranges", None) or [])
+    db = object_session(variant) if isinstance(variant, Variant) else None
+    if db is None or variant.variantId is None:
+        return own
+    cache = _POOL_RANGES.get()
+    if cache is not None and variant.variantId in cache:
+        return cache[variant.variantId]
+    ranges = own
+    for sibling in pool_sibling_variants(db, variant):
+        ranges += [r for r in (sibling.popular_size_ranges or []) if r not in ranges]
+    if cache is not None:
+        cache[variant.variantId] = ranges
+    return ranges
+
+
+def _pool_ranges_cached(fn):
+    """Look each pool's popular sizes up once for the whole engine call, not per remainder."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if _POOL_RANGES.get() is not None:
+            return fn(*args, **kwargs)
+        token = _POOL_RANGES.set({})
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _POOL_RANGES.reset(token)
+    return wrapper
+
+
 def _meets_popular_threshold(dims: Optional[tuple], variant: Optional[Variant]) -> bool:
     """Whether `dims` is at least as big, in BOTH dimensions, as the lower
     bound (min_w/min_h) of some CEO-configured entry in this variant's own
@@ -621,15 +694,23 @@ def _meets_popular_threshold(dims: Optional[tuple], variant: Optional[Variant]) 
     still counts as protected — the CEO ranges mark where "small" stops, not a
     ceiling. No ranges configured for this variant -> nothing meets the
     threshold, so every offcut lands in the small pool and _fulfill_pool falls
-    back to treating them as one undifferentiated pool (see its docstring)."""
-    ranges = (variant.popular_size_ranges if variant else None) or []
+    back to treating them as one undifferentiated pool (see its docstring).
+
+    The ranges are the whole pool's (popular_ranges). With rotation allowed neither the piece nor
+    the range has a "width" side, so both are compared long side to long side: comparing the
+    piece's long side with min_w used to need min_w entered as the LONG side, and the shop's
+    520-650 x 1050-1190 never matched a 600x1100 pane - only pieces 1050mm wide or more."""
+    ranges = popular_ranges(variant)
     if dims is None or not ranges:
         return False
     w, h = dims
-    if variant is None or variant.allow_rotation:
-        w, h = max(w, h), min(w, h)  # canonical wide/narrow
+    rotate = variant is None or getattr(variant, "allow_rotation", True)
     for r in ranges:
-        if w >= r.get("min_w", 0) and h >= r.get("min_h", 0):
+        rw, rh = r.get("min_w", 0) or 0, r.get("min_h", 0) or 0
+        if rotate:
+            if max(w, h) >= max(rw, rh) and min(w, h) >= min(rw, rh):
+                return True
+        elif w >= rw and h >= rh:
             return True
     return False
 
@@ -971,7 +1052,16 @@ def _remove_glass_offcut(db: Session, product: Product, variant: Optional[Varian
     see _restore_one_source, which uses this to tell a fully-intact remainder
     (safe to restore the whole sheet it came from) apart from one a later cut
     already subdivided (nothing here to remove; the whole sheet can't come back)."""
-    existing = _find_glass_offcut(db, product, variant, width, height, status, pool_key)
+    rem_piece = ledger.get_piece(db, remainder_piece_id)
+    if rem_piece is not None and rem_piece.state != ledger.STATE_AVAILABLE:
+        # The recorded piece isn't in the pool. A same-size row found by size would be some
+        # OTHER piece: removing it would orphan that piece and retire one a later order holds.
+        return False
+    existing = None
+    if rem_piece is not None and rem_piece.offcut_row_id:
+        existing = db.exec(select(Offcut).where(Offcut.offcutId == rem_piece.offcut_row_id).with_for_update()).first()
+    if existing is None:
+        existing = _find_glass_offcut(db, product, variant, width, height, status, pool_key)
     if not existing:
         return False
 
@@ -980,7 +1070,6 @@ def _remove_glass_offcut(db: Session, product: Product, variant: Optional[Varian
     # retired, not released back into the pool. Prefer the exact piece the original
     # cut recorded producing; fall back to the pooled row's oldest same-size sibling
     # only for legacy events that carry no piece id (see the 1D _remove_offcut).
-    rem_piece = ledger.get_piece(db, remainder_piece_id)
     if rem_piece is None:
         rem_piece = ledger.claim_available_piece(db, existing, mint_if_missing=False)
     ledger.retire_piece(db, rem_piece, reason="remainder reversed by an order edit/cancel")
@@ -1183,19 +1272,18 @@ def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], nee
     popular_size_ranges, and falls back to the original sales-history-only
     behavior when it doesn't (see below):
 
-      TIER 1 — small/unpopular offcuts (below every range's own min_w/min_h,
-      see _meets_popular_threshold): used up first, and AS FULLY AS POSSIBLE
-      per offcut — _candidate_sort_key already ranks by most pieces placed
-      before score, so one small offcut that can take two pending cuts wins
-      over splitting them across two different small offcuts. Only once NONE
-      of the remaining small offcuts can help anymore (either consumed by
-      earlier calls in this same resolution, or none of them fit what's left)
-      does tier 2 get considered at all.
+      TIER 1 — small offcuts (too small to yield any of the pool's popular
+      sizes, see _meets_popular_threshold): used up first, best fit - the
+      biggest piece any of them can take goes to the smallest one that can
+      take it (_clear_small_offcut). Only once NONE of the remaining small
+      offcuts can help anymore (either consumed by earlier calls in this same
+      resolution, or none of them fit what's left) does tier 2 get considered
+      at all.
 
       TIER 2 — popular-or-larger offcuts: only reached once tier 1 is
       exhausted.
 
-      Both tiers pick their best candidate the same way (_pick_with_redirect):
+      Tier 2 (and the single pool when no ranges are set) picks its candidate with _pick_with_redirect:
       find the "consolidated" choice (whichever the normal weighted score/
       pieces-placed ranking would pick with no size preference at all), then
       reach past it for whichever OTHER candidate in the same tier is the
@@ -1249,41 +1337,52 @@ def _fulfill_pool(db: Session, product: Product, variant: Optional[Variant], nee
             f"({full_w:.1f}x{full_h:.1f}mm) for product '{product.name}'"
         )
 
-    now = nairobi_now()
-
-    variant_popular_ranges = (variant.popular_size_ranges if variant else None) or []
-    offcut_candidates = [c for c in candidates if c["source_kind"] == "offcut"]
-    if offcut_candidates:
-        small_tier = [
-            c for c in offcut_candidates
-            if not _meets_popular_threshold((c["source_w"], c["source_h"]), variant)
-        ] if variant_popular_ranges else []
-
-        if small_tier:
-            # Even within the small/unpopular tier, don't let one small
-            # offcut soak up way more source than a cut needs (_creates_big_waste)
-            # when a closer-fitting small offcut is available instead.
-            best = _pick_with_redirect(small_tier, variant, now, lambda c: _remainder_common_sellable(c, variant))
-        else:
-            if variant_popular_ranges:
-                # Nothing in tier 1 anymore — every remaining offcut candidate
-                # is popular-or-larger (tier 2) by definition of small_tier.
-                pool = offcut_candidates
-                remainder_worth_protecting = lambda c: _remainder_meets_popular_threshold(c, variant)  # noqa: E731
-            else:
-                # No CEO ranges configured yet — every offcut is one pool (no
-                # ProtectPopularStockAgent-style sales-history filtering
-                # anymore); only the scrap-avoidance consolidation logic below
-                # still applies.
-                pool = offcut_candidates
-                remainder_worth_protecting = lambda c: _remainder_common_sellable(c, variant)  # noqa: E731
-
-            best = _pick_with_redirect(pool, variant, now, remainder_worth_protecting)
-    else:
-        sheet_candidates = [c for c in candidates if c["source_kind"] == "sheet"]
-        best = min(sheet_candidates, key=lambda c: _candidate_sort_key(c, variant, now))
-
+    best = choose_candidate(candidates, variant, nairobi_now())
     return _apply_candidate(db, product, variant, best, item_id, pool_key)
+
+
+def choose_candidate(candidates: list, variant: Optional[Variant], now: datetime) -> dict:
+    """Which source to cut next (see _fulfill_pool's docstring). Pure - no database writes."""
+    offcut_candidates = [c for c in candidates if c["source_kind"] == "offcut"]
+    if not offcut_candidates:
+        return min(candidates, key=lambda c: _candidate_sort_key(c, variant, now))
+    if not popular_ranges(variant):
+        # No popular sizes set for this pool: every offcut is one pool, with only the
+        # scrap-avoidance consolidation logic.
+        return _pick_with_redirect(offcut_candidates, variant, now, lambda c: _remainder_common_sellable(c, variant))
+    small = [c for c in offcut_candidates if not _meets_popular_threshold((c["source_w"], c["source_h"]), variant)]
+    if small:
+        return _clear_small_offcut(small, variant, now)
+    # Only popular-or-larger offcuts can help: protect the ones whose leftover stays popular.
+    return _pick_with_redirect(offcut_candidates, variant, now,
+                               lambda c: _remainder_meets_popular_threshold(c, variant))
+
+
+def _clear_small_offcut(small: list, variant: Optional[Variant], now: datetime) -> dict:
+    """A small offcut - one that can't yield any of the pool's popular sizes - is what the shop
+    finds hardest to sell, so while one can take a piece of this order it is used before any
+    popular-size offcut or a sheet. In order:
+      1. serve the BIGGEST piece any of them can take (a small offcut able to serve a big piece
+         isn't spent on a tiny one);
+      2. an offcut that gets USED UP (nothing usable left over) first - most pieces first, so
+         two pieces that use one offcut up aren't split over two;
+      3. otherwise the SMALLEST offcut that takes it (best fit), then the least glass left over.
+
+    It used to pick by the general ranking - most pieces in one source, then a score that pays
+    for every leftover 150mm or wider - which chose a long 351x1613 strip for two 350x524 panes
+    (keeping 351x565) over a 560x700 offcut the two panes use up."""
+    def biggest(c):
+        return max(p["width"] * p["height"] for p in c["placed"])
+
+    def unused(c):
+        return c["source_w"] * c["source_h"] - sum(p["width"] * p["height"] for p in c["placed"])
+
+    def used_up(c):
+        return all(_is_scrap((r["width"], r["height"]), variant) for r in c["remainders"])
+
+    return min(small, key=lambda c: (-round(biggest(c)), not used_up(c), -len(c["placed"]) if used_up(c) else 0,
+                                     round(c["source_w"] * c["source_h"]), round(unused(c)),
+                                     _candidate_sort_key(c, variant, now)))
 
 
 # ── Public entry points ─────────────────────────────────────────────────────────
@@ -1352,9 +1451,12 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
 
     sheets_consumed = 0
     offcuts_consumed = 0
+    small_offcuts_used = 0
     total_scrap_area = 0.0
     total_remainder_pieces = 0
     total_sellability_score = 0.0
+    leftover_value = 0.0  # per source: its biggest leftover less its scrap (see _pack_result_key)
+    has_ranges = bool(popular_ranges(variant))
     for events in sources_by_line.values():
         for e in events:
             if not e.get("owns_consumption", True):
@@ -1363,22 +1465,32 @@ def _resolve_with_strategy(db: Session, product: Product, variant: Optional[Vari
                 sheets_consumed += 1
             else:
                 offcuts_consumed += 1
+                if has_ranges and not _meets_popular_threshold((e["offcut_width"], e["offcut_height"]), variant):
+                    small_offcuts_used += 1
+            biggest = 0.0
             for r in e.get("remainders_created", []):
                 total_remainder_pieces += 1
                 if r.get("status") == "scrap":
                     total_scrap_area += r["width"] * r["height"]
-                elif r.get("is_popular"):  # already computed via _meets_popular_threshold, see _apply_candidate
-                    total_sellability_score += POPULAR_RANGE_BONUS
+                    leftover_value -= r["width"] * r["height"]
+                else:
+                    biggest = max(biggest, r["width"] * r["height"])
+                    if r.get("is_popular"):  # already computed via _meets_popular_threshold, see _apply_candidate
+                        total_sellability_score += POPULAR_RANGE_BONUS
+            leftover_value += biggest
 
     return {
         "sheets_consumed": sheets_consumed,
         "offcuts_consumed": offcuts_consumed,
+        "small_offcuts_used": small_offcuts_used,
+        "leftover_value": leftover_value,
         "total_scrap_area": total_scrap_area,
         "total_sellability_score": total_sellability_score,
         "total_remainder_pieces": total_remainder_pieces,
     }
 
 
+@_pool_ranges_cached
 def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Variant], glass_cut_lines: list, item_id: Optional[int] = None) -> dict:
     """
     Batches all glass-cut lineItems belonging to one OrderItem together and
@@ -1439,16 +1551,15 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
         _resolve_with_strategy(db, product, variant, glass_cut_lines, DEFAULT_STRATEGY, item_id, pool_key)
         return {"winning_strategy": DEFAULT_STRATEGY["name"], "strategies_tried": 0, "trials": []}
 
-    # Priority: fewest sheets (the dominant raw-material cost) > least true scrap
-    # (material that literally cannot be sold) > most sellable remainders (given
-    # the sheet count and scrap are already settled, prefer whichever strategy's
-    # leftover pieces land on sizes that have actually sold before, rather than
-    # just being "small in total area" — this is the fix for "if a sheet can only
-    # provide 3 pieces, make sure the waste it produces is easy to sell") > fewest
-    # total remainder pieces (least fragmentation) as a final tiebreak.
+    # Priority: fewest sheets (the dominant raw-material cost) > most small offcuts cleared
+    # (with popular sizes set, using them up is the point) > the biggest leftover of each
+    # source less its scrap - the same trade _pack_result_key makes within one source, or this
+    # pick would undo it by preferring a strategy that avoided a sliver > least true scrap >
+    # most popular-size leftovers > fewest remainder pieces (least fragmentation).
     best_metrics, best_strategy = min(
         trials, key=lambda t: (
-            t[0]["sheets_consumed"], t[0]["total_scrap_area"], -t[0]["total_sellability_score"], t[0]["total_remainder_pieces"],
+            t[0]["sheets_consumed"], -t[0]["small_offcuts_used"], -round(t[0]["leftover_value"]),
+            round(t[0]["total_scrap_area"]), -t[0]["total_sellability_score"], t[0]["total_remainder_pieces"],
         )
     )
     _resolve_with_strategy(db, product, variant, glass_cut_lines, best_strategy, item_id, pool_key)
@@ -1461,6 +1572,7 @@ def resolve_glass_cut_lines(db: Session, product: Product, variant: Optional[Var
                 "name": strategy["name"],
                 "sheets_consumed": metrics["sheets_consumed"],
                 "offcuts_consumed": metrics["offcuts_consumed"],
+                "small_offcuts_used": metrics["small_offcuts_used"],
                 "total_scrap_area": metrics["total_scrap_area"],
                 "total_sellability_score": metrics["total_sellability_score"],
                 "total_remainder_pieces": metrics["total_remainder_pieces"],
@@ -1746,6 +1858,7 @@ def _restore_one_source(db: Session, product: Product, variant: Optional[Variant
                                     ledger_notes="partial credit (legacy event): the sheet was already subdivided")
 
 
+@_pool_ranges_cached
 def apply_manual_glass_selection(db: Session, product: Product, variant: Optional[Variant], cut_l: float, cut_w: float, unit: str, forced_offcut_id: Optional[int] = None) -> dict:
     """
     Backend hook for a future cashier-override UI (the 2D analogue of
@@ -1779,6 +1892,7 @@ def apply_manual_glass_selection(db: Session, product: Product, variant: Optiona
     return _apply_candidate(db, product, variant, best, pool_key=pool_key)[0]
 
 
+@_pool_ranges_cached
 def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[Variant], pieces: list,
                                forced_offcut_id: Optional[int] = None, sheets_only: bool = False,
                                item_id: Optional[int] = None) -> list:
@@ -1857,6 +1971,7 @@ def resolve_replacement_pieces(db: Session, product: Product, variant: Optional[
     return events
 
 
+@_pool_ranges_cached
 def correct_glass_offcut_event(
     db: Session, product: Product, variant: Optional[Variant], event: dict, new_remainders: list,
     failed_cut_indices: Optional[list] = None, forced_offcut_id: Optional[int] = None,
@@ -1916,15 +2031,24 @@ def correct_glass_offcut_event(
         if width <= 0 or height <= 0:
             raise ValueError(f"Corrected remainder dimensions must be positive (got {width}x{height})")
 
+    # A leftover a later sale has already cut is no longer this event's to change: it stays as
+    # recorded and must come back unchanged in new_remainders (the correction screen pre-fills
+    # it). Removing it by size and adding it back used to put glass another order had already
+    # cut back into the pool - or, with a same-size offcut in the pool, retire the later
+    # order's piece and orphan that offcut.
+    new_remainders, kept = _keep_used_leftovers(db, before, new_remainders)
+
     # The exact recorded pieces are retired, not whichever same-size sibling the pooled row
     # hands back first; the corrected pieces hang off the same source and carry their ids, so
     # a later edit/cancel (or "never used") of this event can still follow the chain.
     for r in before:
+        if any(k is r for k in kept):
+            continue
         _remove_glass_offcut(db, product, variant, r["width"], r["height"], r.get("status", "available"), pool_key,
                              remainder_piece_id=r.get("piece_id"))
     source_piece = ledger.get_piece(db, event.get("source_piece_id"))
 
-    after = []
+    after = [dict(k) for k in kept]
     for size in new_remainders:
         width = float(size["width"])
         height = float(size["height"])
@@ -1999,6 +2123,34 @@ def correct_glass_offcut_event(
         "replacement_events": replacement_events,
         "replacement_events_by_line": replacement_events_by_line,
     }
+
+
+def _keep_used_leftovers(db: Session, before: list, new_remainders: list) -> tuple:
+    """Split off the recorded leftovers that are no longer in the pool. Returns (the rest of
+    new_remainders, the records kept as they are).
+
+      - cut by a later order: it must appear unchanged (either orientation) in the manager's
+        list, and is kept as recorded - otherwise the correction is refused;
+      - deleted by hand in Offcut Management: kept as recorded if still listed unchanged (never
+        brought back into the pool), dropped from the record if not.
+    Available leftovers, and pre-ledger ones with no piece id, are left to the caller."""
+    rest, kept = list(new_remainders), []
+    for r in before:
+        piece = ledger.get_piece(db, r.get("piece_id"))
+        if piece is None or piece.state == ledger.STATE_AVAILABLE:
+            continue
+        dims = sorted((float(r["width"]), float(r["height"])))
+        match = next((s for s in rest if all(abs(a - b) <= OFFCUT_MATCH_TOLERANCE_MM for a, b in
+                                             zip(dims, sorted((float(s["width"]), float(s["height"])))))), None)
+        if match is not None:
+            rest.remove(match)
+            kept.append(r)
+        elif piece.state == ledger.STATE_CONSUMED:
+            from core.ordering.visibility import order_label
+            who = order_label(db, piece.consumed_by_order_id) if piece.consumed_by_order_id else "a later sale"
+            raise ValueError(f"The {r['width']:.0f}x{r['height']:.0f}mm leftover was already cut by {who}, so it "
+                             "can't be changed here. Leave it as it is, or correct that order's cut first.")
+    return rest, kept
 
 
 def attribute_replacements(replacement_events: list, origin_by_dims_queue: dict, fallback) -> dict:

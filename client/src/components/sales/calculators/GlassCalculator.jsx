@@ -206,6 +206,18 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate, cartIndex = n
         return items;
     }, [fullQty, halfQty, halfSide, cutPieces, pricing, halfSourcePref]);
 
+    // A line with no price in the database is refused by the server (orderService._glass_line_rate)
+    // - flagged here first, so it can't ride along free next to a priced line.
+    const priceError = useMemo(() => {
+        const line = missingRequired.length > 0 ? null : lineItems.find(li => !(li.rate > 0));
+        if (!line) return null;
+        if (line.type === 'glass-cut') {
+            return pricing.priceSqFt > 0 ? `${line.label} is too small to price.`
+                : 'No price per sq ft is set for this glass. A manager must set it in Inventory.';
+        }
+        return `No ${line.type === 'sheet-full' ? 'full-sheet' : 'half-sheet'} price is set for this glass. A manager must set it in Inventory.`;
+    }, [lineItems, pricing.priceSqFt, missingRequired]);
+
     // Editing a saved order: was the original glass cut? Asked before the new cuts are
     // resolved - glass that was never cut is rejoined with the untouched part of its sheet.
     const editCuts = useEditCutAnswers({ initialDetails, variantId: pricing.variantId, lineItems });
@@ -237,10 +249,10 @@ const GlassCalculator = memo(({ product, initialDetails, onUpdate, cartIndex = n
         const attributes = [];
         if (extraSelections['Thickness']) attributes.push({ label: 'Thickness', value: extraSelections['Thickness'] });
         Object.entries(extraSelections).forEach(([key, val]) => { if (key !== 'Thickness') attributes.push({ label: key, value: val }); });
-        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, ...(halfSourcePref ? { halfSourcePref } : {}), cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, missingAttributes: missingRequired, checkingStock: feasibility.checking,
+        onUpdate(fullTotal + halfTotal + cutsCost, { lineItems, attributes, fullSheet: fullQty, halfSheet: halfQty, halfSide, ...(halfSourcePref ? { halfSourcePref } : {}), cutPieces: cutPieces.map(c => ({ ...c, rate: pricing.priceSqFt, totalPrice: c.area * c.q * pricing.priceSqFt })), extras: extraSelections, variantId: pricing.variantId, isValid, missingAttributes: missingRequired, priceError, checkingStock: feasibility.checking,
             stockError: (anyBadPiece ? 'A cut piece is invalid for this sheet — fix or remove it.' : null) || feasibility.message || (!editCuts.complete ? 'Answer whether the original glass was cut.' : null),
             _sourceItemId: initialDetails?._sourceItemId, cutAnswers: editCuts.cartAnswers });
-    }, [fullQty, halfQty, halfSide, halfSourcePref, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired, editCuts.complete, editCuts.cartAnswers, initialDetails, anyBadPiece]);
+    }, [fullQty, halfQty, halfSide, halfSourcePref, cutPieces, pricing, extraSelections, onUpdate, lineItems, feasibility, missingRequired, priceError, editCuts.complete, editCuts.cartAnswers, initialDetails, anyBadPiece]);
 
     // Debounced dry-run check: can these line items actually be fulfilled from
     // current sheet stock/offcuts? Reuses the exact real checkout deduction

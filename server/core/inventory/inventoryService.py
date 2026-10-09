@@ -2053,20 +2053,40 @@ def correct_profile_offcut_event(
     # The exact recorded piece is retired, and the corrected one hangs off the same source
     # with its id recorded, so a later edit/cancel (or "never used") can follow the chain.
     old_remainder = float(event.get("remainder_created", 0) or 0)
-    if old_remainder > 0.01:
-        _remove_offcut(db, product, variant, old_remainder, remainder_piece_id=event.get("remainder_piece_id"))
     new_remainder = round(float(new_remainder_length), 4)
-    new_remainder_status = "scrap" if new_remainder > 0.01 and _is_scrap_1d(new_remainder, variant) else "available"
-    rem_ledger: dict = {}
-    if new_remainder > 0.01:
-        _upsert_offcut(db, product, variant, new_remainder, status=new_remainder_status,
-                       parent_piece=ledger.get_piece(db, event.get("source_piece_id")),
-                       origin=ledger.ORIGIN_CORRECTION, ledger_notes="remainder corrected by a manager",
-                       ledger_out=rem_ledger)
-    event["remainder_created"] = new_remainder if new_remainder > 0.01 else 0
-    event["remainder_status"] = new_remainder_status if new_remainder > 0.01 else None
-    if "remainder_piece_id" in event or rem_ledger.get("piece_id"):
-        event["remainder_piece_id"] = rem_ledger.get("piece_id")
+    # A remainder that is no longer in the pool (a later order cut it, or it was deleted by hand)
+    # is not this event's to re-record: removing it by length and adding it back put a length
+    # another order had already cut back into the pool. Unchanged, it stays exactly as recorded.
+    old_piece = ledger.get_piece(db, event.get("remainder_piece_id")) if old_remainder > 0.01 else None
+    keep_recorded = False
+    if old_piece is not None and old_piece.state != ledger.STATE_AVAILABLE:
+        keep_recorded = abs(new_remainder - old_remainder) <= 0.01
+        if not keep_recorded and old_piece.state == ledger.STATE_CONSUMED:
+            from core.ordering.visibility import order_label
+            who = order_label(db, old_piece.consumed_by_order_id) if old_piece.consumed_by_order_id else "a later sale"
+            raise ValueError(f"The {old_remainder:g} remainder was already cut by {who}, so it can't be changed "
+                             "here. Leave it as it is, or correct that order's cut first.")
+        # nothing in the pool to take out (deleted by hand, if not kept)
+    elif old_piece is not None:
+        # Out of its own row, never a same-length twin found by length - with shared leftovers on,
+        # a window's provisional remainder isn't found that way at all, so the corrected length
+        # used to be added beside the old one.
+        _drop_pooled_unit_for_piece(db, product, variant, old_piece, compute_pool_key(db, variant))
+        ledger.retire_piece(db, old_piece, reason="remainder corrected by a manager")
+    elif old_remainder > 0.01:  # a pre-ledger cut: only its length is known
+        _remove_offcut(db, product, variant, old_remainder, remainder_piece_id=event.get("remainder_piece_id"))
+    if not keep_recorded:
+        new_remainder_status = "scrap" if new_remainder > 0.01 and _is_scrap_1d(new_remainder, variant) else "available"
+        rem_ledger: dict = {}
+        if new_remainder > 0.01:
+            _upsert_offcut(db, product, variant, new_remainder, status=new_remainder_status,
+                           parent_piece=ledger.get_piece(db, event.get("source_piece_id")),
+                           origin=ledger.ORIGIN_CORRECTION, ledger_notes="remainder corrected by a manager",
+                           ledger_out=rem_ledger)
+        event["remainder_created"] = new_remainder if new_remainder > 0.01 else 0
+        event["remainder_status"] = new_remainder_status if new_remainder > 0.01 else None
+        if "remainder_piece_id" in event or rem_ledger.get("piece_id"):
+            event["remainder_piece_id"] = rem_ledger.get("piece_id")
 
     if not replace_source:
         return {"before": before, "after": dict(event), "replacement_event": None}

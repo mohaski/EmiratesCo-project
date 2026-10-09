@@ -1,6 +1,7 @@
 """Server-side item pricing (orderService._calculate_complex_item_total) - the real function, with
 absolute expected totals. The database prices win; the till's rate is used only where the
-database has none. Needs no database: product and variant come in through the caches.
+database has none - except for glass, which is refused instead (a zero-priced half sheet or cut
+used to go free). Needs no database: product and variant come in through the caches.
 Exits 1 on any failure."""
 import sys
 from decimal import Decimal
@@ -19,7 +20,7 @@ def check(label, got, want):
         failures.append(label)
 
 
-PRODUCT = SimpleNamespace(productId=1)
+PRODUCT = SimpleNamespace(productId=1, name="Test product")
 
 
 def total(lines=None, *, price=0, half=0, unit=0, qty=1.0, unit_price=0.0):
@@ -44,8 +45,20 @@ def test():
           Decimal("960"))
     check("profile cut, no DB foot price: 4ft x the till's 150/ft",
           total([{"type": "profile-cut", "qty": 1, "meta": {"length": 4}, "rate": 150}], unit=0), Decimal("600"))
-    check("glass cut: 1.5 sqft x 180 x 2",
-          total([{"type": "glass-cut", "qty": 2, "meta": {"area": 1.5}, "rate": 1}], unit=180), Decimal("540.0"))
+    check("glass cut: 600x400mm = 3 sqft x 180 x 2, whatever area the till sent",
+          total([{"type": "glass-cut", "qty": 2, "meta": {"l": 600, "w": 400, "u": "mm", "area": 1.5}, "rate": 1}],
+                unit=180), Decimal("1080"))
+    print("Glass never falls back to the till's rate")
+    for label, line, prices in (
+            ("half sheet, no DB half price", {"type": "sheet-half", "qty": 1, "rate": 700}, {"price": 5000}),
+            ("full sheet, no DB price", {"type": "sheet-full", "qty": 1, "rate": 700}, {}),
+            ("cut, no DB sq-ft price", {"type": "glass-cut", "qty": 1, "meta": {"l": 600, "w": 400, "u": "mm"},
+                                        "rate": 700}, {"price": 5000})):
+        try:
+            got = total([line], **prices)
+        except ValueError as e:
+            got = "refused" if "Set it in Inventory" in str(e) else str(e)
+        check(f"{label}: refused", got, "refused")
     print("Other lines and simple items")
     check("accessory pack: the till's rate, 3 x 50", total([{"type": "accessory-unit", "qty": 3, "rate": 50}]),
           Decimal("150"))

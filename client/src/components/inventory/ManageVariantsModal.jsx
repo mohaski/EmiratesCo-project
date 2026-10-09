@@ -4,6 +4,7 @@ import { useAttributes } from '../../context/AttributeContext';
 import { isProfileCategory } from '../../utils/colors';
 import ConfirmationModal from '../common/ConfirmationModal';
 import { extractErrorMessage } from '../../utils/toast';
+import { poolSiblings } from '../../utils/poolKey';
 
 export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const { updateProduct, updateProductVariant, deleteProductVariant } = useProducts();
@@ -109,13 +110,24 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
         ...(sellsPerUnit ? [{ label: `Price / ${unitPriceLabel}`, key: 'priceUnit' }] : []),
     ];
 
+    // Glass popular sizes belong to the offcut pool (one glass type and thickness, every sheet
+    // size): entered once, saved to every size of the pool by the server. Shown as the pool's,
+    // so a size saved before they were shared doesn't look empty.
+    const poolOf = v => poolSiblings(variants, v, attributeTypesMap, product.poolIgnoredAttributes ?? null);
+    const poolRanges = v => [v, ...poolOf(v)].reduce((acc, x) => {
+        (x.popularSizeRanges || []).forEach(r => {
+            if (!acc.some(a => a.min_w === r.min_w && a.max_w === r.max_w && a.min_h === r.min_h && a.max_h === r.max_h)) acc.push(r);
+        });
+        return acc;
+    }, []);
+
     const handleEditClick = v => {
         // By id: two variants can share a label, and a label changes when an attribute is added.
         setEditingVariantId(v.id);
         setEditForm({
             price: v.price || v.priceFull || '', priceHalf: v.priceHalf || '', priceUnit: v.priceUnit || '', stockChange: '',
             lowStockThreshold: v.lowStockThreshold || '',
-            minUsable: v.minUsable ?? '', allowRotation: v.allowRotation ?? true, popularSizeRanges: v.popularSizeRanges || [],
+            minUsable: v.minUsable ?? '', allowRotation: v.allowRotation ?? true, popularSizeRanges: product.hasDimensions ? poolRanges(v) : (v.popularSizeRanges || []),
         });
         setPopularRangeDraft({ min_w: '', max_w: '', min_h: '', max_h: '' });
     };
@@ -123,7 +135,10 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
     const addEditPopularRange = () => {
         const { min_w, max_w, min_h, max_h } = popularRangeDraft;
         if (!min_w || !max_w || !min_h || !max_h) return;
-        setEditForm(p => ({ ...p, popularSizeRanges: [...p.popularSizeRanges, { min_w: parseFloat(min_w), max_w: parseFloat(max_w), min_h: parseFloat(min_h), max_h: parseFloat(max_h) }] }));
+        const r = { min_w: parseFloat(min_w), max_w: parseFloat(max_w), min_h: parseFloat(min_h), max_h: parseFloat(max_h) };
+        setEditForm(p => (p.popularSizeRanges.some(a => a.min_w === r.min_w && a.max_w === r.max_w && a.min_h === r.min_h && a.max_h === r.max_h)
+            ? p   // already there
+            : { ...p, popularSizeRanges: [...p.popularSizeRanges, r] }));
         setPopularRangeDraft({ min_w: '', max_w: '', min_h: '', max_h: '' });
     };
     const removeEditPopularRange = idx => setEditForm(p => ({ ...p, popularSizeRanges: p.popularSizeRanges.filter((_, i) => i !== idx) }));
@@ -689,6 +704,12 @@ export default function ManageVariantsModal({ isOpen, onClose, product }) {
                                                         {product.hasDimensions && (
                                                         <div style={{ marginTop: '0.75rem' }}>
                                                             <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '0.375rem' }}>Popular Size Ranges (mm)</div>
+                                                            <div style={{ fontSize: '0.68rem', color: '#64748b', marginBottom: '0.375rem' }}>
+                                                                {poolOf(variant).length > 0
+                                                                    ? `Shared by all ${poolOf(variant).length + 1} sheet sizes of this glass and thickness - set once, saved to each.`
+                                                                    : 'Shared with any other sheet size of this glass and thickness.'}
+                                                                {' '}Width and height can be entered either way round. Offcuts too small for every range are used up first.
+                                                            </div>
                                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem' }}>
                                                                 <input type="number" step="1" placeholder="Min W" value={popularRangeDraft.min_w} onChange={e => setPopularRangeDraft(p => ({ ...p, min_w: e.target.value }))} style={{ ...inputStyle, width: '76px' }} />
                                                                 <input type="number" step="1" placeholder="Max W" value={popularRangeDraft.max_w} onChange={e => setPopularRangeDraft(p => ({ ...p, max_w: e.target.value }))} style={{ ...inputStyle, width: '76px' }} />

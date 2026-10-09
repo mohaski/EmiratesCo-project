@@ -833,6 +833,10 @@ def apply_later_cut_answers(db: Session, plan: Optional[dict], decisions, order_
         for later_item_id, state in (d.get("later_cuts") or {}).items():
             if state != PHYS_ALREADY_CUT or later_item_id in marked:
                 continue
+            if later_item_id in (None, "None", ""):
+                # A cut a correction made without recording its order item (early October data):
+                # there is no queue entry to mark. int(None) used to fail the whole cancel/edit.
+                continue
             later_item = db.get(OrderItem, int(later_item_id))
             if later_item is None or later_item.cutting_completed:
                 continue

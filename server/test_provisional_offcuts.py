@@ -824,16 +824,28 @@ def t20(db, cat, alice, bob):
           phys(shown(b2.orderId)) == ("piece", 17.0, b1_no, 12.0, "available"), phys(shown(b2.orderId)))
 
     print("    ...a correction made from the worksheet as shown is not refused as 'changed'")
-    displayed = shown(b1.orderId)
-    try:
-        orderService.correct_profile_offcut_for_order_item(
-            b1.orderId, item_of(db, b1.orderId).item_id, 0, 0, 13.5, False, None, "re-measured", db, M.manager(alice),
-            expected_event=displayed)
-        db.commit()
-        check("correction with the displayed record accepted", True)
-    except HTTPException as e:
-        db.rollback()
-        check("correction with the displayed record accepted", False, (e.status_code, e.detail))
+
+    def correct(order, length):
+        try:
+            orderService.correct_profile_offcut_for_order_item(
+                order.orderId, item_of(db, order.orderId).item_id, 0, 0, length, False, None, "re-measured", db,
+                M.manager(alice), expected_event=shown(order.orderId))
+            db.commit()
+            return None
+        except HTTPException as e:
+            db.rollback()
+            return e.status_code, str(e.detail)
+
+    # The second sale's 9 is still in the pool (provisional).
+    refusal = correct(b2, 8.5)
+    check("correction with the displayed record accepted", refusal is None, refusal)
+    lengths = sorted(r[0] for r in T.pool(db, bar) for _ in range(r[3]))
+    check("the provisional 9 is replaced by the 8.5, not kept beside it", (9.0 in lengths, 8.5 in lengths) == (False, True),
+          lengths)
+    # The first sale's 14 was cut by the second: re-measuring it would put cut material back.
+    refusal = correct(b1, 13.5)
+    check("a remainder a later sale cut can't be re-measured - refused as cut, not as 'changed'",
+          bool(refusal) and refusal[0] == 422 and "already cut by" in refusal[1], refusal)
     release(db, alice, w)
 
 

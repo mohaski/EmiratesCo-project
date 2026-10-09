@@ -502,6 +502,78 @@ def d_glass():
     w.close()
 
 
+# ── F. A leftover a later order already cut ──────────────────────────────────────
+def f_used_leftovers():
+    """Correcting a cut used to take its recorded leftovers out of the pool BY SIZE and put the
+    manager's list back. The modal pre-fills that list, so even a missed-cut-only correction put
+    a leftover another order had already cut back into the pool (phantom glass, integrity clean)
+    - or, with a same-size offcut in the pool, retired the later order's piece instead."""
+    def used_world(extra_twin=False):
+        w = World("glass")
+        a, ai = w.sale([M.line_cut_2d(600, 400, qty=2)])
+        ev = ai.details["lineItems"][0]["offcut_sources"][0]
+        big = max(ev["remainders_created"], key=lambda r: r["width"] * r["height"])
+        b, bi = w.sale([M.line_cut_2d(big["width"] - 10, big["height"] - 10)])
+        if extra_twin:
+            w.offcut(w=big["width"], h=big["height"])
+        rems = [{"width": r["width"], "height": r["height"]} for r in ev["remainders_created"]]
+        return w, a, b, bi, big, rems
+
+    print("\n--- F1. Missed-cut correction after a later order cut one of the leftovers ---")
+    w, a, b, bi, big, rems = used_world()
+    before = w.pool()
+    w.correct_2d(a, w.item(a), new_remainders=rems, failed_cuts=[(0, 1)])
+    big_size = ((round(big["width"]), round(big["height"])), "available")
+    check("the leftover order B cut is NOT back in the pool", big_size in w.pool(), False)
+    check("B still holds it", w.db.get(OffcutPiece, big["piece_id"]).state, "consumed")
+    kept = [r for r in w.item(a).details["lineItems"][0]["offcut_sources"][0]["remainders_created"]
+            if r.get("piece_id") == big["piece_id"]]
+    check("A's record keeps it as it was", len(kept), 1)
+    check("only the replacement's own material moved", len(w.pool()) - len(before) in (0, 1), True)
+    w.ok("F1")
+    w.cancel(b, w.item(b), NOT_CUT)
+    check("cancelling B gives the leftover back exactly once", w.pool().count(big_size), 1)
+    w.ok("F1 cancel B")
+    w.close()
+
+    print("\n--- F2. Same, with an unrelated offcut of that size in the pool ---")
+    w, a, b, bi, big, rems = used_world(extra_twin=True)
+    before = w.pool()
+    w.correct_2d(a, w.item(a), new_remainders=rems, failed_cuts=[(0, 1)])
+    big_size = ((round(big["width"]), round(big["height"])), "available")
+    check("the unrelated offcut is still there, once", (before.count(big_size), w.pool().count(big_size)), (1, 1))
+    check("B's piece is not retired", w.db.get(OffcutPiece, big["piece_id"]).state, "consumed")
+    w.ok("F2")
+    w.close()
+
+    print("\n--- F3. Changing a leftover a later order cut is refused ---")
+    w, a, b, bi, big, rems = used_world()
+    changed = [dict(r, height=r["height"] - 30) if r["width"] == big["width"] and r["height"] == big["height"] else r
+               for r in rems]
+    ok, detail = refused(lambda: w.correct_2d(a, w.item(a), new_remainders=changed), "already cut by order #")
+    w.db.rollback()
+    check("refused, naming the order that cut it", ok, True)
+    check("nothing moved", w.db.get(OffcutPiece, big["piece_id"]).state, "consumed")
+    w.ok("F3")
+    w.close()
+
+    print("\n--- F4. Bars: same rule for a remainder a later order cut ---")
+    w = World("bar")
+    a, ai = w.sale([M.line_cut_1d(4.0)])
+    b, bi = w.sale([M.line_cut_1d(1.5)])
+    rem_piece = ai.details["lineItems"][0]["offcut_sources"][0]["remainder_piece_id"]
+    check("B was cut from A's 2.0 remainder", w.db.get(OffcutPiece, rem_piece).state, "consumed")
+    ok, _ = refused(lambda: w.correct_1d(a, w.item(a), new_remainder_length=1.8), "already cut by order #")
+    w.db.rollback()
+    check("changing it is refused", ok, True)
+    w.correct_1d(a, w.item(a), new_remainder_length=2.0, replace_source=True)
+    check("a source replacement with it unchanged doesn't put the 2.0 back",
+          [p for p in w.pool() if p[0] == 2.0 and p[1] == "available"], [(2.0, "available")])
+    check("B still holds it", w.db.get(OffcutPiece, rem_piece).state, "consumed")
+    w.ok("F4")
+    w.close()
+
+
 # ── E. Over HTTP, with exactly the JSON the modals send ─────────────────────────
 def e_http():
     print("\n--- E1. Routes, request validation and response shapes ---")
@@ -560,6 +632,7 @@ def main():
     b_edits()
     c_profile()
     d_glass()
+    f_used_leftovers()
     e_http()
     print("\n" + "=" * 68)
     if failures:
