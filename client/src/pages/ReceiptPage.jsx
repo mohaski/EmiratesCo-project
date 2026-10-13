@@ -156,6 +156,14 @@ export default function ReceiptPage() {
     // Slips QZ Tray already printed before failing part-way: left out of the browser
     // fallback (hidden in @media print), which used to print every slip again.
     const [skipBuckets, setSkipBuckets] = useState([]);
+    // Giving up on QZ Tray can take 20s+ (Chrome throttles repeated failed WebSocket
+    // connects), by which time the seller may have moved on — the fallback dialog then
+    // popped up over whatever page they were on, printing that page instead of the slips.
+    const mountedRef = useRef(false);
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; };
+    }, []);
     const handlePrint = useCallback(async () => {
         const buckets = visibleBuckets.filter(b => tapeRefs.current.get(b));
         const nodes = buckets.map(b => tapeRefs.current.get(b));
@@ -164,11 +172,12 @@ export default function ReceiptPage() {
             setSkipBuckets([]);
             await printTapesViaQZ(nodes);
         } catch (err) {
+            if (!mountedRef.current) return;
             console.warn('QZ Tray print failed, falling back to browser print dialog', err);
             const done = buckets.slice(0, err?.printedCount || 0);
             setSkipBuckets(done);
             // Let the hidden slips render before the dialog snapshots the page.
-            setTimeout(() => window.print(), 50);
+            setTimeout(() => { if (mountedRef.current) window.print(); }, 50);
         }
     }, [visibleBuckets]);
 

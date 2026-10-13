@@ -9,10 +9,22 @@ const THERMAL_PRINTER_NAME = 'XP-80C';
 
 let connectPromise = null;
 
+// Once QZ Tray turns out not to be running, skip it for a while so callers go straight
+// to the browser dialog. Each connect attempt fails 8 WebSocket handshakes (2 hosts x 4
+// ports) and Chrome throttles a page's WebSocket connects after repeated failures: from
+// the second failed attempt on, giving up took 6-25s, so every print after the first sat
+// that long before its dialog appeared. Chrome forgets failures within ~4 minutes, so a
+// retry after this cooldown is quick again. QZ Tray started mid-cooldown is picked up on
+// the next page reload.
+const QZ_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
+let unreachableUntil = 0;
+
 function ensureConnected() {
     if (qz.websocket.isActive()) return Promise.resolve();
+    if (Date.now() < unreachableUntil) return Promise.reject(new Error('QZ Tray unreachable, not retrying yet'));
     if (!connectPromise) {
         connectPromise = qz.websocket.connect()
+            .catch(err => { unreachableUntil = Date.now() + QZ_RETRY_COOLDOWN_MS; throw err; })
             // Settled either way: once connected, isActive() answers above; if QZ Tray
             // later restarts, isActive() goes false and the next call reconnects
             // instead of reusing a promise that resolved for a socket now closed.
