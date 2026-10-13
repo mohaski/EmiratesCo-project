@@ -21,6 +21,7 @@ cd server && DATABASE_URL=<test db url> .venv/bin/python migrate_sale_windows.py
 ## Running
 ```bash
 tests/run_backend_tests.sh               # server suites + service tests (no servers needed)
+cd client && npm test                    # client unit tests (glass cut plan + A4 layout), no servers or database
 ```
 
 The browser suites need a backend and the client running against the test DB:

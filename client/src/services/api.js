@@ -646,6 +646,10 @@ export const SettingsService = {
         const response = await api.get('/settings/cancel-pin/status');
         return response.data;
     },
+    /** { a4MinPanels } - a glass worksheet cutting this many panels prints on A4 (0 = never). */
+    getGlassPrint: async () => (await api.get('/settings/glass-print')).data,
+    /** CEO/admin. */
+    setGlassPrint: async (a4MinPanels) => (await api.put('/settings/glass-print', { a4MinPanels })).data,
 };
 
 export const StockSessionService = {

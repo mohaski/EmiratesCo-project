@@ -3,13 +3,21 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { BUCKET_ORDER, BUCKET_META, bucketOf } from '../utils/receiptCategories';
 import CuttingInstructions from '../components/orders/CuttingInstructions';
+import GlassPanelThermal from '../components/orders/GlassPanelThermal';
+import GlassCuttingSheet from '../components/orders/GlassCuttingSheet';
+import PrinterSetupModal from '../components/orders/PrinterSetupModal';
 import { groupJointGlassSources } from '../utils/cuttingInstructionFormat';
-import { printTapesViaQZ } from '../utils/qzPrint';
+import { buildGlassPlan, paginateGlassSheet } from '../utils/glassCutPlan';
+import { printTapesViaQZ, printA4PagesViaQZ } from '../utils/qzPrint';
+import { loadPrinterSettings } from '../utils/printerSettings';
 
 // 80mm thermal POS roll — ~72mm printable width. Pure black-on-white, monospace,
 // single column: no side-by-side layout or colour tints survive a 1-bit thermal head.
 const MONO = 'ui-monospace, "Cascadia Mono", "Segoe UI Mono", Consolas, "Courier New", monospace';
 const TAPE_WIDTH = '302px'; // 80mm @ 96dpi, for the on-screen preview
+const A4_PX = 210 * 96 / 25.4; // an A4 page's width in CSS px
+const GLASS_A4_DEFAULT = 3; // server default (core/settings/service.py), if the setting can't be read
+const a4SentNote = (printer, pages) => ({ tone: 'ok', text: `Glass cutting sheet sent to ${printer} (${pages} page${pages === 1 ? '' : 's'}).` });
 
 const LeaderRow = ({ left, right }) => (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', marginTop: '4px' }}>
@@ -32,7 +40,10 @@ const LeaderRow = ({ left, right }) => (
 // one sheet size per thickness.
 const SIZE_ONLY_LABELS = new Set(['Dimensions', 'Length']);
 
-const ReceiptItemRow = ({ item, index }) => {
+// `glass` (glass department only): this item's panels from the worksheet-wide cut plan
+// (utils/glassCutPlan.js), the plan's panel count, and the L-numbers of its lines - the
+// panels replace the old per-sheet sketch with a full-width layout and the cut order.
+const ReceiptItemRow = ({ item, index, glass }) => {
     const lineItems = item.details?.lineItems || [];
     const hasPooledCut = lineItems.some(li => {
         const t = li.type || '';
@@ -66,7 +77,7 @@ const ReceiptItemRow = ({ item, index }) => {
         {lineItems.map((li, idx) => (
             <LeaderRow
                 key={idx}
-                left={`${li.label}${li.meta?.l ? ` (${li.meta.l}x${li.meta.w}${li.meta.u || ''})` : ''}`}
+                left={`${glass ? `L${glass.lineNos.get(idx)} ` : ''}${li.label}${li.meta?.l ? ` (${li.meta.l}x${li.meta.w}${li.meta.u || ''})` : ''}`}
                 right={`qty ${li.qty}`}
             />
         ))}
@@ -76,9 +87,11 @@ const ReceiptItemRow = ({ item, index }) => {
             if (is2D) return null; // printed once per physical sheet below instead
             return <CuttingInstructions key={idx} sources={li.offcut_sources} />;
         })}
-        {glassGroups.map((g, gi) => (
-            <CuttingInstructions key={`glass-${gi}`} sources={[g.mergedSrc]} />
-        ))}
+        {glass
+            ? glass.panels.map(p => <GlassPanelThermal key={p.id} panel={p} total={glass.total} />)
+            : glassGroups.map((g, gi) => (
+                <CuttingInstructions key={`glass-${gi}`} sources={[g.mergedSrc]} />
+            ))}
     </div>
     );
 };
@@ -138,7 +151,36 @@ export default function ReceiptPage() {
     }, [mergedItems]);
 
     const visibleBuckets = BUCKET_ORDER.filter(b => categories?.[b] && grouped[b].length > 0);
-    const isLoading = Boolean(orderId) && !orderDetail && !loadError;
+
+    // Glass worksheet: one cut plan for the whole department - panels numbered P1.. across
+    // every glass item in cutting order - drawn on the thermal slip and, for a big job, on A4.
+    const glassPlan = useMemo(() => buildGlassPlan(grouped.glass), [grouped.glass]);
+    const glassPages = useMemo(() => (glassPlan.panels.length ? paginateGlassSheet(glassPlan) : []), [glassPlan]);
+    const glassRows = useMemo(() => grouped.glass.map((_, i) => ({
+        panels: glassPlan.panels.filter(p => p.item === i),
+        total: glassPlan.panels.length,
+        lineNos: new Map(glassPlan.lines.filter(L => L.item === i).map(L => [L.lineIdx, L.n])),
+    })), [grouped.glass, glassPlan]);
+
+    // Where the glass worksheet prints. The shop sets how many panels make it an A4 job (CEO,
+    // on Orders); each till says which A4 printer it has (Printers). A till without one keeps
+    // printing glass on the thermal roll.
+    const [printers, setPrinters] = useState(loadPrinterSettings);
+    const [showPrinterSetup, setShowPrinterSetup] = useState(false);
+    const [a4MinPanels, setA4MinPanels] = useState(null);
+    useEffect(() => {
+        let cancelled = false;
+        api.settingsService.getGlassPrint()
+            .then(r => { if (!cancelled) setA4MinPanels(Number(r?.a4MinPanels) || 0); })
+            .catch(() => { if (!cancelled) setA4MinPanels(GLASS_A4_DEFAULT); });
+        return () => { cancelled = true; };
+    }, []);
+    const glassPanelCount = glassPlan.panels.length;
+    const glassSelected = visibleBuckets.includes('glass');
+    const a4Due = glassSelected && a4MinPanels > 0 && glassPanelCount >= a4MinPanels;
+    const toA4 = a4Due && Boolean(printers.a4);
+
+    const isLoading = (Boolean(orderId) && !orderDetail && !loadError) || a4MinPanels === null;
 
     // Keyed by bucket name so we can hand the actual rendered tape nodes to QZ Tray
     // in visibleBuckets order, one print job per department slip.
@@ -164,22 +206,116 @@ export default function ReceiptPage() {
         mountedRef.current = true;
         return () => { mountedRef.current = false; };
     }, []);
+
+    // The A4 pages, in order, for QZ Tray (see GlassCuttingSheet).
+    const pageRefs = useRef(new Map());
+    const setPageRef = useCallback((i) => (el) => {
+        if (el) pageRefs.current.set(i, el);
+        else pageRefs.current.delete(i);
+    }, []);
+    const a4Nodes = useCallback(() => glassPages.map((_, i) => pageRefs.current.get(i)).filter(Boolean), [glassPages]);
+
+    // What happened to the last print, when it isn't simply "it printed": { tone, text }.
+    const [printNote, setPrintNote] = useState(null);
+    // Browser dialog fallback. 'tape' prints the thermal slips (minus skipBuckets); 'a4'
+    // prints only the A4 pages at A4 size, and the seller picks the A4 printer in the dialog.
+    const [printMode, setPrintMode] = useState('tape');
+    const browserPrint = useCallback((what) => {
+        setPrintMode(what);
+        // Let the print-only styles render before the dialog snapshots the page.
+        setTimeout(() => {
+            if (!mountedRef.current) return;
+            window.print();
+            setPrintMode('tape');
+        }, 50);
+    }, []);
+
+    // A4 first, when this is an A4 job: whether it worked decides if the glass slip still
+    // goes on the roll. Then every slip for the roll, as before. State is only set after a
+    // print attempt (this also runs from the auto-print effect).
     const handlePrint = useCallback(async () => {
-        const buckets = visibleBuckets.filter(b => tapeRefs.current.get(b));
+        let glassOnA4 = false;
+        let qzDown = false;
+        let note = null;
+        if (toA4) {
+            const pages = a4Nodes();
+            try {
+                await printA4PagesViaQZ(pages, printers.a4);
+                glassOnA4 = true;
+                note = a4SentNote(printers.a4, pages.length);
+            } catch (err) {
+                if (!mountedRef.current) return;
+                console.warn('A4 print via QZ Tray failed', err);
+                if (err?.qzUnreachable) {
+                    glassOnA4 = true;
+                    qzDown = true;
+                    note = { tone: 'warn', text: 'QZ Tray is not running, so the glass cutting sheet has not printed. Click "Print A4 sheet" and choose the A4 printer.' };
+                } else if (err?.printedCount > 0) {
+                    glassOnA4 = true;
+                    note = { tone: 'warn', text: `The A4 printer stopped after page ${err.printedCount} of ${pages.length}. Click "Print A4 sheet" to print the sheet again.` };
+                } else {
+                    note = { tone: 'warn', text: `The A4 printer "${printers.a4}" did not take the job (${err?.message || 'no reason given'}), so the glass worksheet printed on the receipt printer instead.` };
+                }
+            }
+        }
+        const skipGlass = glassOnA4 ? ['glass'] : [];
+        const buckets = visibleBuckets.filter(b => tapeRefs.current.get(b) && !skipGlass.includes(b));
         const nodes = buckets.map(b => tapeRefs.current.get(b));
-        if (nodes.length === 0) return;
+        if (nodes.length === 0) {
+            // Only the glass sheet was due and QZ Tray is down: its dialog is the only one.
+            if (qzDown) {
+                setPrintNote({ tone: 'warn', text: 'QZ Tray is not running. Choose the A4 printer in the print dialog.' });
+                browserPrint('a4');
+            } else if (note) {
+                setPrintNote(note);
+            }
+            return;
+        }
         try {
-            setSkipBuckets([]);
-            await printTapesViaQZ(nodes);
+            await printTapesViaQZ(nodes, printers.thermal);
+            if (mountedRef.current && note) setPrintNote(note);
         } catch (err) {
             if (!mountedRef.current) return;
             console.warn('QZ Tray print failed, falling back to browser print dialog', err);
             const done = buckets.slice(0, err?.printedCount || 0);
-            setSkipBuckets(done);
-            // Let the hidden slips render before the dialog snapshots the page.
-            setTimeout(() => { if (mountedRef.current) window.print(); }, 50);
+            setSkipBuckets([...done, ...skipGlass]);
+            if (note) setPrintNote(note);
+            browserPrint('tape');
         }
-    }, [visibleBuckets]);
+    }, [visibleBuckets, toA4, a4Nodes, printers, browserPrint]);
+
+    // "Print A4 sheet": the A4 version on demand, for any glass job (QZ Tray when this till
+    // has an A4 printer, else the browser dialog).
+    const handlePrintA4 = useCallback(async () => {
+        setPrintNote(null);
+        const pages = a4Nodes();
+        if (printers.a4) {
+            try {
+                await printA4PagesViaQZ(pages, printers.a4);
+                if (mountedRef.current) setPrintNote(a4SentNote(printers.a4, pages.length));
+                return;
+            } catch (err) {
+                if (!mountedRef.current) return;
+                console.warn('A4 print via QZ Tray failed, falling back to browser print dialog', err);
+            }
+        }
+        setPrintNote({ tone: 'warn', text: 'Choose the A4 printer in the print dialog.' });
+        browserPrint('a4');
+    }, [a4Nodes, printers, browserPrint]);
+
+    // On-screen A4 preview: open by default for an A4 job; pages shrink to the column.
+    const [showA4, setShowA4] = useState(null);
+    const a4Open = showA4 ?? a4Due;
+    const hasGlassSheet = glassSelected && glassPanelCount > 0;
+    const a4SectionRef = useRef(null);
+    const [a4Scale, setA4Scale] = useState(0.6);
+    useEffect(() => {
+        const el = a4SectionRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return undefined;
+        const ro = new ResizeObserver(() => { if (el.clientWidth > 0) setA4Scale(Math.min(1, el.clientWidth / A4_PX)); });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [hasGlassSheet]);
 
     // Auto-print the worksheet(s) the moment they're ready, so the seller doesn't have
     // to click through — cutting/checking staff just tear off what the printer produces.
@@ -198,6 +334,19 @@ export default function ReceiptPage() {
         }
     }, [isLoading, visibleBuckets.length, handlePrint, orderId]);
 
+    const panelsText = `${glassPanelCount} panel${glassPanelCount === 1 ? '' : 's'} to cut`;
+    const a4RouteText = toA4
+        ? `${panelsText}, so this sheet prints on the A4 printer "${printers.a4}". The glass slip above is the fallback.`
+        : a4Due
+            ? `${panelsText}: an A4 job, but this till has no A4 printer set up, so the glass worksheet prints on the thermal roll. Add one under Printers.`
+            : a4MinPanels > 0
+                ? `${panelsText}, under the ${a4MinPanels}-panel mark, so it prints on the thermal roll. "Print A4 sheet" prints this version on demand.`
+                : `A4 printing is off for the shop, so glass prints on the thermal roll. "Print A4 sheet" prints this version on demand.`;
+    const secondaryButton = {
+        display: 'flex', alignItems: 'center', gap: '0.375rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+        borderRadius: '0.75rem', padding: '0.5rem 0.875rem', color: '#cbd5e1', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem', whiteSpace: 'nowrap',
+    };
+
     if (!orderId || !cartItems) {
         return (
             <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '1rem', background: 'var(--color-bg)' }}>
@@ -209,13 +358,27 @@ export default function ReceiptPage() {
 
     return (
         <div style={{ minHeight: '100vh', background: 'var(--color-bg)', padding: '2.5rem 1rem' }} className="receipt-page">
-            <style type="text/css" media="print">{`
+            <style type="text/css" media="print">{printMode === 'a4' ? `
+                /* Browser fallback for the A4 glass sheet: only its pages, at true size,
+                   one per sheet of paper. Each page carries its own 10mm margin. */
+                @page { size: A4; margin: 0; }
+                html, body { background-color: #fff !important; margin: 0 !important; padding: 0 !important; }
+                .print-hidden, .receipt-strip-row { display: none !important; }
+                .receipt-page { padding: 0 !important; background: #fff !important; min-height: 0 !important; }
+                .a4-section { max-width: none !important; margin: 0 !important; }
+                .a4-pages, .a4-sheet { display: block !important; }
+                .a4-sheet figure { margin: 0 !important; }
+                .a4-box { width: auto !important; height: auto !important; overflow: visible !important; box-shadow: none !important; }
+                .a4-scale { transform: none !important; }
+                .a4-page { page-break-after: always; break-after: page; }
+                .a4-sheet figure:last-of-type .a4-page { page-break-after: auto; break-after: auto; }
+            ` : `
                 /* XP-80T (and 80mm thermal generally): zero the page margin and let the
                    tape's own inner padding be the only margin — a printer-driver margin
                    here would double up with it and eat into the ~72mm printable width. */
                 @page { size: 80mm auto; margin: 0; }
                 html, body { background-color: #fff !important; margin: 0 !important; padding: 0 !important; }
-                .print-hidden { display: none !important; }
+                .print-hidden, .a4-section { display: none !important; }
                 .receipt-page { padding: 0 !important; background: #fff !important; }
                 .receipt-strip-row { display: block !important; gap: 0 !important; }
                 .receipt-tape { box-shadow: none !important; width: 100% !important; }
@@ -225,7 +388,7 @@ export default function ReceiptPage() {
             `}</style>
 
             {/* Action Bar */}
-            <div className="print-hidden" style={{ maxWidth: '480px', margin: '0 auto 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+            <div className="print-hidden" style={{ maxWidth: '720px', margin: '0 auto 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                 <button onClick={() => navigate('/orders')} style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)',
                     borderRadius: '0.75rem', padding: '0.5rem 1rem', color: '#94a3b8', cursor: 'pointer', fontWeight: 600, fontSize: '0.82rem', transition: 'all 0.15s',
@@ -237,7 +400,15 @@ export default function ReceiptPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                     {loadError && <span style={{ color: '#f87171', fontSize: '0.78rem', fontWeight: 600 }}>{loadError}</span>}
                     {isLoading && <span style={{ color: '#64748b', fontSize: '0.82rem' }}>Preparing receipt…</span>}
-                    <button onClick={handlePrint} disabled={isLoading} style={{
+                    <button onClick={() => setShowPrinterSetup(true)} style={secondaryButton} title="Which printers this till uses">
+                        ⚙️ Printers
+                    </button>
+                    {hasGlassSheet && (
+                        <button onClick={handlePrintA4} disabled={isLoading} style={{ ...secondaryButton, cursor: isLoading ? 'not-allowed' : 'pointer' }} title="Print the glass worksheet on A4">
+                            📄 Print A4 sheet
+                        </button>
+                    )}
+                    <button onClick={() => { setPrintNote(null); handlePrint(); }} disabled={isLoading} style={{
                         padding: '0.625rem 1.5rem', borderRadius: '0.75rem', border: 'none',
                         background: isLoading ? 'rgba(245,158,11,0.3)' : 'linear-gradient(135deg, rgba(245,158,11,0.85), rgba(234,88,12,0.85))',
                         color: '#fff', fontWeight: 700, fontSize: '0.82rem', cursor: isLoading ? 'not-allowed' : 'pointer',
@@ -248,6 +419,17 @@ export default function ReceiptPage() {
                     </button>
                 </div>
             </div>
+
+            {printNote && (
+                <div className="print-hidden" role="status" style={{
+                    maxWidth: '720px', margin: '0 auto 1.25rem', padding: '0.625rem 0.875rem', borderRadius: '0.75rem', fontSize: '0.8rem', fontWeight: 600, lineHeight: 1.5,
+                    background: printNote.tone === 'ok' ? 'rgba(34,197,94,0.1)' : 'rgba(245,158,11,0.1)',
+                    border: `1px solid ${printNote.tone === 'ok' ? 'rgba(34,197,94,0.25)' : 'rgba(245,158,11,0.3)'}`,
+                    color: printNote.tone === 'ok' ? '#4ade80' : '#fbbf24',
+                }}>
+                    {printNote.tone === 'ok' ? '✓ ' : '⚠️ '}{printNote.text}
+                </div>
+            )}
 
             {visibleBuckets.length === 0 && (
                 <div className="print-hidden" style={{ maxWidth: '480px', margin: '0 auto', textAlign: 'center', color: '#64748b', fontSize: '0.875rem' }}>
@@ -261,6 +443,11 @@ export default function ReceiptPage() {
                     const meta = BUCKET_META[bucket];
                     return (
                         <div key={bucket} className="receipt-section" data-skip-print={skipBuckets.includes(bucket) ? 'true' : undefined}>
+                            {bucket === 'glass' && toA4 && (
+                                <div className="print-hidden" style={{ maxWidth: TAPE_WIDTH, fontSize: '0.72rem', fontWeight: 600, color: '#94a3b8', marginBottom: '0.5rem', lineHeight: 1.45 }}>
+                                    Goes to the A4 printer. This slip prints only if the A4 printer can&apos;t.
+                                </div>
+                            )}
                             <div
                                 ref={setTapeRef(bucket)}
                                 className="receipt-tape print:shadow-none"
@@ -300,7 +487,7 @@ export default function ReceiptPage() {
                                 <Rule />
 
                                 {grouped[bucket].map((item, idx) => (
-                                    <ReceiptItemRow key={idx} item={item} index={idx} />
+                                    <ReceiptItemRow key={idx} item={item} index={idx} glass={bucket === 'glass' ? glassRows[idx] : undefined} />
                                 ))}
 
                                 <Rule dashed={false} style={{ marginTop: '14px' }} />
@@ -320,6 +507,40 @@ export default function ReceiptPage() {
                     );
                 })}
             </div>
+
+            {/* The glass worksheet as A4 pages: what the A4 printer gets, and what "Print A4 sheet" prints */}
+            {hasGlassSheet && (
+                <section ref={a4SectionRef} className="a4-section" style={{ maxWidth: '820px', margin: '2.5rem auto 0' }}>
+                    <div className="print-hidden" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+                        <div style={{ minWidth: 0, flex: '1 1 320px' }}>
+                            <h2 style={{ fontSize: '1rem', fontWeight: 800, color: '#f1f5f9', margin: 0 }}>Glass cutting sheet &middot; A4</h2>
+                            <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: '0.25rem 0 0', lineHeight: 1.5 }}>{a4RouteText}</p>
+                        </div>
+                        <button onClick={() => setShowA4(!a4Open)} style={secondaryButton}>{a4Open ? 'Hide preview' : 'Show preview'}</button>
+                    </div>
+                    <div className="a4-pages" style={{ display: a4Open ? 'block' : 'none' }}>
+                        <GlassCuttingSheet
+                            plan={glassPlan}
+                            pages={glassPages}
+                            orderNo={receiptMeta.number}
+                            date={receiptMeta.date}
+                            customerName={customer?.name || 'Walk-in Customer'}
+                            isUpdate={mode === 'edit'}
+                            pageRef={setPageRef}
+                            scale={a4Scale}
+                        />
+                    </div>
+                </section>
+            )}
+
+            {showPrinterSetup && (
+                <PrinterSetupModal
+                    current={printers}
+                    a4MinPanels={a4MinPanels ?? GLASS_A4_DEFAULT}
+                    onClose={() => setShowPrinterSetup(false)}
+                    onSaved={(saved) => { setPrinters(saved); setShowPrinterSetup(false); }}
+                />
+            )}
         </div>
     );
 }

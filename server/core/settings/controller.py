@@ -41,3 +41,24 @@ def get_cancel_pin_status(
     """Whether a cancel PIN has been configured yet. Never returns the PIN itself."""
     require_role(["ceo", "admin", "manager", "cashier"], current_user)
     return model.CancelPinStatusResponse(configured=service.cancel_pin_is_configured(db))
+
+
+@router.get("/glass-print", response_model=model.GlassPrintSetting)
+def get_glass_print_setting(
+    db: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """Read by every till's receipt page to decide where the glass worksheet prints."""
+    require_role(["ceo", "admin", "manager", "cashier"], current_user)
+    return model.GlassPrintSetting(a4MinPanels=service.get_glass_a4_min_panels(db))
+
+
+@router.put("/glass-print", response_model=model.GlassPrintSetting)
+def set_glass_print_setting(
+    body: model.GlassPrintSetting,
+    db: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """CEO/admin-only: how many panels send a glass worksheet to the A4 printer (0 = never)."""
+    require_role(["ceo", "admin"], current_user)
+    return model.GlassPrintSetting(a4MinPanels=service.set_glass_a4_min_panels(db, body.a4MinPanels, current_user))

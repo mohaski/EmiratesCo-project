@@ -4,6 +4,8 @@ from core.userManagement.authService import hash_password, verify_password
 from loggiing import logger
 
 CANCEL_PIN_KEY = "order_cancel_pin"
+GLASS_A4_MIN_PANELS_KEY = "glass_a4_min_panels"
+GLASS_A4_MIN_PANELS_DEFAULT = 3
 
 
 def set_cancel_pin(db: Session, pin: str, current_user) -> None:
@@ -46,3 +48,29 @@ def verify_cancel_pin(db: Session, pin: str) -> bool:
     if not setting:
         return False
     return verify_password(pin, setting.value)
+
+
+def get_glass_a4_min_panels(db: Session) -> int:
+    """Panels a glass worksheet must cut before it prints on A4 (0 = never). Each till still
+    needs its own A4 printer set up; without one the worksheet stays on the thermal roll."""
+    row = db.get(SystemSetting, GLASS_A4_MIN_PANELS_KEY)
+    if row is None:
+        return GLASS_A4_MIN_PANELS_DEFAULT
+    try:
+        return int(row.value)
+    except ValueError:
+        return GLASS_A4_MIN_PANELS_DEFAULT
+
+
+def set_glass_a4_min_panels(db: Session, value: int, current_user) -> int:
+    """CEO/admin-only — enforced by the caller."""
+    existing = db.get(SystemSetting, GLASS_A4_MIN_PANELS_KEY)
+    if existing:
+        existing.value = str(value)
+        existing.updated_by = current_user.userId
+        db.add(existing)
+    else:
+        db.add(SystemSetting(key=GLASS_A4_MIN_PANELS_KEY, value=str(value), updated_by=current_user.userId))
+    db.commit()
+    logger.info(f"Glass A4 threshold set to {value} panels by {current_user.userId}.")
+    return value

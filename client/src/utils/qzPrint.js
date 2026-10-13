@@ -1,11 +1,12 @@
 import qz from 'qz-tray';
+import { DEFAULT_THERMAL_PRINTER } from './printerSettings';
 
 // Chrome's --kiosk-printing flag is a long-standing broken feature (still shows the
 // system print dialog on current Chrome versions — see chromium issue 339416/169004).
 // QZ Tray is a local desktop agent that accepts print jobs over a websocket and sends
 // them straight to the OS print spooler, skipping the browser dialog entirely. It must
 // be installed and running on the till PC (system tray icon) for this to work.
-const THERMAL_PRINTER_NAME = 'XP-80C';
+// Printer names come from the till's own setup (utils/printerSettings.js).
 
 let connectPromise = null;
 
@@ -19,12 +20,16 @@ let connectPromise = null;
 const QZ_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
 let unreachableUntil = 0;
 
+// err.qzUnreachable tells callers QZ Tray itself isn't running (nothing printed silently
+// at all), as opposed to one printer refusing a job.
+const unreachable = (err) => Object.assign(err instanceof Error ? err : new Error(String(err)), { qzUnreachable: true });
+
 function ensureConnected() {
     if (qz.websocket.isActive()) return Promise.resolve();
-    if (Date.now() < unreachableUntil) return Promise.reject(new Error('QZ Tray unreachable, not retrying yet'));
+    if (Date.now() < unreachableUntil) return Promise.reject(unreachable(new Error('QZ Tray unreachable, not retrying yet')));
     if (!connectPromise) {
         connectPromise = qz.websocket.connect()
-            .catch(err => { unreachableUntil = Date.now() + QZ_RETRY_COOLDOWN_MS; throw err; })
+            .catch(err => { unreachableUntil = Date.now() + QZ_RETRY_COOLDOWN_MS; throw unreachable(err); })
             // Settled either way: once connected, isActive() answers above; if QZ Tray
             // later restarts, isActive() goes false and the next call reconnects
             // instead of reusing a promise that resolved for a socket now closed.
@@ -45,9 +50,9 @@ function toStandaloneHtml(node) {
 
 // Prints each given DOM node as its own job/slip on the thermal printer via QZ Tray.
 // Throws if QZ Tray isn't reachable — callers should fall back to window.print().
-export async function printTapesViaQZ(nodes) {
+export async function printTapesViaQZ(nodes, printerName = DEFAULT_THERMAL_PRINTER) {
     await ensureConnected();
-    const printer = await qz.printers.find(THERMAL_PRINTER_NAME);
+    const printer = await qz.printers.find(printerName);
     const config = qz.configs.create(printer, {
         size: { width: 80, height: null }, // null height = auto/continuous, like the CSS @page rule
         units: 'mm',
@@ -66,4 +71,41 @@ export async function printTapesViaQZ(nodes) {
         }
         printed += 1;
     }
+}
+
+// Prints A4 pages (each node a 210x297mm page, see GlassCuttingSheet) on the given laser,
+// one job per page so each node is exactly one sheet of paper. No scaling: the sheet is
+// laid out at true size (its footer has a 100mm bar to check that), and a driver's
+// unprintable edge only eats into the page's own 10mm margin.
+// Throws with err.printedCount = pages already sent, like printTapesViaQZ.
+export async function printA4PagesViaQZ(nodes, printerName) {
+    await ensureConnected();
+    const printer = await qz.printers.find(printerName);
+    const config = qz.configs.create(printer, {
+        size: { width: 210, height: 297 },
+        units: 'mm',
+        margins: 0,
+        orientation: 'portrait',
+        scaleContent: false,
+        colorType: 'grayscale',
+        jobName: 'Glass cutting sheet',
+    });
+    let printed = 0;
+    for (const node of nodes) {
+        const data = [{ type: 'pixel', format: 'html', flavor: 'plain', data: toStandaloneHtml(node) }]; // rendered at the paper width (QZ default)
+        try {
+            await qz.print(config, data);
+        } catch (err) {
+            err.printedCount = printed;
+            throw err;
+        }
+        printed += 1;
+    }
+}
+
+// Names of the printers installed on this PC, for the till's printer setup.
+export async function listPrintersViaQZ() {
+    await ensureConnected();
+    const found = await qz.printers.find();
+    return Array.isArray(found) ? found : [found].filter(Boolean);
 }
